@@ -74,7 +74,7 @@ Go 모듈, 바이너리, K8s 리소스, 환경 변수 **모두 NodeVault로 rena
 | 이유 | podbridge5(buildah) rootless 제약 — K8s Pod 안에서 overlay 마운트 불가 |
 | gRPC 포트 | `:50051` (seoy 호스트 직접 노출) |
 | NodePalette REST 포트 | `:8080` (seoy 호스트 직접 노출, `bin/nodepalette` 별도 바이너리) |
-| K8s 접근 | 로컬 kubeconfig (`multipass-k8s-lab/kubeconfig`) — L3/L4 Job 제출 전용 |
+| K8s 접근 | 로컬 kubeconfig (`infra-lab/kubeconfig`) — L3/L4 Job 제출 전용 |
 | K8s RBAC | `deploy/02-rbac.yaml` (apply 됨, 미래 in-cluster 전환용으로 미리 배포) |
 | 인덱스 저장 | `assets/index/vault-index.json` (seoy 호스트 로컬 파일) |
 | Harbor | `harbor.10.113.24.96.nip.io` (Cilium LB VIP 10.113.24.96) |

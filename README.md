@@ -196,4 +196,4 @@ NodeKit L1 정책 평가에 사용되는 `.wasm` 번들은 [`DockGuard`](https:/
 | [`NodeKit`](https://github.com/HeaInSeo/NodeKit) | C# 어드민 UI — ToolDefinition 편집, L1 검증, BuildRequest gRPC 전송 |
 | [`DockGuard`](https://github.com/HeaInSeo/DockGuard) | OPA/Rego Dockerfile 정책 + .wasm 번들 빌드 |
 | `protos/` | NodeVault canonical gRPC proto source |
-| [`multipass-k8s-lab`](https://github.com/HeaInSeo/multipass-k8s-lab) | seoy VM 기반 K8s 테스트 클러스터 |
+| [`infra-lab`](https://github.com/HeaInSeo/infra-lab) | VM 기반 K8s 테스트 클러스터 (multipass / libvirt backend) |

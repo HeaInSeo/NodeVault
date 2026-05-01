@@ -1,5 +1,5 @@
-.PHONY: fmt lint lint-fix lint-config golangci-lint test test-integration test-integration-multipass \
-        deploy-multipass undeploy-multipass build push-image vendor \
+.PHONY: fmt lint lint-fix lint-config golangci-lint test test-integration test-integration-infralab \
+        deploy-infralab undeploy-infralab build push-image vendor \
         proto coverage clean all deploy-seoy
 
 LOCALBIN      ?= $(CURDIR)/bin
@@ -14,10 +14,10 @@ PROTO_SRC     ?= ./protos
 # containers/storage, containers/image의 선택적 드라이버를 제외한다.
 BUILDTAGS ?= exclude_graphdriver_btrfs containers_image_openpgp exclude_graphdriver_devicemapper
 
-# ── multipass-k8s-lab / Harbor 설정 ──────────────────────────────────────────
-MULTIPASS_KUBECONFIG ?= $(shell realpath ../multipass-k8s-lab/kubeconfig 2>/dev/null || echo "")
-MULTIPASS_REGISTRY   ?= harbor.10.113.24.96.nip.io
-IMAGE                ?= $(MULTIPASS_REGISTRY)/nodevault/controlplane:latest
+# ── infra-lab / Harbor 설정 ──────────────────────────────────────────
+INFRALAB_KUBECONFIG ?= $(shell realpath ../infra-lab/kubeconfig 2>/dev/null || echo "")
+INFRALAB_REGISTRY   ?= harbor.10.113.24.96.nip.io
+IMAGE                ?= $(INFRALAB_REGISTRY)/nodevault/controlplane:latest
 
 # ── 포맷 ──────────────────────────────────────────────────────────────────────
 fmt:
@@ -68,29 +68,29 @@ lint-config: golangci-lint
 test:
 	go test -tags "$(BUILDTAGS)" -v -race -cover ./...
 
-# ── 통합 테스트 (multipass-k8s-lab VM 클러스터) ───────────────────────────────
+# ── 통합 테스트 (infra-lab VM 클러스터) ───────────────────────────────
 # 사전 조건:
-#   1. multipass-k8s-lab 클러스터가 실행 중
+#   1. infra-lab 클러스터가 실행 중
 #   2. Harbor가 실행 중  (scripts/host/harbor-resume.sh)
-#   3. make deploy-multipass 완료
+#   3. make deploy-infralab 완료
 #
 # 실행:
-#   make deploy-multipass test-integration-multipass
-test-integration-multipass: build
-	@if [ -z "$(MULTIPASS_KUBECONFIG)" ]; then \
-	    echo "ERROR: multipass-k8s-lab/kubeconfig not found. 클러스터를 먼저 실행하세요." >&2; exit 1; \
+#   make deploy-infralab test-integration-infralab
+test-integration-infralab: build
+	@if [ -z "$(INFRALAB_KUBECONFIG)" ]; then \
+	    echo "ERROR: infra-lab/kubeconfig not found. 클러스터를 먼저 실행하세요." >&2; exit 1; \
 	fi
-	@echo "==> Cluster: $$(KUBECONFIG=$(MULTIPASS_KUBECONFIG) kubectl get nodes --no-headers 2>&1 | awk '{print $$1, $$2}' | tr '\n' '  ')"
-	@echo "==> Registry: $(MULTIPASS_REGISTRY) (Harbor)"
+	@echo "==> Cluster: $$(KUBECONFIG=$(INFRALAB_KUBECONFIG) kubectl get nodes --no-headers 2>&1 | awk '{print $$1, $$2}' | tr '\n' '  ')"
+	@echo "==> Registry: $(INFRALAB_REGISTRY) (Harbor)"
 	@echo "==> NodeVault 로컬 바이너리 실행 중..."
-	@KUBECONFIG=$(MULTIPASS_KUBECONFIG) \
-	    NODEVAULT_REGISTRY_ADDR=$(MULTIPASS_REGISTRY) \
+	@KUBECONFIG=$(INFRALAB_KUBECONFIG) \
+	    NODEVAULT_REGISTRY_ADDR=$(INFRALAB_REGISTRY) \
 	    ./bin/nodevault &
 	@NF_PID=$$!; \
 	sleep 3; \
 	echo "==> 통합 테스트 실행 (pid=$$NF_PID)..."; \
-	KUBECONFIG=$(MULTIPASS_KUBECONFIG) \
-	    NODEVAULT_REGISTRY_ADDR=$(MULTIPASS_REGISTRY) \
+	KUBECONFIG=$(INFRALAB_KUBECONFIG) \
+	    NODEVAULT_REGISTRY_ADDR=$(INFRALAB_REGISTRY) \
 	    go test -v -tags "integration $(BUILDTAGS)" ./pkg/build/... -timeout 12m; \
 	TEST_EXIT=$$?; \
 	echo "==> NodeVault 종료 (pid=$$NF_PID)..."; \
@@ -99,28 +99,28 @@ test-integration-multipass: build
 
 # ── 클러스터 리소스 배포 (deploy/ + k8s/) ─────────────────────────────────────
 # NodeVault는 seoy 호스트 바이너리로 실행 (K8s Pod 아님).
-# deploy-multipass는 L3/L4 Job 실행을 위한 최소 K8s 리소스만 적용한다:
+# deploy-infralab는 L3/L4 Job 실행을 위한 최소 K8s 리소스만 적용한다:
 #   - 00-namespaces.yaml : nodevault-smoke (L3/L4 Job 네임스페이스)
 #   - 02-rbac.yaml       : ServiceAccount + ClusterRole (Job 제출 권한)
 # 03-nodevault.yaml (Deployment) + 04-grpcroute.yaml은 현재 미사용 (미래 in-cluster 전환용).
-deploy-multipass:
-	@if [ -z "$(MULTIPASS_KUBECONFIG)" ]; then \
-	    echo "ERROR: multipass-k8s-lab/kubeconfig not found." >&2; exit 1; \
+deploy-infralab:
+	@if [ -z "$(INFRALAB_KUBECONFIG)" ]; then \
+	    echo "ERROR: infra-lab/kubeconfig not found." >&2; exit 1; \
 	fi
 	@echo "==> NodeVault K8s 지원 리소스 배포 (namespace + RBAC)..."
-	KUBECONFIG=$(MULTIPASS_KUBECONFIG) kubectl apply -f deploy/00-namespaces.yaml
-	KUBECONFIG=$(MULTIPASS_KUBECONFIG) kubectl apply -f deploy/02-rbac.yaml
+	KUBECONFIG=$(INFRALAB_KUBECONFIG) kubectl apply -f deploy/00-namespaces.yaml
+	KUBECONFIG=$(INFRALAB_KUBECONFIG) kubectl apply -f deploy/02-rbac.yaml
 	@echo "==> 배포 완료. NodeVault 바이너리를 seoy 호스트에서 실행하세요:"
-	@echo "    NODEVAULT_REGISTRY_ADDR=$(MULTIPASS_REGISTRY) ./bin/nodevault"
+	@echo "    NODEVAULT_REGISTRY_ADDR=$(INFRALAB_REGISTRY) ./bin/nodevault"
 
 # ── 클러스터 리소스 제거 ──────────────────────────────────────────────────────
-undeploy-multipass:
-	@if [ -z "$(MULTIPASS_KUBECONFIG)" ]; then \
-	    echo "ERROR: multipass-k8s-lab/kubeconfig not found." >&2; exit 1; \
+undeploy-infralab:
+	@if [ -z "$(INFRALAB_KUBECONFIG)" ]; then \
+	    echo "ERROR: infra-lab/kubeconfig not found." >&2; exit 1; \
 	fi
-	KUBECONFIG=$(MULTIPASS_KUBECONFIG) kubectl delete -f deploy/04-grpcroute.yaml --ignore-not-found=true
-	KUBECONFIG=$(MULTIPASS_KUBECONFIG) kubectl delete -f deploy/03-nodevault.yaml --ignore-not-found=true
-	KUBECONFIG=$(MULTIPASS_KUBECONFIG) kubectl delete -f deploy/02-rbac.yaml      --ignore-not-found=true
+	KUBECONFIG=$(INFRALAB_KUBECONFIG) kubectl delete -f deploy/04-grpcroute.yaml --ignore-not-found=true
+	KUBECONFIG=$(INFRALAB_KUBECONFIG) kubectl delete -f deploy/03-nodevault.yaml --ignore-not-found=true
+	KUBECONFIG=$(INFRALAB_KUBECONFIG) kubectl delete -f deploy/02-rbac.yaml      --ignore-not-found=true
 
 # ── 로컬 바이너리 빌드 ────────────────────────────────────────────────────────
 build:

@@ -25,9 +25,9 @@ L3/L4 dry-run / smoke run만 kubeconfig를 통해 K8s Job으로 제출한다.
 ## 사전 조건
 
 - seoy 장비 (100.123.80.48) 접근 가능
-- multipass-k8s-lab 클러스터 실행 중
+- infra-lab 클러스터 실행 중 (multipass 또는 libvirt backend)
 - Harbor 접근 가능: `http://harbor.10.113.24.96.nip.io`
-- `multipass-k8s-lab/kubeconfig` 존재
+- `infra-lab/kubeconfig` 존재
 
 ---
 
@@ -38,7 +38,7 @@ L3/L4 dry-run / smoke run만 kubeconfig를 통해 K8s Job으로 제출한다.
 L3/L4 Job 실행에 필요한 네임스페이스와 RBAC만 배포한다.
 
 ```bash
-make deploy-multipass
+make deploy-infralab
 # 적용 대상:
 #   deploy/00-namespaces.yaml — nodevault-system, nodevault-smoke 네임스페이스
 #   deploy/02-rbac.yaml       — ServiceAccount + ClusterRole (Job 제출 권한)
@@ -54,7 +54,7 @@ make build    # bin/nodevault 생성
 ### 3. NodeVault 실행 (seoy 호스트)
 
 ```bash
-KUBECONFIG=/path/to/multipass-k8s-lab/kubeconfig \
+KUBECONFIG=/path/to/infra-lab/kubeconfig \
 NODEVAULT_REGISTRY_ADDR=harbor.10.113.24.96.nip.io \
 ./bin/nodevault
 ```

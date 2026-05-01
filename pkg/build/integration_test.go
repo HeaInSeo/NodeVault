@@ -1,17 +1,17 @@
 //go:build integration
 
-// Package build integration tests require Harbor running in the multipass K8s cluster
-// (harbor.10.113.24.96.nip.io) and NodeForge running locally as a binary.
+// Package build integration tests require Harbor running in the infra-lab K8s cluster
+// (harbor.10.113.24.96.nip.io) and NodeVault running locally as a binary.
 //
-// multipass-k8s-lab VM 클러스터 (권장 — 멀티노드, 실제 VM 네트워크):
+// infra-lab VM 클러스터 (multipass 또는 libvirt backend, 멀티노드 + 실제 VM 네트워크):
 //
 //	# Harbor 재개 (suspend 상태인 경우)
 //	scripts/host/harbor-resume.sh
-//	# NodeForge 로컬 실행 후 테스트
+//	# NodeVault 로컬 실행 후 테스트
 //	NODEVAULT_REGISTRY_ADDR=harbor.10.113.24.96.nip.io go run ./cmd/controlplane &
 //	go test -v -tags=integration ./pkg/build/... -timeout 10m
 //
-// 자세한 내용: docs/MULTIPASS_K8S_TESTING.md
+// 자세한 내용: docs/INFRALAB_TESTING.md
 package build
 
 import (

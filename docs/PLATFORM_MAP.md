@@ -69,7 +69,7 @@
 | NodeVault gRPC | `100.123.80.48:50051` (seoy 호스트 직접, Cilium GRPCRoute는 미사용) |
 | NodePalette REST (현재 NodeVault 내 인라인) | `http://100.123.80.48:8080` |
 | Harbor admin | `Harbor12345` |
-| kubeconfig | `/opt/go/src/github.com/HeaInSeo/multipass-k8s-lab/kubeconfig` |
+| kubeconfig | `/opt/go/src/github.com/HeaInSeo/infra-lab/kubeconfig` |
 
 seoy 호스트에서 Harbor 접근 시 라우트 필요:
 ```bash

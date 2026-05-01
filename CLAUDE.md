@@ -72,13 +72,13 @@ K8s 접근은 로컬 kubeconfig 경유: L3/L4 Job 제출 전용.
 | 환경 | kubeconfig | 레지스트리 주소 | Makefile 타겟 |
 |------|-----------|----------------|--------------|
 | kind | `~/.kube/config` | `10.96.0.1:5000` | `test-integration` |
-| multipass-k8s-lab | `../multipass-k8s-lab/kubeconfig` | `10.87.127.18:31500` | `test-integration-multipass` |
+| infra-lab | `../infra-lab/kubeconfig` | `harbor.10.113.24.96.nip.io` | `test-integration-infralab` |
 
-**multipass-k8s-lab 사전 조건** (최초 1회):
+**infra-lab 사전 조건** (최초 1회):
 ```bash
-make deploy-multipass   # 레지스트리 + RBAC + 네임스페이스 배포
+make deploy-infralab    # 네임스페이스 + RBAC 배포
 ```
-containerd insecure registry 설정도 필요합니다 (`docs/MULTIPASS_K8S_TESTING.md` 참조).
+infra-lab은 `multipass` 또는 `libvirt` backend로 VM을 생성합니다. 클러스터 기동/종료는 infra-lab 저장소의 `./scripts/k8s-tool.sh up|down`(필요 시 `BACKEND=libvirt`)을 사용합니다. 자세한 절차는 `docs/INFRALAB_TESTING.md` 참조.
 
 통합 테스트는 NodeVault를 로컬 바이너리로 실행하고(`bin/nodevault`) kubeconfig로 원격 클러스터에 접속합니다.
 

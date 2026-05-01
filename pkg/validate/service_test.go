@@ -21,7 +21,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: smoke-test
-  namespace: nodeforge-smoke
+  namespace: nodevault-smoke
 spec:
   template:
     spec:
@@ -38,8 +38,8 @@ spec:
 	if job.Name != "smoke-test" {
 		t.Errorf("Name: got %q want %q", job.Name, "smoke-test")
 	}
-	if job.Namespace != "nodeforge-smoke" {
-		t.Errorf("Namespace: got %q want %q", job.Namespace, "nodeforge-smoke")
+	if job.Namespace != "nodevault-smoke" {
+		t.Errorf("Namespace: got %q want %q", job.Namespace, "nodevault-smoke")
 	}
 	if len(job.Spec.Template.Spec.Containers) != 1 {
 		t.Fatalf("expected 1 container, got %d", len(job.Spec.Template.Spec.Containers))

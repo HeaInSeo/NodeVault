@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	smokeNamespace   = "nodeforge-smoke"
+	smokeNamespace   = "nodevault-smoke"
 	smokeTimeout     = 5 * time.Minute
 	smokeJobTTL      = int32(120)
 	smokeJobDeadline = int64(300)
@@ -224,7 +224,7 @@ func SmokeJobSpec(jobName, imageWithDigest string) *batchv1.Job {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      jobName,
 			Namespace: smokeNamespace,
-			Labels:    map[string]string{"app": "nodeforge-smoke"},
+			Labels:    map[string]string{"app": "nodevault-smoke"},
 		},
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            &backoff,

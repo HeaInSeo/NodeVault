@@ -10,7 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
-	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodeforge/v1"
+	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
 // ─── parseJobManifest ─────────────────────────────────────────────────────────

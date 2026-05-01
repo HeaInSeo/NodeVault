@@ -18,7 +18,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/HeaInSeo/NodeVault/pkg/index"
-	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodeforge/v1"
+	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
 const defaultCatalogDir = "assets/catalog"

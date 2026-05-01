@@ -23,7 +23,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodeforge/v1"
+	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
 func grpcAddr() string {

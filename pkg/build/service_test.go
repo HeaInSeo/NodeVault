@@ -8,7 +8,7 @@ import (
 
 	"google.golang.org/grpc/metadata"
 
-	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodeforge/v1"
+	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
 // ─── fakeStream — minimal grpc.ServerStreamingServer[nfv1.BuildEvent] mock ───

@@ -14,7 +14,7 @@ import (
 
 	"github.com/seoyhaein/sori"
 
-	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodeforge/v1"
+	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
 // toolSpec is the JSON payload written as an OCI referrer artifact.

@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"time"
 
-	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodeforge/v1"
+	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
 const defaultWasmPath = "assets/policy/dockguard.wasm"

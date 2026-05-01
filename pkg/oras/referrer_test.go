@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/HeaInSeo/NodeVault/pkg/oras"
-	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodeforge/v1"
+	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
 func TestPushToolSpecReferrer_ValidationErrors(t *testing.T) {

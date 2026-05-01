@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodeforge/v1"
+	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
 func TestGetPolicyBundle_ReturnsBytes(t *testing.T) {

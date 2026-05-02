@@ -19,6 +19,9 @@ REMOTE_DIR="/opt/nodevault"
 LOCAL_BIN="$(dirname "$0")/../bin"
 LOCAL_DEPLOY="$(dirname "$0")/../deploy"
 LOCAL_ASSETS="$(dirname "$0")/../assets"
+KUBECONFIG_MODE="${KUBECONFIG_MODE:-remote}"
+LOCAL_KUBECONFIG="${LOCAL_KUBECONFIG:-}"
+REMOTE_KUBECONFIG_SOURCE="${REMOTE_KUBECONFIG_SOURCE:-/opt/go/src/github.com/HeaInSeo/infra-lab/kubeconfig}"
 
 RESTART_ONLY=false
 if [[ "${1:-}" == "--restart-only" ]]; then
@@ -38,6 +41,12 @@ if ! id nodevault &>/dev/null; then
 fi
 sudo mkdir -p /opt/nodevault/{bin,assets/index,assets/catalog,assets/datacatalog,assets/policy}
 sudo chown -R nodevault:nodevault /opt/nodevault
+if ! grep -q '^nodevault:' /etc/subuid 2>/dev/null; then
+  sudo usermod --add-subuids 100000-165535 nodevault
+fi
+if ! grep -q '^nodevault:' /etc/subgid 2>/dev/null; then
+  sudo usermod --add-subgids 100000-165535 nodevault
+fi
 REMOTE_SETUP
 
 if [[ "$RESTART_ONLY" == "true" ]]; then
@@ -68,7 +77,38 @@ else
   fi
 fi
 
-# ── 4. systemd 서비스 파일 배포 ───────────────────────────────────────────────
+# ── 4. kubeconfig 배포 ─────────────────────────────────────────────────────────
+case "${KUBECONFIG_MODE}" in
+  remote)
+    echo "==> kubeconfig 복사 (remote authoritative source)..."
+    $SSH "test -f '${REMOTE_KUBECONFIG_SOURCE}' && \
+          sudo cp '${REMOTE_KUBECONFIG_SOURCE}' '${REMOTE_DIR}/kubeconfig' && \
+          sudo chown nodevault:nodevault '${REMOTE_DIR}/kubeconfig' && \
+          sudo chmod 600 '${REMOTE_DIR}/kubeconfig' && \
+          sudo restorecon -v '${REMOTE_DIR}/kubeconfig' 2>/dev/null || true"
+    ;;
+  local)
+    if [[ -z "${LOCAL_KUBECONFIG}" || ! -f "${LOCAL_KUBECONFIG}" ]]; then
+      echo "ERROR: KUBECONFIG_MODE=local 이면 LOCAL_KUBECONFIG=/path/to/kubeconfig 가 필요합니다." >&2
+      exit 1
+    fi
+    echo "==> kubeconfig 복사 (local explicit source)..."
+    $SCP_BASE "${LOCAL_KUBECONFIG}" "${SEOY_USER}@${SEOY_HOST}:/tmp/nodevault.kubeconfig"
+    $SSH "sudo mv /tmp/nodevault.kubeconfig ${REMOTE_DIR}/kubeconfig && \
+          sudo chown nodevault:nodevault ${REMOTE_DIR}/kubeconfig && \
+          sudo chmod 600 ${REMOTE_DIR}/kubeconfig && \
+          sudo restorecon -v ${REMOTE_DIR}/kubeconfig 2>/dev/null || true"
+    ;;
+  skip)
+    echo "==> kubeconfig 배포 생략 (KUBECONFIG_MODE=skip)"
+    ;;
+  *)
+    echo "ERROR: 알 수 없는 KUBECONFIG_MODE='${KUBECONFIG_MODE}'. expected: remote|local|skip" >&2
+    exit 1
+    ;;
+esac
+
+# ── 5. systemd 서비스 파일 배포 ───────────────────────────────────────────────
 echo "==> systemd 서비스 파일 배포..."
 $SCP_BASE "${LOCAL_DEPLOY}/nodevault.service"   "${SEOY_USER}@${SEOY_HOST}:/tmp/nodevault.service"
 $SCP_BASE "${LOCAL_DEPLOY}/nodepalette.service" "${SEOY_USER}@${SEOY_HOST}:/tmp/nodepalette.service"
@@ -76,12 +116,12 @@ $SSH "sudo mv /tmp/nodevault.service /etc/systemd/system/nodevault.service && \
       sudo mv /tmp/nodepalette.service /etc/systemd/system/nodepalette.service && \
       sudo systemctl daemon-reload"
 
-# ── 5. 서비스 활성화 및 재시작 ────────────────────────────────────────────────
+# ── 6. 서비스 활성화 및 재시작 ────────────────────────────────────────────────
 echo "==> 서비스 재시작..."
 $SSH "sudo systemctl enable nodevault nodepalette && \
       sudo systemctl restart nodevault nodepalette"
 
-# ── 6. 기동 확인 (최대 30초 대기) ───────────────────────────────────────────
+# ── 7. 기동 확인 (최대 30초 대기) ───────────────────────────────────────────
 echo "==> 서비스 기동 대기 (최대 30초)..."
 for i in $(seq 1 6); do
   sleep 5

@@ -301,7 +301,9 @@ index의 상태는 두 축으로 분리한다. **이 두 축을 같은 필드에
 #### TODO-12 | Data write path 구체화
 
 **현재 상태**
-NodeKit DataDefinition / DataRegisterRequest 미구현. NodeVault data artifact 처리 없음.
+NodeVault는 `DataRegistryService`와 CAS/index dual-write를 통해 data artifact 등록/조회가 가능하다.
+NodeKit도 `DataDefinition` 모델, `DataRegisterRequest`, `DataRegisterRequestFactory`, `AdminDataList` 조회는 존재한다.
+다만 NodeKit authoring UI에서 data 등록 입력/전송 경로는 아직 미연결이다.
 
 **해야 할 것**
 data artifact(참조 genome, annotation bundle 등)를 공식 artifact로 등록/탐색 가능하게.
@@ -310,11 +312,11 @@ data artifact도 `lifecycle_phase` / `integrity_health` 이중 축 적용.
 > **주의**: 구현은 P3이지만 TODO-06 설계 시 data 자리를 잡았다 (`KindData`, `artifact_kind` 필드).
 
 **완료 기준**
-- [ ] DataDefinition 모델 (NodeKit)
-- [ ] DataRegisterRequest (NodeKit → NodeVault gRPC)
-- [ ] data artifact의 stableRef / casHash 지원
-- [ ] data artifact가 TODO-06 index 스키마에 정상 등록/조회
-- [ ] lifecycle_phase / integrity_health 이중 축이 data artifact에도 적용
+- [x] DataDefinition 모델 (NodeKit)
+- [ ] DataRegisterRequest UI/gRPC 전송 경로 (NodeKit → NodeVault)
+- [x] data artifact의 stableRef / casHash 지원
+- [x] data artifact가 TODO-06 index 스키마에 정상 등록/조회
+- [x] lifecycle_phase / integrity_health 이중 축이 data artifact에도 적용
 
 **선행 조건**: TODO-06 (완료), TODO-08 (완료)
 

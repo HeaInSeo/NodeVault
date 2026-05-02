@@ -138,8 +138,8 @@ seoy 배포 운영 중 발생하는 warning으로, 현재는 무해하나 빌드
 
 | # | 증상 | 원인 | 해결 조건 |
 |---|------|------|-----------|
-| D-01 | `no subuid ranges found for user "nodevault" in /etc/subuid` | seoy에서 `nodevault` 서비스 계정의 subuid/subgid 범위 미설정. podbridge5 rootless 빌드 시 user namespace UID 매핑에 필요. | seoy에서 `sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 nodevault` 실행. 실제 BuildRequest가 들어오기 전 필수. |
-| D-02 | `ValidateService unavailable (kubeconfig missing?)` | `/opt/nodevault/kubeconfig` 파일 없음. L3 dry-run / L4 smoke run은 K8s 접근 필요. | seoy K8s kubeconfig를 `/opt/nodevault/kubeconfig`로 배포. `deploy-seoy.sh`에 kubeconfig 복사 단계 추가 예정. L3/L4 구현 전 필수. |
+| D-01 | `no subuid ranges found for user "nodevault" in /etc/subuid` | seoy에서 `nodevault` 서비스 계정의 subuid/subgid 범위 미설정. podbridge5 rootless 빌드 시 user namespace UID 매핑에 필요. | `scripts/deploy-seoy.sh`가 `nodevault` 계정의 subuid/subgid 범위를 보정한다. 수동 배포 시 `sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 nodevault` 실행. |
+| D-02 | `ValidateService unavailable (kubeconfig missing?)` | `/opt/nodevault/kubeconfig` 파일 없음. L3 dry-run / L4 smoke run은 K8s 접근 필요. | 표준 배포는 `scripts/deploy-seoy.sh`의 기본 `KUBECONFIG_MODE=remote`로 seoy의 authoritative `infra-lab/kubeconfig`를 `/opt/nodevault/kubeconfig`로 복사한다. 로컬 kubeconfig 주입은 `KUBECONFIG_MODE=local` + `LOCAL_KUBECONFIG=...`로만 허용한다. |
 
 > **D-01 / D-02는 기동 자체를 막지 않는다.** gRPC Ping, PolicyService, BuildRequest 수신까지는 정상 동작.
 

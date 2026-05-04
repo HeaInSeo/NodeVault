@@ -458,6 +458,62 @@ data artifact도 `lifecycle_phase` / `integrity_health` 이중 축 적용.
 
 ---
 
+## v0.6.1 Sprint 계획
+
+---
+
+### v0.6.1 Sprint 0 — 계약 정렬 문서 ✓
+
+**완료 기준**
+- [x] `docs/TOOL_CONTRACT_V0_3_DRAFT.md` — v0.3 additive field 계약 (authoring_hash / validation_hash / observed_profile_digest / security_scan_digest)
+- [x] `docs/OBSERVED_PROFILE_SPEC.md` — `toolprofile` referrer payload + `validationHash` 운영 규칙
+- [x] `docs/SECURITY_SCAN_SPEC.md` — `security` referrer payload + trivy-operator 통합 + record_only 정책
+- [x] `docs/RUNNER_NODE_SPEC.md` — DagEdit RunnerNode contract (casHash required)
+- [x] `docs/NODEVAULT_V03_MAPPING.md` — v0.6.1 vocabulary ↔ NodeVault 기존 코드 위치 대응표
+- [x] `docs/TOOL_NODE_SPEC.md` Layer 4 상태 갱신 + Layer 5 RUNNER_NODE_SPEC.md 참조 추가
+
+**코드 변경**: 없음 (문서 전용)
+
+**선행 조건**: TODO-01, TODO-02, TODO-07
+
+---
+
+### v0.6.1 Sprint 1 — additive field 코드 추가
+
+**완료 기준**
+- [ ] `protos/nodevault/v1/nodevault.proto` — field 19~22 추가 (authoring_hash, validation_hash, observed_profile_digest, security_scan_digest)
+- [ ] `pkg/index/schema.go:Entry` — 4개 optional field 추가 (omitempty)
+- [ ] `pkg/oras/referrer.go:PushToolProfileReferrer` — toolprofile referrer push 구현
+- [ ] `pkg/index/store.go:SetObservedProfileDigest` — digest 갱신 메서드
+- [ ] `TestCasHashStability` — 기존 casHash 계산 방식 불변 검증
+- [ ] `TestIndexBackwardCompatibility_V03Fields` — 신규 4개 field 없이 기존 entry 정상 로드
+
+**선행 조건**: v0.6.1 Sprint 0
+
+---
+
+### v0.6.1 Sprint 2 — Validator/Profiler
+
+**완료 기준**
+- [ ] Validator/Profiler 패키지 — sample data로 실제 tool 실행, observedIoProfile 수집
+- [ ] `validationHash` 계산 + `toolprofile` referrer push 연결
+- [ ] Build/Register hook 연결
+
+**선행 조건**: v0.6.1 Sprint 1
+
+---
+
+### v0.6.1 병렬 트랙 — Security Scan
+
+**완료 기준**
+- [ ] `pkg/oras/referrer.go:PushSecurityReferrer` — security referrer push
+- [ ] `pkg/reconcile` — trivy-operator VulnerabilityReport CR 조회 + push hook
+- [ ] `pkg/index/store.go:SetSecurityScanDigest` — digest 갱신
+
+**선행 조건**: v0.6.1 Sprint 1
+
+---
+
 ## 전체 의존성
 
 ```

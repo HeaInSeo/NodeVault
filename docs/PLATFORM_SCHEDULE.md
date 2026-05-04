@@ -1,159 +1,237 @@
 # Platform Schedule
 
-버전: 1.0  
-작성일: 2026-04-18  
-목적: **관련 프로젝트 전체 일정을 한 곳에서 관리. 개발 세션 시작 시 PLATFORM_MAP.md와 함께 확인.**
+버전: 2.1
+작성일: 2026-04-18 / 갱신: 2026-05-04
+참조 문서:
+- `batch-integration/docs/master-plan/NodeKit/NodeVault_Reproducible_Tool_Authoring_업그레이드_설계_v0.6.1.md` (§14 Sprint 기간 및 완료 판정 기준)
+- `docs/OBSERVED_PROFILE_SPEC.md`, `docs/SECURITY_SCAN_SPEC.md`, `docs/RUNNER_NODE_SPEC.md`, `docs/NODEVAULT_V03_MAPPING.md`
 
 ---
 
-## 프로젝트별 현재 상태
+## 현재 운영 상태 (2026-05-04 기준)
 
-| 프로젝트 | 상태 | 다음 작업 |
-|----------|------|-----------|
-| NodeVault | 운영 중, TODO-07 대기 | pkg/oras referrer push |
-| NodeKit | 운영 중, warning 276개 | CA1062 warning 해소 + ApiProtosRoot 경로 전환 |
-| api-protos | **Sprint 1-4 완료** (go.work 제거, vendor 정리 완료) | NodeVault→NodeVault rename, api-protos 저장소 삭제 |
-| DockGuard | 완료 (9개 규칙, .wasm 번들) | 신규 정책 추가 시 재빌드 |
-| DagEdit | 독립 운영 (Catalog 연결 없음) | P5에서 Catalog 연동 |
-| sori | 프로토타입 (미통합) | P3에서 NodeVault 통합 |
-
----
-
-## 현재 진행 중인 작업 (Active)
-
-없음 — api-protos Sprint 1-4 완료로 Active 작업 없음.
-
----
-
-## 다음 작업 큐 (Ready — 시작 가능)
-
-### [NodeKit] compiler warning 276개 해소
-
-- **우선순위**: 즉시
-- **내용**: `HttpCatalogClient.cs`, `DataRegisterRequestFactory.cs` CA1062 null 검증 추가
-- **완료 기준**: `dotnet build` warning 0 증가 (CLAUDE.md §8)
-- **의존**: 없음
-
-### [NodeKit] ApiProtosRoot → NodeVault/protos/ 경로 전환
-
-- **우선순위**: 즉시 (api-protos Sprint 1-4 완료로 Ready)
-- **내용**: `NodeKit.csproj` auto-detect 경로를 `NodeVault/protos/` 기준으로 업데이트
-- **완료 기준**: `dotnet build` 시 `NodeVault/protos/nodeforge/v1/nodeforge.proto` 사용
-- **의존**: 없음 (api-protos cleanup 완료됨)
-
-### [NodeVault] TODO-07 — pkg/oras referrer push
-
-- **우선순위**: P1 (선행 조건 TODO-06, TODO-08 모두 완료)
-- **내용**: 이미지 빌드 후 spec JSON을 OCI referrer로 Harbor에 push
-  - `pkg/oras/` 구현
-  - `pkg/build/service.go:BuildAndRegisterAsync` 내 referrer push 추가
-  - `SpecReferrerDigest` 필드 채워짐
-- **완료 기준**: 등록 툴 `integrity_health = Healthy` (현재 모두 Partial)
-- **의존**: 없음
-
----
-
-## 단기 (P1 완료 후)
-
-### [NodeVault] NodeVault → NodeVault rename
-
-- **우선순위**: P1 완료 후 (api-protos cleanup 완료로 Ready)
-- **내용**: repo명, 바이너리명, K8s resource명, gRPC 서비스명 일괄 변경
-- **의존**: TODO-07 완료 후 진행 권장 (rename + referrer push 동시 PR은 리뷰 부담 큼)
-
-### [NodeVault] TODO-09b — NodeVault runtime/deployment 전환
-
-- **내용**: authority map 기반 NodeVault 단일 write authority 구현
-- **선행 조건**: TODO-09a(완료), Cilium+Harbor 안정화(완료)
-- **블로커**: rename 후 진행 권장
-
-### [NodeVault] TODO-04 — proto/API 계약 갭 메우기
-
-- **내용**: v0.2 전체 필드 라운드트립 검증, NodeKit dotnet build warning 해소 포함
-- **의존**: NodeKit warning 해소 선행 필요
-
----
-
-## 중기 (P3/P4)
-
-### [NodeVault + NodeKit] TODO-12 — Data write path
-
-- **내용**: DataDefinition UI 연결, DataRegisterRequest gRPC 전송, NodeVault data artifact 처리
-- **현재**: `DataDefinition`, `DataRegisterRequest` C# 모델 존재, UI 미연결
-- **의존**: TODO-06(완료), TODO-08(완료)
-
-### [sori + NodeVault] TODO-13 — sori NodeVault 통합
-
-- **내용**: sori 패키징 로직 NodeVault 흡수 범위 결정, API 계약
-- **의존**: TODO-12
-
-### [NodeVault] TODO-14 — Retract/Delete lifecycle
-
-- **내용**: lifecycle_phase 전이 API, Harbor GC 연동
-- **의존**: TODO-08(완료), TODO-09a(완료)
-
-### [NodeVault] TODO-15a/b/c — reconcile loop + webhook
-
-- **내용**: Harbor artifact 상태 주기적 대조, integrity_health 갱신
-- **의존**: TODO-08(완료), Harbor 운영 중
-
----
-
-## 장기 (P5)
-
-### [DagEdit] Catalog 연동
-
-- **내용**: RunnerNode에 casHash 기록, Catalog REST API 연결
-- **의존**: TODO-10(완료), NodeVault Catalog 안정화
-
-### [NodeVault] NodeVault → NodeVault rename
-
-- **내용**: repo명, 바이너리명, K8s resource명, gRPC 서비스명 일괄 변경
-- **의존**: api-protos cleanup 완료 (PROTO_OWNERSHIP_SPRINT_PLAN Sprint 3/4)
-
-### [플랫폼] TODO-18 — README / 운영 문서 정리
-
-- **내용**: 전체 아키텍처 다이어그램, authority map, 이중 축 상태 모델 통합 문서
-- **의존**: P4 완료 후
-
----
-
-## 의존성 흐름
-
-```
-[지금]
-  api-protos Sprint 3/4  ──┬──► NodeVault → NodeVault rename
-  NodeKit warning 해소    │
-  TODO-07 (oras)         ─┘
-
-[단기]
-  TODO-07 완료 ──► TODO-09b ──► TODO-04
-
-[중기]
-  TODO-12 (Data) ──► TODO-13 (sori)
-  TODO-14 (lifecycle)
-  TODO-15a/b/c (reconcile)
-
-[장기]
-  DagEdit Catalog 연동
-  TODO-18 (문서 정리)
-```
-
----
-
-## 프로젝트별 상세 일정 문서
-
-| 프로젝트 | 문서 |
+| 컴포넌트 | 상태 |
 |----------|------|
-| NodeVault 전체 TODO | `NodeVault/docs/NODEVAULT_TRANSITION_PLAN.md` |
-| api-protos 이관 | `NodeVault/docs/PROTO_OWNERSHIP_SPRINT_PLAN.md` |
-| NodeKit 아키텍처/이슈 | `NodeKit/docs/ARCHITECTURE.md` |
-| 전체 플랫폼 구성 | `NodeVault/docs/PLATFORM_MAP.md` |
+| NodeVault | seoy 호스트 바이너리 — `nodevault.service` active |
+| NodePalette | seoy 호스트 바이너리 — `nodepalette.service` active |
+| Harbor | harbor.10.113.24.96.nip.io 운영 중 |
+| NodeKit | L1 + BuildRequest gRPC 완성, AdminToolList REST 완성 |
+| DockGuard | 9개 규칙, .wasm 번들 완성 |
+| sori | `PushToolProfileReferrer`, `PushSecurityReferrer` 추가, GitHub push 완료 |
+| infra-lab | 클러스터 기동 중 — 통합 테스트 **미실행** |
 
 ---
 
-## 업데이트 규칙
+## 완료된 마일스톤
 
-- 작업 시작 시: 해당 항목을 "진행 중"으로 이동
-- 작업 완료 시: 항목 제거 + `NODEVAULT_TRANSITION_PLAN.md` 체크박스 [x] 업데이트
-- 새 작업 추가 시: 우선순위에 맞는 섹션에 삽입
+| 완료일 | 항목 |
+|--------|------|
+| 2026-04-19 | TODO-06~11 (index, toolspec referrer, catalogrest, NodePalette 분리) |
+| 2026-04-20 | TODO-09b 코드 — authority map 단일 write authority |
+| 2026-04-28 | proto rename (nodevault.v1), go.work 제거 |
+| 2026-05-02 | Path A — subuid/subgid 보정, kubeconfig 정책, 배포 자동화 |
+| 2026-05-03 | **v0.6.1 Sprint 0 완료** — 형제 문서 6개 작성 |
+| 2026-05-04 | sori — toolprofile/security referrer 함수 추가, readme 갱신 |
+
+---
+
+## 즉시 필요 (Sprint 1 시작 전 선행)
+
+| 작업 | 소요 | 비고 |
+|------|------|------|
+| `make deploy-infralab` + `make test-integration-infralab` | 2~4시간 | 핸드오프 Priority 1, 미실행 |
+| seoy e2e 확인 (`make deploy-seoy` + NodeKit → NodeVault 등록) | 1~2시간 | TODO-09b 완료 조건 |
+
+---
+
+## v0.6.1 Sprint 일정
+
+설계 문서 §14 기준 — 총 7~8주 (Sprint 0 완료 기준).
+
+### Sprint 0 — 계약 정렬 문서 ✓ (완료: 2026-05-03)
+
+설계 문서 기준 1주. 실제 1주 이내 완료.
+
+**산출물**: TOOL_CONTRACT_V0_3_DRAFT.md / OBSERVED_PROFILE_SPEC.md / SECURITY_SCAN_SPEC.md / RUNNER_NODE_SPEC.md / NODEVAULT_V03_MAPPING.md / TOOL_NODE_SPEC.md 갱신
+
+---
+
+### Sprint 1 — observed profile 기반 추가 (예상: 2주, ~2026-05-05~18)
+
+**목표**: toolspec referrer 유지 + toolprofile referrer 별도 artifact 추가
+
+**작업 목록**
+
+| 파일 | 변경 내용 |
+|------|-----------|
+| `protos/nodevault/v1/nodevault.proto` | field 19~22: `authoring_hash`, `validation_hash`, `observed_profile_digest`, `security_scan_digest` |
+| `pkg/index/schema.go:Entry` | 4개 optional field (`omitempty`) |
+| `pkg/oras/referrer.go` | `PushToolProfileReferrer` (sori `PushToolProfileReferrer` wrapping) |
+| `pkg/index/store.go` | `SetObservedProfileDigest`, `SetAuthoringHash` |
+| `pkg/catalogrest` | REST 응답에 `observedProfileDigest`, `validationHash` 포함 |
+
+**완료 판정 기준** (설계 문서 §14 Sprint 1)
+
+- [ ] `MediaTypeToolProfile` 상수 코드 존재
+- [ ] `TestPushToolProfileReferrer` 통과
+- [ ] `TestDualReferrerCoexistence` — toolspec + toolprofile 공존
+- [ ] `TestIndexMixedEntries_V04` — 신규 field 있는 entry + 기존 entry 혼재 로드
+- [ ] `TestCasHashStability` 또는 `TestExistingToolDefinitionCasHashGolden` — 기존 casHash 불변
+- [ ] `TestIndexBackwardCompatibility_V03Fields` — 신규 4개 field 없이 기존 entry 정상 로드
+- [ ] `TestIndex_FallbackOnError` — atomic write 실패 시 기존 index 보존
+- [ ] `go test ./...` 전체 통과
+- [ ] `make lint` 경고 없음
+
+---
+
+### Sprint 2 — Validator/Profiler 연결 (예상: 2~3주, ~2026-05-18~06-08)
+
+**목표**: Build/Register 흐름에 Validator/Profiler hook 연결, 최소 dry-run으로 observed I/O profile 생성
+
+**최소 dry-run 기준** (설계 문서 §14 Sprint 2)
+```
+command: echo hello > /out/result.txt
+expected: /out/result.txt exists=true, count=1, totalBytes>0
+```
+
+**작업 목록**
+
+| 패키지/파일 | 내용 |
+|-------------|------|
+| `pkg/profiler/` (신규) | Profiler 패키지 — sample data 실행, output 수집 |
+| `pkg/profiler/models.go` | `ValidationRun`, `ObservedIoProfile`, `ObservedResourceProfile`, `ContractCheck` |
+| `pkg/profiler/hash.go` | `ValidationHash` 계산 (환경 독립 항목만 포함 — `OBSERVED_PROFILE_SPEC.md §3` 기준) |
+| `pkg/profiler/classifier.go` | infra-level failure 분류 (OOMKilled, timeout, eviction 등) |
+| `pkg/build/service.go` | Profiler hook 연결 — 등록 후 profile attach |
+| `pkg/oras/referrer.go` | `PushToolProfileReferrer` 호출 |
+| `pkg/index/store.go` | `SetObservedProfileDigest` 호출 |
+
+**완료 판정 기준** (설계 문서 §14 Sprint 2)
+
+- [ ] `go build ./pkg/profiler/...` 성공
+- [ ] `TestBuildAndRegister_ProfilerHookCalled` 통과
+- [ ] `TestProfiler_OutputCapture` 통과
+- [ ] `TestValidationHash_Deterministic` 통과
+- [ ] `TestValidationHash_ExcludesObservedResourcesByDefault` 통과
+- [ ] `TestValidationHash_OnlyForSuccessfulFunctionalValidation` 통과
+- [ ] `TestValidator_InfraFailureClassification` 통과
+- [ ] `TestProfiler_TimeoutProducesInconclusiveProfile` 통과
+- [ ] `TestBuildAndRegister_WithProfile` 통합 테스트 통과
+- [ ] `TestCasHashStability` 통과 (기존 casHash 불변 재확인)
+- [ ] `TestIndex_FallbackOnError` 통과
+- [ ] `go test ./...` 전체 통과
+
+---
+
+### Sprint 3 — DagEdit RunnerNode 연결 (예상: 2주, ~2026-06-08~22)
+
+**목표**: NodeVault catalog → DagEdit RunnerNode까지 casHash 기반 pinning 실제 모델 연결
+
+**작업 목록**
+
+| 위치 | 내용 |
+|------|------|
+| `pkg/catalogrest` | REST 응답에 `observedProfileDigest`, `validationHash`, `toolspecReferrerDigest` 포함 (Sprint 1에서 일부 시작) |
+| DagEdit repo | `RunnerNode` JSON schema — `casHash` 필수, 나머지 선택 |
+| DagEdit repo | 팔레트 → NodePalette REST 조회 → `casHash` 기록 |
+| DagEdit repo | UI badge 표시 (Verified / Unverified / No dry-run profile) |
+
+**완료 판정 기준** (설계 문서 §14 Sprint 3)
+
+- [ ] `TestRunnerNode_WithoutCasHash_Fails` — casHash 없는 RunnerNode 거부
+- [ ] `TestRunnerNode_Serialization_RoundTrip` — casHash 직렬화 보존
+- [ ] `TestRunnerNode_OptionalFields_Absent` — optional field 없이 동작
+- [ ] `TestPortBinding_ParentToChild` — DAG edge 연결
+- [ ] `TestRunnerNode_FromCatalogResponse` — catalog 응답 → RunnerNode 생성
+- [ ] `TestNodePaletteBadge_DefaultsForMissingOptionalMetadata` — badge 기본값
+
+**계약 문서**: `docs/RUNNER_NODE_SPEC.md`
+
+---
+
+### 병렬 트랙 A — Security Scan Integration (예상: 1~2주, Sprint 2 이후)
+
+**목표**: CVE scan result를 toolprofile과 독립된 security referrer로 관리
+
+**작업 목록**
+
+| 파일/위치 | 내용 |
+|-----------|------|
+| `pkg/oras/referrer.go` | `PushSecurityReferrer` NodeVault wrapper |
+| `pkg/reconcile/` | trivy-operator VulnerabilityReport CR 조회 + summary 추출 |
+| `pkg/index/store.go` | `SetSecurityScanDigest` |
+| `pkg/catalogrest` | security badge 응답 포함 |
+
+**완료 판정 기준** (설계 문서 §14 Security Scan 병렬 트랙)
+
+- [ ] `SECURITY_SCAN_SPEC.md` 존재 ✓ (완료)
+- [ ] `MediaTypeSecurityScan` 상수 코드 존재 ✓ (sori 완료)
+- [ ] `TestSecurityReport_FromTrivyVulnerabilityReport` 통과
+- [ ] `TestSecurityReferrerPayload_Generate` 통과
+- [ ] `TestIndexBackwardCompatibility_SecurityScanDigest` 통과
+- [ ] `TestSecurityPolicy_RecordOnlyDoesNotBlockActive` 통과
+- [ ] `TestSecurityRetention_MarksOldReferrersAsGCCandidates` 통과
+
+**스펙**: `docs/SECURITY_SCAN_SPEC.md`
+
+---
+
+### 병렬 트랙 B — TODO-12 Data write path (예상: 2일, Sprint 1 이후 가능)
+
+**목표**: NodeKit data registration UI → NodeVault gRPC 실제 전송 연결
+
+| 작업 | 소요 |
+|------|------|
+| `DataRegisterRequestFactory.cs` → gRPC 실제 전송 | 1일 |
+| NodeVault `DataRegistryService` 수신 + index 기록 검증 | 0.5일 |
+| 통합 테스트 | 0.5일 |
+
+---
+
+## 전체 일정 요약
+
+설계 문서 §14 기준: **Sprint 0 완료 후 7~8주**.
+
+```
+2026-05-04  ■ 현재 위치 (Sprint 0 완료)
+            │
+~05-07      ├── 선행: infra-lab 검증 + seoy e2e         [2~6시간]
+            │
+05-05~18    ├── Sprint 1  additive field + toolprofile referrer  [2주]
+            │
+05-18~06-08 ├── Sprint 2  Validator/Profiler                     [2~3주]
+            │   └── 병렬 트랙 B: TODO-12 Data write path         [2일]
+            │
+06-08~06-22 └── Sprint 3  DagEdit RunnerNode                     [2주]
+                └── 병렬 트랙 A: Security Scan                   [1~2주]
+
+총 완료 예상: 2026-06-22 (Sprint 3) / Security Scan 포함 시 ~06-29
+```
+
+---
+
+## 공통 gate (모든 Sprint 적용)
+
+설계 문서 §14 공통 gate:
+
+- 기존 테스트가 깨지지 않는다
+- 기존 `casHash` 계산 방식이 변경되지 않는다
+- `assets/catalog/{casHash}.tooldefinition` 경로 의미가 유지된다
+- 기존 index entry가 신규 optional field 없이도 정상 로드된다
+- 신규 필드는 모두 backward-compatible optional field로 추가한다
+- index update 중 오류가 발생해도 기존 index를 손상시키지 않는다
+
+---
+
+## 프로젝트별 상세 문서
+
+| 항목 | 문서 |
+|------|------|
+| v0.6.1 전체 설계 | `batch-integration/docs/master-plan/NodeKit/NodeVault_Reproducible_Tool_Authoring_업그레이드_설계_v0.6.1.md` |
+| NodeVault 전체 TODO | `docs/NODEVAULT_TRANSITION_PLAN.md` |
+| v0.3 계약 | `docs/TOOL_CONTRACT_V0_3_DRAFT.md` |
+| toolprofile referrer 스펙 | `docs/OBSERVED_PROFILE_SPEC.md` |
+| security referrer 스펙 | `docs/SECURITY_SCAN_SPEC.md` |
+| DagEdit RunnerNode 계약 | `docs/RUNNER_NODE_SPEC.md` |
+| v0.6.1 용어 ↔ 코드 대응 | `docs/NODEVAULT_V03_MAPPING.md` |
+| infra-lab 테스트 절차 | `docs/INFRALAB_TESTING.md` |

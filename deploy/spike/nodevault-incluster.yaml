@@ -1,14 +1,10 @@
 ---
-# NodeVault In-Cluster Spike Manifest
+# NodeVault In-Cluster Spike Manifest — Option A (K8sPodbridgeBackend)
 #
-# 목적: NodeVault Core가 K8s Pod 내부에서 기동 가능한지 검증한다.
-#       이미지 빌드(podbridge5)는 disabled 상태로 비활성화한다.
+# Phase 1 (완료): NODEVAULT_BUILD_BACKEND=disabled 로 Core Pod 기동 검증
+# Phase 2 (현재): NODEVAULT_BUILD_BACKEND=k8s-job 으로 실제 이미지 빌드 검증
 #
-# 확인 대상:
-#   - Pod Running 상태
-#   - logs에 runtime_mode=incluster 표시
-#   - PingService gRPC 응답
-#   - BuildRequest → "build backend disabled" 에러 (서버는 유지)
+# Option A: NodeVault Pod → K8s Job (quay.io/buildah/stable, privileged) → Harbor push
 #
 # 적용 방법:
 #   kubectl apply -f deploy/spike/nodevault-incluster.yaml
@@ -26,13 +22,19 @@ kind: Namespace
 metadata:
   name: nodeplatform-system
 ---
+# nodevault-builds: builder Job이 실행되는 namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nodevault-builds
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: nodevault
   namespace: nodeplatform-system
 ---
-# RBAC: L3/L4 Job 실행 권한 (spike에서도 ValidateService가 기동됨)
+# RBAC: ValidateService L3/L4 Job + K8sJobBuilder (Option A) 권한
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -50,6 +52,10 @@ rules:
   - apiGroups: [""]
     resources: ["namespaces"]
     verbs: ["get", "create"]
+  # K8sJobBuilder: Dockerfile을 ConfigMap으로 전달
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "get", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -64,6 +70,17 @@ subjects:
     name: nodevault
     namespace: nodeplatform-system
 ---
+# Harbor push 자격증명 (spike only — production에서는 Vault/ESO 사용)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: harbor-push-creds
+  namespace: nodeplatform-system
+type: Opaque
+stringData:
+  user: admin
+  password: Harbor12345
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -71,14 +88,16 @@ metadata:
   namespace: nodeplatform-system
 data:
   NODEVAULT_RUNTIME_MODE: "incluster"
-  NODEVAULT_BUILD_BACKEND: "disabled"
+  NODEVAULT_BUILD_BACKEND: "k8s-job"
   CATALOG_DIR: "/data/catalog"
   INDEX_DIR: "/data/index"
   NODEVAULT_ADDR: ":50051"
   NODEVAULT_WEBHOOK_ADDR: ":8082"
-  # Fast/slow reconcile 단축 (spike 중 빠른 확인)
   NODEVAULT_FAST_RECONCILE: "60s"
   NODEVAULT_SLOW_RECONCILE: "300s"
+  # K8sJobBuilder 설정
+  NODEVAULT_BUILDER_IMAGE: "quay.io/buildah/stable:v1.37.1"
+  NODEVAULT_REGISTRY_ADDR: "harbor.lab.local"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -120,7 +139,19 @@ spec:
             - configMapRef:
                 name: nodevault-spike-config
 
-          # catalog + index는 spike 동안 emptyDir (Pod 재시작 시 초기화)
+          # Harbor 자격증명 — builder Job에 전달
+          env:
+            - name: HARBOR_USER
+              valueFrom:
+                secretKeyRef:
+                  name: harbor-push-creds
+                  key: user
+            - name: HARBOR_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: harbor-push-creds
+                  key: password
+
           volumeMounts:
             - name: data
               mountPath: /data
@@ -165,7 +196,6 @@ spec:
       targetPort: 50051
       protocol: TCP
 ---
-# NodePalette catalog REST (선택적 — spike 검증 범위 밖이지만 포트 노출만)
 apiVersion: v1
 kind: Service
 metadata:

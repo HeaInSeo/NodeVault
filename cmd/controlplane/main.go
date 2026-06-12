@@ -92,8 +92,9 @@ func loadRuntimeConfig() runtimeConfig {
 
 func main() {
 	// podbridge5 reexec is only needed for the local-podbridge build backend.
-	// In disabled mode (incluster spike) the process must not invoke buildah helpers.
-	if os.Getenv("NODEVAULT_BUILD_BACKEND") != "disabled" {
+	// disabled and k8s-job modes do not initialize podbridge5 in-process.
+	backend := os.Getenv("NODEVAULT_BUILD_BACKEND")
+	if backend != "disabled" && backend != "k8s-job" {
 		if podbridge5.ReexecIfNeeded() {
 			os.Exit(0)
 		}
@@ -179,13 +180,24 @@ func run() int {
 	rec := startBackground(ctx, indexStore, rc.webhookAddr, fastInterval, slowInterval)
 
 	// BuildService — select backend based on NODEVAULT_BUILD_BACKEND.
-	// disabled: accepts gRPC connections, immediately returns ErrBuildBackendDisabled.
-	//           podbridge5/container-storage not initialized; safe for K8s Pods.
+	// disabled:       accepts gRPC connections, returns ErrBuildBackendDisabled.
+	//                 podbridge5/container-storage not initialized; safe for K8s Pods.
+	// k8s-job:        spawns a privileged K8s Job (buildah) for each build request.
+	//                 podbridge5 not initialized in-process.
 	// local-podbridge: full podbridge5 in-process build (host mode only).
-	if rc.buildBackend == "disabled" {
+	switch rc.buildBackend {
+	case "disabled":
 		nfv1.RegisterBuildServiceServer(srv, build.NewDisabledService())
 		slog.Info("BuildService registered with disabled backend (spike mode)")
-	} else {
+	case "k8s-job":
+		buildSvc, buildErr := build.NewK8sJobService(rc.runtimeMode, validateSvc, registrySvc, indexStore, rec)
+		if buildErr != nil {
+			slog.Warn("BuildService unavailable (k8s-job builder init failed)", "err", buildErr)
+		} else {
+			nfv1.RegisterBuildServiceServer(srv, buildSvc)
+			slog.Info("BuildService registered with k8s-job backend (Option A spike)")
+		}
+	default:
 		buildSvc, buildErr := build.NewService(validateSvc, registrySvc, indexStore, rec)
 		if buildErr != nil {
 			slog.Warn("BuildService unavailable (podbridge5 init failed?)", "err", buildErr)

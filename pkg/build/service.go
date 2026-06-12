@@ -64,6 +64,31 @@ func NewService(
 	}, nil
 }
 
+// NewDisabledService creates a BuildService that immediately rejects all build
+// requests with ErrBuildBackendDisabled. The gRPC server stays alive; other
+// services (Ping, Policy, Catalog) continue to function normally.
+// Used when NODEVAULT_BUILD_BACKEND=disabled (incluster spike mode).
+func NewDisabledService() *Service {
+	return &Service{builder: disabledBuilder{}}
+}
+
+// NewK8sJobService creates a BuildService backed by K8sJobBuilder (Option A spike).
+// runtimeMode controls how the K8s client is initialized ("incluster" vs kubeconfig).
+// Used when NODEVAULT_BUILD_BACKEND=k8s-job.
+func NewK8sJobService(
+	runtimeMode string,
+	validator *validate.Service, registry *catalog.ToolRegistryService, store *index.Store, reconciler ReconcileTriggerer,
+) (*Service, error) {
+	builder, err := newK8sJobBuilder(runtimeMode)
+	if err != nil {
+		return nil, fmt.Errorf("k8s-job service init: %w", err)
+	}
+	return &Service{
+		builder: builder, validator: validator, registry: registry,
+		indexStore: store, reconciler: reconciler,
+	}, nil
+}
+
 // Close releases the underlying image build storage.
 func (s *Service) Close() error {
 	return s.builder.Close()

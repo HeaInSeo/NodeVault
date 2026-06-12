@@ -8,8 +8,8 @@ COPY executor.sh /app/
 COPY healthcheck.sh /app/
 COPY scripts/user_script.sh /app/scripts/
 
-# 파일 권한을 777로 설정
-RUN chmod 777 /app/executor.sh /app/healthcheck.sh /app/scripts/user_script.sh
+# 파일 권한을 755로 설정
+RUN chmod 755 /app/executor.sh /app/healthcheck.sh /app/scripts/user_script.sh
 
 # executor.sh 실행
 CMD ["/bin/sh", "-c", "/app/executor.sh"]

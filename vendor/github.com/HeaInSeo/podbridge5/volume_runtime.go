@@ -3,16 +3,18 @@ package podbridge5
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/containers/podman/v5/pkg/bindings/containers"
 	"github.com/containers/podman/v5/pkg/bindings/images"
 	"github.com/containers/podman/v5/pkg/specgen"
+	"github.com/google/uuid"
 )
 
 const (
-	volumeTransferImage       = "docker.io/library/alpine:latest"
-	volumeWriterContainerName = "temp-folder-writer"
-	volumeReaderContainerName = "temp-data-reader"
+	volumeTransferImage             = "docker.io/library/alpine:latest"
+	volumeWriterContainerNamePrefix = "temp-folder-writer"
+	volumeReaderContainerNamePrefix = "temp-data-reader"
 )
 
 type volumeContainerRuntime interface {
@@ -71,7 +73,7 @@ func (podmanVolumeContainerRuntime) RemoveContainer(ctx context.Context, contain
 func newVolumeWriterSpec(volumeName, mountPath string) (*specgen.SpecGenerator, error) {
 	return NewSpec(
 		WithImageName(volumeTransferImage),
-		WithName(volumeWriterContainerName),
+		WithName(uniqueTempContainerName(volumeWriterContainerNamePrefix)),
 		WithEnv("MOUNT", mountPath),
 		WithCommand([]string{
 			"sh", "-c",
@@ -84,35 +86,42 @@ func newVolumeWriterSpec(volumeName, mountPath string) (*specgen.SpecGenerator, 
 func newVolumeReaderSpec(volumeName, mountPath string) (*specgen.SpecGenerator, error) {
 	return NewSpec(
 		WithImageName(volumeTransferImage),
-		WithName(volumeReaderContainerName),
+		WithName(uniqueTempContainerName(volumeReaderContainerNamePrefix)),
 		WithCommand([]string{"sh", "-c", "mkdir -p /data && sleep infinity"}),
 		WithNamedVolume(volumeName, mountPath, ""),
 	)
 }
 
-func startVolumeContainer(ctx context.Context, runtime volumeContainerRuntime, spec *specgen.SpecGenerator) (string, func(), error) {
+func startVolumeContainer(ctx context.Context, runtime volumeContainerRuntime, spec *specgen.SpecGenerator) (containerID string, cleanupFn func(), startErr error) {
 	if err := runtime.EnsureImage(ctx, spec.Image); err != nil {
-		return "", nil, err
+		return "", nil, fmt.Errorf("ensure image %q: %w", spec.Image, err)
 	}
 
-	containerID, err := runtime.CreateContainer(ctx, spec)
+	cID, err := runtime.CreateContainer(ctx, spec)
 	if err != nil {
-		return "", nil, err
+		return "", nil, fmt.Errorf("create container: %w", err)
 	}
 
 	cleanup := func() {
-		if stopErr := runtime.StopContainer(ctx, containerID); stopErr != nil {
-			Log.Warnf("stop container %s: %v", containerID, stopErr)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if stopErr := runtime.StopContainer(cleanupCtx, cID); stopErr != nil {
+			Log.Warnf("stop container %s: %v", cID, stopErr)
 		}
-		if rmErr := runtime.RemoveContainer(ctx, containerID); rmErr != nil {
-			Log.Warnf("remove container %s: %v", containerID, rmErr)
+		if rmErr := runtime.RemoveContainer(cleanupCtx, cID); rmErr != nil {
+			Log.Warnf("remove container %s: %v", cID, rmErr)
 		}
 	}
 
-	if err := runtime.StartContainer(ctx, containerID); err != nil {
+	if err := runtime.StartContainer(ctx, cID); err != nil {
 		cleanup()
-		return "", nil, err
+		return "", nil, fmt.Errorf("start container %q: %w", cID, err)
 	}
 
-	return containerID, cleanup, nil
+	return cID, cleanup, nil
+}
+
+func uniqueTempContainerName(prefix string) string {
+	return fmt.Sprintf("%s-%s", prefix, uuid.NewString())
 }

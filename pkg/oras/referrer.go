@@ -11,8 +11,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 
-	"github.com/seoyhaein/sori"
+	"github.com/HeaInSeo/sori"
+	"github.com/HeaInSeo/sori/registryutil"
 
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
@@ -32,8 +34,13 @@ type toolSpec struct {
 // identified by imageRepo and subjectDigest.
 //
 // imageRepo is the Harbor repository reference without tag or digest,
-// e.g. "harbor.10.113.24.96.nip.io/library/mytool".
+// e.g. "harbor.lab.local/library/mytool".
 // subjectDigest is the image manifest digest, e.g. "sha256:abc...".
+//
+// TLS behavior is controlled by env vars:
+//
+//	NODEVAULT_ORAS_INSECURE_TLS=true  — skip TLS verification (self-signed certs)
+//	NODEVAULT_ORAS_CA_FILE=/path/cert.pem — use custom CA
 //
 // Returns the referrer manifest digest on success.
 // A non-nil error means the push failed; the caller should log and continue —
@@ -51,7 +58,7 @@ func PushToolSpecReferrer(
 		return "", fmt.Errorf("oras: tool must not be nil")
 	}
 
-	target, err := sori.NewReferrerRemoteRepository(imageRepo, true, nil)
+	target, err := newRemoteRepository(imageRepo)
 	if err != nil {
 		return "", fmt.Errorf("oras: create remote repository %q: %w", imageRepo, err)
 	}
@@ -74,4 +81,21 @@ func PushToolSpecReferrer(
 		return "", fmt.Errorf("oras: push referrer to %q: %w", imageRepo, err)
 	}
 	return result.ReferrerDigest, nil
+}
+
+// newRemoteRepository builds a remote repository client using env-driven TLS config.
+// Uses registryutil.RemoteConfig directly to support InsecureTLS and CAFile,
+// which are not exposed through sori.NewReferrerRemoteRepository.
+func newRemoteRepository(imageRepo string) (sori.ReferrerTarget, error) {
+	cfg := registryutil.RemoteConfig{
+		InsecureTLS: os.Getenv("NODEVAULT_ORAS_INSECURE_TLS") == "true",
+		CAFile:      os.Getenv("NODEVAULT_ORAS_CA_FILE"),
+		Username:    os.Getenv("HARBOR_USER"),
+		Password:    os.Getenv("HARBOR_PASS"),
+	}
+	repo, err := registryutil.NewRepository(imageRepo, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return repo, nil
 }

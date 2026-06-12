@@ -90,7 +90,7 @@ func saveImageWithRuntime(ctx context.Context, runtime imageExportRuntime, path,
 	}()
 
 	if err := runtime.ExportImage(ctx, imageID, writer); err != nil {
-		return err
+		return fmt.Errorf("export image %q: %w", imageID, err)
 	}
 	return nil
 }

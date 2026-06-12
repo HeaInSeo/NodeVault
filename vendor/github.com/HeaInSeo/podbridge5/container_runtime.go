@@ -2,15 +2,16 @@ package podbridge5
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/HeaInSeo/utils"
 	"github.com/containers/podman/v5/libpod/define"
 	"github.com/containers/podman/v5/pkg/bindings/containers"
 	"github.com/containers/podman/v5/pkg/bindings/images"
 	entitiesTypes "github.com/containers/podman/v5/pkg/domain/entities/types"
 	"github.com/containers/podman/v5/pkg/specgen"
-	"github.com/seoyhaein/utils"
 )
 
 type containerRuntime interface {
@@ -18,8 +19,11 @@ type containerRuntime interface {
 	EnsureImage(ctx context.Context, imageRef string) error
 	CreateContainer(ctx context.Context, spec *specgen.SpecGenerator) (*entitiesTypes.ContainerCreateResponse, error)
 	StartContainer(ctx context.Context, containerID string) error
+	RemoveContainer(ctx context.Context, containerID string) error
 	InspectContainer(ctx context.Context, containerID string) (*define.InspectContainerData, error)
 }
+
+var ErrContainerAlreadyExists = errors.New("container already exists")
 
 type podmanContainerRuntime struct{}
 
@@ -60,6 +64,13 @@ func (podmanContainerRuntime) StartContainer(ctx context.Context, containerID st
 	return nil
 }
 
+func (podmanContainerRuntime) RemoveContainer(ctx context.Context, containerID string) error {
+	if _, err := containers.Remove(ctx, containerID, &containers.RemoveOptions{Force: utils.PTrue}); err != nil {
+		return fmt.Errorf("remove container %q: %w", containerID, err)
+	}
+	return nil
+}
+
 func (podmanContainerRuntime) InspectContainer(ctx context.Context, containerID string) (*define.InspectContainerData, error) {
 	data, err := containers.Inspect(ctx, containerID, &containers.InspectOptions{Size: utils.PFalse})
 	if err != nil {
@@ -82,7 +93,11 @@ func startContainerWithRuntime(ctx context.Context, runtime containerRuntime, sp
 	}
 
 	if err := runtime.StartContainer(ctx, ccr.ID); err != nil {
-		return "", err
+		cleanupCtx := context.Background()
+		if removeErr := runtime.RemoveContainer(cleanupCtx, ccr.ID); removeErr != nil {
+			return "", errors.Join(fmt.Errorf("start container: %w", err), removeErr)
+		}
+		return "", fmt.Errorf("start container: %w", err)
 	}
 
 	return ccr.ID, nil
@@ -102,22 +117,27 @@ func createContainerWithRuntime(ctx context.Context, runtime containerRuntime, c
 	containerExists, err := runtime.ContainerExists(ctx, conSpec.Name)
 	if err != nil {
 		Log.Errorf("Failed to check if container exists: %v", err)
-		return nil, err
+		return nil, fmt.Errorf("check container exists: %w", err)
 	}
 	if containerExists {
-		return handleExistingContainerWithRuntime(ctx, runtime, conSpec.Name)
+		info, inspectErr := runtime.InspectContainer(ctx, conSpec.Name)
+		if inspectErr != nil {
+			return nil, fmt.Errorf("inspect container: %w", inspectErr)
+		}
+		return nil, fmt.Errorf("%w: name=%s existing_id=%s existing_image=%s expected_image=%s", ErrContainerAlreadyExists, conSpec.Name, info.ID, info.Image, conSpec.Image)
 	}
 
-	if err := runtime.EnsureImage(ctx, conSpec.Image); err != nil {
+	err = runtime.EnsureImage(ctx, conSpec.Image)
+	if err != nil {
 		Log.Errorf("Failed to ensure image: %v", err)
-		return nil, err
+		return nil, fmt.Errorf("ensure image %q: %w", conSpec.Image, err)
 	}
 
 	Log.Infof("Creating %s container using %s image...", conSpec.Name, conSpec.Image)
 	createResponse, err := runtime.CreateContainer(ctx, conSpec)
 	if err != nil {
 		Log.Errorf("Failed to create container: %v", err)
-		return nil, err
+		return nil, fmt.Errorf("create container: %w", err)
 	}
 
 	return &CreateContainerResult{
@@ -129,20 +149,11 @@ func createContainerWithRuntime(ctx context.Context, runtime containerRuntime, c
 }
 
 func inspectContainerWithRuntime(ctx context.Context, runtime containerRuntime, containerID string) (*define.InspectContainerData, error) {
-	return runtime.InspectContainer(ctx, containerID)
-}
-
-func handleExistingContainerWithRuntime(ctx context.Context, runtime containerRuntime, containerName string) (*CreateContainerResult, error) {
-	info, err := runtime.InspectContainer(ctx, containerName)
+	data, err := runtime.InspectContainer(ctx, containerID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("inspect container %q: %w", containerID, err)
 	}
-
-	return &CreateContainerResult{
-		Name:   containerName,
-		ID:     info.ID,
-		Status: containerStatusFromInspectState(info.State),
-	}, nil
+	return data, nil
 }
 
 func containerStatusFromInspectState(state *define.InspectContainerState) ContainerStatus {

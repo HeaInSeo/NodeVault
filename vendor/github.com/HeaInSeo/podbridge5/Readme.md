@@ -35,6 +35,15 @@ Kubernetes 위에서 사용하는 상위 프로젝트가 있을 수는 있지만
 - 실제 Podman/Buildah/storage 초기화 문제인지
 를 빠르게 가를 수 있어야 합니다.
 
+## Go 기준선
+
+이 저장소는 `go.mod` 기준으로 `Go 1.25.5`를 사용합니다.
+다른 관련 프로젝트들과 동일한 `Go 1.25.x` 기준선을 유지하는 것이 정책입니다.
+
+- 로컬 테스트와 개발 진입점은 `make test-unit`, `make test-runtime`, `make test-runtime-integration`입니다.
+- 이 타깃들은 실행 전에 현재 `go` 바이너리가 `go1.25.5`인지 확인합니다.
+- 낮은 버전과의 호환성을 목표로 하지 않습니다. 버전을 낮추는 대신 개발 환경과 CI/VM을 `1.25.x`에 맞춥니다.
+
 ## 문서
 
 - 한국어 runtime 검증 문서: [docs/runtime-testing.ko.md](docs/runtime-testing.ko.md)

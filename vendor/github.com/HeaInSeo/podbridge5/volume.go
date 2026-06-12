@@ -6,10 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/containers/podman/v5/pkg/bindings/containers"
-	"github.com/containers/podman/v5/pkg/bindings/volumes"
-	"github.com/containers/podman/v5/pkg/domain/entities/types"
-	"github.com/containers/podman/v5/pkg/specgen"
 	"io"
 	"io/fs"
 	"os"
@@ -17,6 +13,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/containers/podman/v5/pkg/bindings/containers"
+	"github.com/containers/podman/v5/pkg/bindings/volumes"
+	"github.com/containers/podman/v5/pkg/domain/entities/types"
+	"github.com/containers/podman/v5/pkg/specgen"
 )
 
 // TODO RemoveVolume 테스트 진행해야 함. 코드 정리 필요.
@@ -26,7 +27,7 @@ type VolumeMode int
 const (
 	// ModeSkip 기존 데이터가 있으면 아무 작업도 하지 않고 바로 리턴
 	ModeSkip VolumeMode = iota
-	// ModeUpdate 기존 데이터를 유지하되, tar 안의 파일로 “업데이트”(덮어쓰기)만 수행
+	// ModeUpdate 기존 데이터를 유지하되, tar 안의 파일로 "업데이트"(덮어쓰기)만 수행
 	ModeUpdate
 	// ModeOverwrite 기존 볼륨을 완전 초기화(삭제 → 새로 생성)한 뒤 tar 를 풀어 씀
 	ModeOverwrite
@@ -143,11 +144,11 @@ func RemoveVolume(ctx context.Context, name string, beh *RemoveBehavior) error {
 		}
 		if beh.RetryForce && !beh.Force {
 			// force 재시도
-			if ferr := tryRemove(true); ferr == nil {
+			ferr := tryRemove(true)
+			if ferr == nil {
 				return nil
-			} else {
-				return ferr
 			}
+			return ferr
 		}
 		return err
 	})
@@ -166,13 +167,13 @@ func OverwriteVolume(ctx context.Context, name string, create CreateFn) (*types.
 		return nil, fmt.Errorf("check exists: %w", err)
 	}
 	if exists {
-		if err := RemoveVolume(ctx, name, &RemoveBehavior{
+		if removeErr := RemoveVolume(ctx, name, &RemoveBehavior{
 			Force:          false,
 			RetryForce:     true,
 			IgnoreNotFound: true,
 			Attempts:       3,
-		}); err != nil {
-			return nil, fmt.Errorf("remove before overwrite: %w", err)
+		}); removeErr != nil {
+			return nil, fmt.Errorf("remove before overwrite: %w", removeErr)
 		}
 	}
 	vcr, err := create(ctx, name)
@@ -198,6 +199,10 @@ func VolumeExists(ctx context.Context, name string) (bool, error) {
 // WriteFolderToVolume TODO 일단 테스트 필요 일단 붙이면서 보자. 동시성 문제의 경우 ctx 관련해서 생각해보자. 중요.
 // TODO 부가적으로 시간 또는 퍼센트를 나타내는 것을 추가할지 고민해야 함. 일단 합치는 것 부터 하고 나머지 진행하기로 함.
 func WriteFolderToVolume(parentCtx context.Context, volumeName, mountPath, hostDir string, mode VolumeMode) error {
+	if parentCtx == nil {
+		return fmt.Errorf("WriteFolderToVolume: parentCtx must not be nil")
+	}
+
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 
@@ -299,57 +304,57 @@ func WriteFolderToVolume(parentCtx context.Context, volumeName, mountPath, hostD
 			if err != nil {
 				return err
 			}
-			rel, err := filepath.Rel(hostDir, path)
-			if err != nil {
-				return err
+			rel, relErr := filepath.Rel(hostDir, path)
+			if relErr != nil {
+				return fmt.Errorf("relative path %q: %w", path, relErr)
 			}
 			if rel == "." {
 				return nil
 			}
 
-			fi, err := d.Info()
-			if err != nil {
-				return err
+			fi, fiErr := d.Info()
+			if fiErr != nil {
+				return fmt.Errorf("file info %q: %w", path, fiErr)
 			}
 
 			var linkTarget string
 			// fi.Mode() 의 비트 패턴 중에서 os.ModeSymlink 플래그(심볼릭 링크를 나타내는 위치에 있는 비트)만 남겨내서(AND 연산 & 연산)
-			// 그 결과가 0이 아니면 “이 파일이 심볼릭 링크다” 라고 판단할 수 있다.
+			// 그 결과가 0이 아니면 "이 파일이 심볼릭 링크다" 라고 판단할 수 있다.
 			if fi.Mode()&os.ModeSymlink != 0 {
 				// 심볼릭 링크의 실제 패스를 가져옴.
 				if lt, lerr := os.Readlink(path); lerr == nil {
 					linkTarget = lt
 				} else {
-					return lerr
+					return fmt.Errorf("readlink %q: %w", path, lerr)
 				}
 			}
 
-			hdr, err := tar.FileInfoHeader(fi, linkTarget)
-			if err != nil {
-				return err
+			hdr, hdrErr := tar.FileInfoHeader(fi, linkTarget)
+			if hdrErr != nil {
+				return fmt.Errorf("tar header %q: %w", path, hdrErr)
 			}
 			hdr.Name = rel
 
 			if d.IsDir() {
 				if err := tw.WriteHeader(hdr); err != nil {
-					return err
+					return fmt.Errorf("write dir header %q: %w", rel, err)
 				}
 				return nil
 			}
 
 			if err := tw.WriteHeader(hdr); err != nil {
-				return err
+				return fmt.Errorf("write header %q: %w", rel, err)
 			}
 
 			if fi.Mode().IsRegular() {
-				f, err := os.Open(path)
-				if err != nil {
-					return err
+				f, openErr := os.Open(path)
+				if openErr != nil {
+					return fmt.Errorf("open file %q: %w", path, openErr)
 				}
 				_, cErr := io.Copy(tw, f)
 				_ = f.Close()
 				if cErr != nil {
-					return cErr
+					return fmt.Errorf("copy file %q: %w", path, cErr)
 				}
 			}
 			return nil
@@ -360,10 +365,16 @@ func WriteFolderToVolume(parentCtx context.Context, volumeName, mountPath, hostD
 	copyFunc, err := containers.CopyFromArchiveWithOptions(ctx, containerID, mountPath, pr, nil)
 	if err != nil {
 		cancel()
+		_ = pr.CloseWithError(err)
+		_ = pw.CloseWithError(err)
+		wg.Wait()
 		return fmt.Errorf("WriteFolderToVolume: init copy: %w", err)
 	}
 	if err := copyFunc(); err != nil {
 		cancel()
+		_ = pr.CloseWithError(err)
+		_ = pw.CloseWithError(err)
+		wg.Wait()
 		return fmt.Errorf("WriteFolderToVolume: copy archive: %w", err)
 	}
 
@@ -447,7 +458,7 @@ func withRetry(ctx context.Context, attempts int, baseDelay time.Duration, fn fu
 	var err error
 	for i := 0; i < attempts; i++ {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return fmt.Errorf("retry: %w", ctx.Err())
 		}
 		err = fn()
 		if err == nil {
@@ -459,7 +470,7 @@ func withRetry(ctx context.Context, attempts int, baseDelay time.Duration, fn fu
 		select {
 		case <-time.After(delay):
 		case <-ctx.Done():
-			return ctx.Err()
+			return fmt.Errorf("retry: %w", ctx.Err())
 		}
 		if delay < 2*time.Second {
 			delay *= 2

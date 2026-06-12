@@ -34,6 +34,15 @@ When something fails, it should be easier to tell whether the problem comes from
 - pure logic
 - or actual Podman/Buildah/storage initialization paths
 
+## Go baseline
+
+This repository uses `Go 1.25.5` as declared in `go.mod`.
+The policy is to stay aligned with the same `Go 1.25.x` baseline used by sibling projects.
+
+- The main entry points are `make test-unit`, `make test-runtime`, and `make test-runtime-integration`.
+- Those targets validate that the active `go` binary is `go1.25.5` before running tests.
+- The goal is not backward compatibility with older Go releases. The environment, CI, and VM path should match `1.25.x`.
+
 ## Documentation
 
 - Korean runtime validation: [docs/runtime-testing.ko.md](docs/runtime-testing.ko.md)

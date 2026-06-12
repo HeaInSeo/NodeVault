@@ -11,8 +11,16 @@ and `ToolRegistryService`.
 **NodeKit owns**: authoring UX, L1 static validation, `WasmPolicyChecker` execution,
 `BuildRequest` generation, `AdminToolList` display, and all admin-side UI semantics.
 
-**image build**: NodeVault 바이너리가 podbridge5를 in-process로 직접 실행 (seoy 호스트에서).
-K8s Job으로 위임하지 않는다 — podbridge5(buildah) rootless 제약으로 K8s Pod 안에서 불가.
+**image build (L2)**: `NODEVAULT_BUILD_BACKEND` env var로 백엔드를 선택한다.
+
+| 값 | 실행 위치 | 용도 |
+|----|-----------|------|
+| `local-podbridge` (기본) | seoy 호스트, podbridge5 in-process | 호스트 바이너리 배포 |
+| `k8s-job` | K8s Job (buildah, privileged) | incluster 배포 (in-cluster 스파이크 검증 완료) |
+| `disabled` | — | 빌드 없이 gRPC 서버만 기동 |
+
+`local-podbridge`는 K8s Pod 안에서 불가 (podbridge5 rootless overlay 제약).
+`k8s-job`은 `nodevault-builds` 네임스페이스에 Job을 생성하며 ServiceAccount 권한이 필요하다.
 
 Do not implement authoring UI or L1 validation in NodeVault.
 
@@ -22,7 +30,7 @@ Do not implement authoring UI or L1 validation in NodeVault.
 |------|---------|
 | `BuildRequest` | What NodeKit sends over gRPC. Input to NodeVault. |
 | `RegisteredToolDefinition` | Post-L4 confirmed object. CAS-stored by NodeVault. SHA256 hash = filename. |
-| `image build (L2)` | podbridge5 in-process (seoy 호스트에서 NodeVault 프로세스가 직접 실행). K8s Job 아님. |
+| `image build (L2)` | `NODEVAULT_BUILD_BACKEND`으로 선택: `local-podbridge` (호스트, 기본) 또는 `k8s-job` (incluster). |
 | `AdminToolList` | NodeKit's admin view — NodeVault does NOT own or render this. |
 
 Do not create `ToolDefinition` objects in NodeVault — that is NodeKit's draft model.
@@ -31,10 +39,10 @@ Do not create `ToolDefinition` objects in NodeVault — that is NodeKit's draft 
 ## 3. Package structure
 
 ```
-cmd/controlplane   — NodeVault gRPC server (seoy 호스트 바이너리)
+cmd/controlplane   — NodeVault gRPC server (seoy 호스트 또는 K8s Pod)
 cmd/palette        — NodePalette REST server (seoy 호스트 바이너리, 별도 프로세스)
 pkg/policy         — PolicyService: .rego management, opa build, GetPolicyBundle() RPC
-pkg/build          — BuildService: podbridge5 in-process 빌드(L2) + L3/L4 orchestration
+pkg/build          — BuildService: L2 빌드 백엔드 (local-podbridge / k8s-job / disabled) + L3/L4 orchestration
 pkg/registry       — Harbor digest 획득
 pkg/validate       — ValidateService: K8s dry-run (L3), smoke run (L4)
 pkg/catalog        — ToolRegistryService: RegisteredToolDefinition CAS storage
@@ -84,7 +92,7 @@ infra-lab은 `multipass` 또는 `libvirt` backend로 VM을 생성합니다. 클�
 
 ## 6. Decision checklist before every change
 
-- Does it move image build logic out of NodeVault into a K8s Job? **Requires explicit architectural decision — current design is in-process podbridge5.**
+- Does it add a new build backend? **`local-podbridge` / `k8s-job` / `disabled` 세 가지가 공식 옵션. 새 백엔드 추가는 명시적 결정 필요.**
 - Does it add authoring UI or L1 validation logic? **Block — that is NodeKit.**
 - Does it touch the gRPC proto contract? **Requires coordination with NodeKit.**
 - Does it add `ToolDefinition` (NodeKit draft model) to NodeVault? **Block.**

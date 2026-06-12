@@ -2,6 +2,7 @@ package build
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/HeaInSeo/podbridge5"
@@ -16,6 +17,20 @@ type Builder interface {
 	Build(ctx context.Context, dockerfileContent, outputRef string) (imageID, digest string, err error)
 	Close() error
 }
+
+// ErrBuildBackendDisabled is returned by disabledBuilder when a build is attempted.
+var ErrBuildBackendDisabled = errors.New("build backend disabled in incluster spike mode")
+
+// disabledBuilder is a no-op Builder that always returns ErrBuildBackendDisabled.
+// Used when NODEVAULT_BUILD_BACKEND=disabled to allow the gRPC server to start
+// without initializing podbridge5 / container storage.
+type disabledBuilder struct{}
+
+func (disabledBuilder) Build(_ context.Context, _, _ string) (imageID, digest string, err error) {
+	return "", "", ErrBuildBackendDisabled
+}
+
+func (disabledBuilder) Close() error { return nil }
 
 // podbridge5Builder implements Builder using podbridge5.
 type podbridge5Builder struct {

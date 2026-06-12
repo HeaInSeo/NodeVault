@@ -419,8 +419,7 @@ expected: /out/result.txt exists=true, count=1, totalBytes>0
 |------|------|------|
 | `make deploy-infralab` + `make test-integration-infralab` | 2~4시간 | 핸드오프 Priority 1, 미실행 |
 | seoy e2e 확인 (`make deploy-seoy` + NodeKit → NodeVault 등록) | 1~2시간 | TODO-09b 완료 조건 |
-| sori module path 완성 (내부 import `seoyhaein` → `HeaInSeo`) | ~1시간 | go.mod만 변경됨, 내부 파일 미변경 |
-| NodeVault vendor 갱신 (`go get github.com/HeaInSeo/sori@master`) | ~30분 | module path 완성 후 |
+| sori/utils module path 정리 | 완료 | `HeaInSeo/sori v0.8.0-rc4`, `HeaInSeo/utils v0.0.7` |
 
 ---
 

@@ -191,3 +191,65 @@ func TestBuildAndRegister_BuilderError_JobCreatedFirst(t *testing.T) {
 		t.Errorf("first event: got %v, want JOB_CREATED", kinds[0])
 	}
 }
+
+// ─── disabled backend ─────────────────────────────────────────────────────────
+
+// TestNewDisabledService_ReturnsDisabledBackendError verifies that NewDisabledService
+// returns a service that immediately responds with ErrBuildBackendDisabled.
+// The error text must contain "disabled" so operators can identify spike mode.
+func TestNewDisabledService_ReturnsDisabledBackendError(t *testing.T) {
+	svc := NewDisabledService()
+	stream := newFakeStream()
+	req := &nfv1.BuildRequest{RequestId: "req-disabled-01", ToolName: "bwa"}
+
+	err := svc.BuildAndRegister(req, stream)
+	if err == nil {
+		t.Fatal("expected error from disabled backend, got nil")
+	}
+	if !strings.Contains(err.Error(), "disabled") {
+		t.Errorf("error should mention 'disabled', got: %v", err)
+	}
+}
+
+// TestNewDisabledService_EmitsFAILEDEvent verifies that the gRPC stream receives
+// a FAILED event (server stays alive; only the RPC fails).
+func TestNewDisabledService_EmitsFAILEDEvent(t *testing.T) {
+	svc := NewDisabledService()
+	stream := newFakeStream()
+	req := &nfv1.BuildRequest{RequestId: "req-disabled-02", ToolName: "samtools"}
+
+	_ = svc.BuildAndRegister(req, stream)
+
+	found := false
+	for _, k := range stream.kindsSent() {
+		if k == nfv1.BuildEventKind_BUILD_EVENT_KIND_FAILED {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("FAILED event not emitted by disabled backend; got %v", stream.kindsSent())
+	}
+}
+
+// TestNewDisabledService_NoSUCCEEDEDEvent verifies SUCCEEDED is never emitted.
+func TestNewDisabledService_NoSUCCEEDEDEvent(t *testing.T) {
+	svc := NewDisabledService()
+	stream := newFakeStream()
+	req := &nfv1.BuildRequest{RequestId: "req-disabled-03", ToolName: "gatk"}
+
+	_ = svc.BuildAndRegister(req, stream)
+
+	for _, k := range stream.kindsSent() {
+		if k == nfv1.BuildEventKind_BUILD_EVENT_KIND_SUCCEEDED {
+			t.Error("SUCCEEDED must never be emitted by disabled backend")
+		}
+	}
+}
+
+// TestDisabledBuilder_Close verifies Close is a no-op.
+func TestDisabledBuilder_Close(t *testing.T) {
+	b := disabledBuilder{}
+	if err := b.Close(); err != nil {
+		t.Errorf("Close should return nil, got %v", err)
+	}
+}

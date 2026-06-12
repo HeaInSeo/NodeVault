@@ -3,6 +3,10 @@ package podbridge5
 import (
 	"context"
 	"fmt"
+	"io"
+	"strings"
+
+	"github.com/HeaInSeo/utils"
 	"github.com/containers/buildah"
 	"github.com/containers/buildah/define"
 	"github.com/containers/common/pkg/config"
@@ -12,9 +16,6 @@ import (
 	"github.com/containers/storage"
 	"github.com/containers/storage/pkg/unshare"
 	"github.com/opencontainers/go-digest"
-	"github.com/seoyhaein/utils"
-	"io"
-	"strings"
 )
 
 var (
@@ -189,7 +190,7 @@ func shutdown(store storage.Store, force bool) error {
 	}
 	_, err := store.Shutdown(force)
 	if err != nil {
-		return fmt.Errorf("Failed to shutdown store: %v\n", err)
+		return fmt.Errorf("failed to shutdown store: %w", err)
 	}
 	return nil
 }
@@ -370,30 +371,9 @@ func newAddAndCopyOptions() buildah.AddAndCopyOptions {
 // Helper Functions for Image Building
 // ------------------------------------------------------
 
-// createDirectories creates directories inside the builder.
-func createDirectories(builder *buildah.Builder, dirs []string) error {
-	return createDirectoriesWithRuntime(builder, dirs)
-}
-
-// setFilePermissions sets file permissions using chmod.
-func setFilePermissions(builder *buildah.Builder, files []string) error {
-	return setFilePermissionsWithRuntime(builder, files)
-}
-
-// TODO 생각하기 이게 필요할지 고민해야함. install.sh 까지도.
-// installDependencies runs the install.sh script.
-func installDependencies(builder *buildah.Builder) error {
-	return installDependenciesWithRuntime(builder)
-}
-
-// copyScripts copies scripts to the specified destination directories.
-func copyScripts(builder *buildah.Builder, scripts map[string][]string) error {
-	return copyScriptsWithRuntime(builder, newAddAndCopyOptions(), scripts)
-}
-
-// saveImage saves the built image to an archive file. TODO 파일 읽는 부분 살펴봐야 함. outputFile, err := os.OpenFile(archivePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-func saveImage(ctx context.Context, path, imageName, imageId string, compress bool) error {
-	return saveImageWithRuntime(ctx, realImageExportRuntime{}, path, imageName, imageId, compress)
+// saveImage saves the built image to an archive file.
+func saveImage(ctx context.Context, path, imageName, imageID string, compress bool) error {
+	return saveImageWithRuntime(ctx, realImageExportRuntime{}, path, imageName, imageID, compress)
 }
 
 // internalizeImageName 은 입력 이미지 이름에서 태그 앞에 "-internal"을 삽입하여 내부 전용 이미지 이름을 생성

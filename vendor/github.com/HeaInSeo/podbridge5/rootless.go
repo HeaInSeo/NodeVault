@@ -3,10 +3,11 @@ package podbridge5
 import (
 	"context"
 	"errors"
+	"sync"
+
 	"github.com/containers/buildah"
 	"github.com/containers/storage"
 	"github.com/containers/storage/pkg/unshare"
-	"sync"
 )
 
 var (

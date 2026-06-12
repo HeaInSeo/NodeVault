@@ -194,7 +194,7 @@ referrer spec JSON 구조 (NODEVAULT_DESIGN.md / TOOL_CONTRACT_V0_2.md 기반):
 - `pkg/index/schema.go:Entry.SpecReferrerDigest` — referrer digest 저장 필드
 - `pkg/index/store.go:SetSpecReferrerDigest` — digest 갱신 메서드
 - `pkg/build/service.go:BuildAndRegister` — 등록 후 referrer push → `integrity_health = Partial → Healthy` 전이 (non-fatal)
-- 의존성: `github.com/seoyhaein/sori v0.0.2` (oras-go wrapper), `oras.land/oras-go/v2 v2.6.0`
+- 의존성: `github.com/HeaInSeo/sori v0.8.0-rc4`
 
 **v0.3에서 추가될 referrer** (Sprint 1~):
 - `toolprofile`: `application/vnd.nodevault.toolprofile.v1+json` — observed dry-run profile (스펙: `OBSERVED_PROFILE_SPEC.md`)

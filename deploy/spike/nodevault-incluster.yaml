@@ -13,13 +13,13 @@
 # 적용 방법:
 #   kubectl apply -f deploy/spike/nodevault-incluster.yaml
 #
-# 이미지 빌드 및 push 선행 필요:
+# 이미지 빌드 및 push 선행 필요 (seoy에서 실행):
 #   make vendor && make push-image \
-#     IMAGE=harbor.10.113.24.96.nip.io/nodevault/controlplane:spike-incluster
+#     IMAGE=harbor.lab.local/nodevault/controlplane:spike-incluster
 #   kubectl create secret docker-registry harbor-pull-secret \
-#     --docker-server=harbor.10.113.24.96.nip.io \
+#     --docker-server=harbor.lab.local \
 #     --docker-username=admin --docker-password=Harbor12345 \
-#     -n nodeplatform-system
+#     -n nodeplatform-system --dry-run=client -o yaml | kubectl apply -f -
 
 apiVersion: v1
 kind: Namespace
@@ -105,7 +105,7 @@ spec:
 
       containers:
         - name: nodevault
-          image: harbor.10.113.24.96.nip.io/nodevault/controlplane:spike-incluster
+          image: harbor.lab.local/nodevault/controlplane:spike-incluster
           imagePullPolicy: Always
 
           ports:

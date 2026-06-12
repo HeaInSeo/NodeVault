@@ -26,7 +26,7 @@
 
 set -euo pipefail
 
-KUBECONFIG=${KUBECONFIG:-"$(realpath ../infra-lab/kubeconfig 2>/dev/null || echo "")"}
+KUBECONFIG=${KUBECONFIG:-"/opt/go/src/github.com/HeaInSeo/infra-lab/state/test-wizard-env/kubeconfig"}
 MANIFEST="deploy/spike/nodevault-incluster.yaml"
 NAMESPACE="nodeplatform-system"
 DEPLOYMENT="nodevault"

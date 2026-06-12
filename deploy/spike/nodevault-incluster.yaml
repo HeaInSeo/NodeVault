@@ -28,6 +28,13 @@ kind: Namespace
 metadata:
   name: nodevault-builds
 ---
+# nodevault-smoke: L3 dry-run + L4 smoke run Job이 실행되는 namespace
+# DryRunJob이 API server-side dry-run을 호출할 때도 namespace 존재가 필요함
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nodevault-smoke
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata:

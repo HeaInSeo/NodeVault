@@ -50,10 +50,53 @@ func parseDuration(env string, def time.Duration) time.Duration {
 	return def
 }
 
+// runtimeConfig holds resolved startup configuration derived from env vars.
+type runtimeConfig struct {
+	runtimeMode  string // "host" | "incluster"
+	buildBackend string // "local-podbridge" | "disabled"
+	grpcAddr     string
+	webhookAddr  string
+	catalogPath  string
+	indexPath    string
+}
+
+func loadRuntimeConfig() runtimeConfig {
+	rc := runtimeConfig{
+		runtimeMode:  os.Getenv("NODEVAULT_RUNTIME_MODE"),
+		buildBackend: os.Getenv("NODEVAULT_BUILD_BACKEND"),
+		grpcAddr:     sanitizeLogValue(os.Getenv("NODEVAULT_ADDR")),
+		webhookAddr:  sanitizeLogValue(os.Getenv("NODEVAULT_WEBHOOK_ADDR")),
+		catalogPath:  os.Getenv("CATALOG_DIR"),
+		indexPath:    os.Getenv("INDEX_DIR"),
+	}
+	if rc.runtimeMode == "" {
+		rc.runtimeMode = "host"
+	}
+	if rc.buildBackend == "" {
+		rc.buildBackend = "local-podbridge"
+	}
+	if rc.grpcAddr == "" {
+		rc.grpcAddr = defaultGRPCAddr
+	}
+	if rc.webhookAddr == "" {
+		rc.webhookAddr = defaultWebhookAddr
+	}
+	if rc.catalogPath == "" {
+		rc.catalogPath = "assets/catalog"
+	}
+	if rc.indexPath == "" {
+		rc.indexPath = "assets/index"
+	}
+	return rc
+}
+
 func main() {
-	// Required before storage/build initialization in podbridge5 rootless mode.
-	if podbridge5.ReexecIfNeeded() {
-		os.Exit(0)
+	// podbridge5 reexec is only needed for the local-podbridge build backend.
+	// In disabled mode (incluster spike) the process must not invoke buildah helpers.
+	if os.Getenv("NODEVAULT_BUILD_BACKEND") != "disabled" {
+		if podbridge5.ReexecIfNeeded() {
+			os.Exit(0)
+		}
 	}
 	os.Exit(run())
 }
@@ -62,20 +105,23 @@ func run() int {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	grpcAddr := os.Getenv("NODEVAULT_ADDR")
-	if grpcAddr == "" {
-		grpcAddr = defaultGRPCAddr
+	rc := loadRuntimeConfig()
+
+	// Log startup configuration for observability.
+	kubeConfigMode := "kubeconfig_file"
+	if rc.runtimeMode == "incluster" {
+		kubeConfigMode = "incluster_serviceaccount"
 	}
-	grpcAddr = sanitizeLogValue(grpcAddr)
+	slog.Info("NodeVault starting",
+		"runtime_mode", rc.runtimeMode,
+		"build_backend", rc.buildBackend,
+		"catalog_path", rc.catalogPath,
+		"index_path", rc.indexPath,
+		"grpc_listen_address", rc.grpcAddr,
+		"kube_config_mode", kubeConfigMode,
+	)
 
-	webhookAddr := os.Getenv("NODEVAULT_WEBHOOK_ADDR")
-	if webhookAddr == "" {
-		webhookAddr = defaultWebhookAddr
-	}
-	webhookAddr = sanitizeLogValue(webhookAddr)
-
-	// ── Shared storage ──────────────────────────────────────────────────────
-
+	// Shared storage
 	cat := catalog.NewCatalog()
 	dataCat := catalog.NewDataCatalog()
 	indexStore, indexErr := index.New()
@@ -84,13 +130,12 @@ func run() int {
 		return 1
 	}
 
-	// ── gRPC server ──────────────────────────────────────────────────────────
-
+	// gRPC server
 	var lc net.ListenConfig
-	lis, err := lc.Listen(context.Background(), "tcp", grpcAddr)
+	lis, err := lc.Listen(context.Background(), "tcp", rc.grpcAddr)
 	if err != nil {
-		//nolint:gosec // grpcAddr is normalized to a single-line value before logging.
-		slog.Error("failed to listen", "addr", grpcAddr, "err", err)
+		//nolint:gosec // rc.grpcAddr is normalized to a single-line value before logging.
+		slog.Error("failed to listen", "addr", rc.grpcAddr, "err", err)
 		return 1
 	}
 
@@ -103,9 +148,15 @@ func run() int {
 	nfv1.RegisterPolicyServiceServer(srv, policy.NewService())
 
 	// ValidateService — L3 dry-run + L4 smoke run.
-	validateSvc, err := validate.NewService()
+	// In incluster mode use ServiceAccount token; in host mode use local kubeconfig.
+	var validateSvc *validate.Service
+	if rc.runtimeMode == "incluster" {
+		validateSvc, err = validate.NewInClusterService()
+	} else {
+		validateSvc, err = validate.NewService()
+	}
 	if err != nil {
-		slog.Warn("ValidateService unavailable (kubeconfig missing?)", "err", err)
+		slog.Warn("ValidateService unavailable", "runtime_mode", rc.runtimeMode, "err", err)
 	} else {
 		nfv1.RegisterValidateServiceServer(srv, validateSvc)
 	}
@@ -118,25 +169,29 @@ func run() int {
 	dataRegistrySvc := catalog.NewDataRegistryService(dataCat, indexStore)
 	nfv1.RegisterDataRegistryServiceServer(srv, dataRegistrySvc)
 
-	// ── Reconcile loops + webhook ─────────────────────────────────────────────
-	// Created before BuildService so the reconciler can be injected for eager
-	// post-referrer-push health checks (authority map: integrity_health via reconcile axis only).
+	// Reconcile loops + webhook
 	fastInterval := parseDuration("NODEVAULT_FAST_RECONCILE", defaultFastReconcile)
 	slowInterval := parseDuration("NODEVAULT_SLOW_RECONCILE", defaultSlowReconcile)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	rec := startBackground(ctx, indexStore, webhookAddr, fastInterval, slowInterval)
+	rec := startBackground(ctx, indexStore, rc.webhookAddr, fastInterval, slowInterval)
 
-	// BuildService — image build+push → L3 → L4 → registration.
-	// rec is passed so BuildService can trigger ReconcileOne after referrer push
-	// instead of calling SetIntegrityHealth directly (authority map compliance).
-	buildSvc, err := build.NewService(validateSvc, registrySvc, indexStore, rec)
-	if err != nil {
-		slog.Warn("BuildService unavailable (kubeconfig missing?)", "err", err)
+	// BuildService — select backend based on NODEVAULT_BUILD_BACKEND.
+	// disabled: accepts gRPC connections, immediately returns ErrBuildBackendDisabled.
+	//           podbridge5/container-storage not initialized; safe for K8s Pods.
+	// local-podbridge: full podbridge5 in-process build (host mode only).
+	if rc.buildBackend == "disabled" {
+		nfv1.RegisterBuildServiceServer(srv, build.NewDisabledService())
+		slog.Info("BuildService registered with disabled backend (spike mode)")
 	} else {
-		nfv1.RegisterBuildServiceServer(srv, buildSvc)
+		buildSvc, buildErr := build.NewService(validateSvc, registrySvc, indexStore, rec)
+		if buildErr != nil {
+			slog.Warn("BuildService unavailable (podbridge5 init failed?)", "err", buildErr)
+		} else {
+			nfv1.RegisterBuildServiceServer(srv, buildSvc)
+		}
 	}
 
 	//nolint:gosec // listener address is normalized before being attached to logs.

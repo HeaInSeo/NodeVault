@@ -16,6 +16,7 @@ import (
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
@@ -41,6 +42,21 @@ func NewService() (*Service, error) {
 	restCfg, err := cfg.ClientConfig()
 	if err != nil {
 		return nil, fmt.Errorf("kubeconfig: %w", err)
+	}
+	kube, err := kubernetes.NewForConfig(restCfg)
+	if err != nil {
+		return nil, fmt.Errorf("k8s client: %w", err)
+	}
+	return &Service{kube: kube}, nil
+}
+
+// NewInClusterService creates a ValidateService using the in-cluster ServiceAccount
+// token automatically mounted by Kubernetes at /var/run/secrets/kubernetes.io/serviceaccount.
+// Used when NODEVAULT_RUNTIME_MODE=incluster.
+func NewInClusterService() (*Service, error) {
+	restCfg, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, fmt.Errorf("in-cluster config: %w", err)
 	}
 	kube, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {

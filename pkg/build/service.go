@@ -64,6 +64,14 @@ func NewService(
 	}, nil
 }
 
+// NewDisabledService creates a BuildService that immediately rejects all build
+// requests with ErrBuildBackendDisabled. The gRPC server stays alive; other
+// services (Ping, Policy, Catalog) continue to function normally.
+// Used when NODEVAULT_BUILD_BACKEND=disabled (incluster spike mode).
+func NewDisabledService() *Service {
+	return &Service{builder: disabledBuilder{}}
+}
+
 // Close releases the underlying image build storage.
 func (s *Service) Close() error {
 	return s.builder.Close()

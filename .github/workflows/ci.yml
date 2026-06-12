@@ -1,0 +1,177 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUILD_TAGS: "exclude_graphdriver_btrfs containers_image_openpgp exclude_graphdriver_devicemapper"
+  GO_VERSION_FILE: go.mod
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────
+  # 1. 린트 (golangci-lint)
+  # ──────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint
+    runs-on: [self-hosted, linux, podbridge5]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+          cache: true
+
+      - name: Ensure CGo system dependencies
+        run: |
+          if [ -x /usr/bin/dnf ]; then
+            sudo /usr/bin/dnf install -y --enablerepo=powertools \
+              gpgme-devel libassuan-devel device-mapper-devel \
+              libseccomp-devel pkgconf-pkg-config
+          elif [ -x /usr/bin/apt-get ]; then
+            sudo /usr/bin/apt-get update -q
+            sudo /usr/bin/apt-get install -y --no-install-recommends \
+              libgpgme-dev libassuan-dev libbtrfs-dev \
+              libdevmapper-dev libseccomp-dev pkg-config
+          else
+            echo "Unsupported package manager" >&2; exit 1
+          fi
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+          install-mode: goinstall
+          args: >-
+            --build-tags "${{ env.BUILD_TAGS }}"
+            --timeout 10m
+
+  # ──────────────────────────────────────────────────────────────────
+  # 2. 빌드 검증
+  # ──────────────────────────────────────────────────────────────────
+  build:
+    name: Build
+    runs-on: [self-hosted, linux, podbridge5]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+          cache: true
+
+      - name: Ensure CGo system dependencies
+        run: |
+          if [ -x /usr/bin/dnf ]; then
+            sudo /usr/bin/dnf install -y --enablerepo=powertools \
+              gpgme-devel libassuan-devel device-mapper-devel \
+              libseccomp-devel pkgconf-pkg-config
+          elif [ -x /usr/bin/apt-get ]; then
+            sudo /usr/bin/apt-get update -q
+            sudo /usr/bin/apt-get install -y --no-install-recommends \
+              libgpgme-dev libassuan-dev libbtrfs-dev \
+              libdevmapper-dev libseccomp-dev pkg-config
+          else
+            echo "Unsupported package manager" >&2; exit 1
+          fi
+
+      - name: go build
+        run: go build -tags "${{ env.BUILD_TAGS }}" ./...
+
+      - name: go vet
+        run: go vet -tags "${{ env.BUILD_TAGS }}" ./...
+
+  # ──────────────────────────────────────────────────────────────────
+  # 3. 유닛 테스트 (-race, -cover)
+  # ──────────────────────────────────────────────────────────────────
+  test-unit:
+    name: Unit Tests
+    runs-on: [self-hosted, linux, podbridge5]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+          cache: true
+
+      - name: Ensure CGo system dependencies
+        run: |
+          if [ -x /usr/bin/dnf ]; then
+            sudo /usr/bin/dnf install -y --enablerepo=powertools \
+              gpgme-devel libassuan-devel device-mapper-devel \
+              libseccomp-devel pkgconf-pkg-config
+          elif [ -x /usr/bin/apt-get ]; then
+            sudo /usr/bin/apt-get update -q
+            sudo /usr/bin/apt-get install -y --no-install-recommends \
+              libgpgme-dev libassuan-dev libbtrfs-dev \
+              libdevmapper-dev libseccomp-dev pkg-config
+          else
+            echo "Unsupported package manager" >&2; exit 1
+          fi
+
+      - name: go test (unit, -race, -cover)
+        run: |
+          go test \
+            -v \
+            -race \
+            -cover \
+            -covermode=atomic \
+            -coverprofile=coverage.out \
+            -tags "${{ env.BUILD_TAGS }}" \
+            ./...
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: coverage-${{ github.run_id }}
+          path: coverage.out
+          retention-days: 14
+
+  # ──────────────────────────────────────────────────────────────────
+  # 4. 취약점 스캔 (govulncheck)
+  # ──────────────────────────────────────────────────────────────────
+  vuln-scan:
+    name: Vulnerability Scan (govulncheck)
+    runs-on: [self-hosted, linux, podbridge5]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+          cache: true
+
+      - name: Ensure CGo system dependencies
+        run: |
+          if [ -x /usr/bin/dnf ]; then
+            sudo /usr/bin/dnf install -y --enablerepo=powertools \
+              gpgme-devel libassuan-devel device-mapper-devel \
+              libseccomp-devel pkgconf-pkg-config
+          elif [ -x /usr/bin/apt-get ]; then
+            sudo /usr/bin/apt-get update -q
+            sudo /usr/bin/apt-get install -y --no-install-recommends \
+              libgpgme-dev libassuan-dev libbtrfs-dev \
+              libdevmapper-dev libseccomp-dev pkg-config
+          else
+            echo "Unsupported package manager" >&2; exit 1
+          fi
+
+      # continue-on-error: stdlib CVE는 Go 버전 업그레이드 없이는 해소 불가.
+      # 결과는 Annotations에 표시됨.
+      - name: govulncheck
+        continue-on-error: true
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck -tags "${{ env.BUILD_TAGS }}" ./...

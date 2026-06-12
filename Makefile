@@ -1,6 +1,6 @@
 .PHONY: fmt lint lint-fix lint-config golangci-lint test test-integration test-integration-infralab \
         deploy-infralab undeploy-infralab build push-image vendor \
-        proto coverage clean all deploy-seoy
+        proto coverage vuln clean all deploy-seoy
 
 LOCALBIN      ?= $(CURDIR)/bin
 GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
@@ -157,8 +157,13 @@ proto:
 
 # ── 커버리지 ──────────────────────────────────────────────────────────────────
 coverage:
-	go test -tags "$(BUILDTAGS)" -coverprofile=coverage.out ./...
+	go test -tags "$(BUILDTAGS)" -race -covermode=atomic -coverprofile=coverage.out ./...
 	go tool cover -func=coverage.out | tail -1
+
+# ── 취약점 스캔 ───────────────────────────────────────────────────────────────
+vuln:
+	go install golang.org/x/vuln/cmd/govulncheck@latest
+	govulncheck -tags "$(BUILDTAGS)" ./...
 
 # ── 정리 ──────────────────────────────────────────────────────────────────────
 clean:

@@ -267,7 +267,12 @@ func (b *K8sJobBuilder) extractDigestFromLogs(ctx context.Context, jobName strin
 		return "", fmt.Errorf("read pod logs: %w", err)
 	}
 
-	for _, line := range strings.Split(string(logBytes), "\n") {
+	return parseDigestFromLogs(podName, logBytes)
+}
+
+// parseDigestFromLogs scans log output for a BUILD_DIGEST=sha256:... marker.
+func parseDigestFromLogs(podName string, logs []byte) (string, error) {
+	for _, line := range strings.Split(string(logs), "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "BUILD_DIGEST=") {
 			digest := strings.TrimPrefix(line, "BUILD_DIGEST=")
@@ -276,7 +281,7 @@ func (b *K8sJobBuilder) extractDigestFromLogs(ctx context.Context, jobName strin
 			}
 		}
 	}
-	return "", fmt.Errorf("BUILD_DIGEST=sha256:... not found in pod %s logs:\n%s", podName, string(logBytes))
+	return "", fmt.Errorf("BUILD_DIGEST=sha256:... not found in pod %s logs:\n%s", podName, string(logs))
 }
 
 // ensureNamespace creates the builds namespace if it does not exist.

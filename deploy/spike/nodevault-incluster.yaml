@@ -105,6 +105,7 @@ data:
   # K8sJobBuilder 설정
   NODEVAULT_BUILDER_IMAGE: "quay.io/buildah/stable:v1.37.1"
   NODEVAULT_REGISTRY_ADDR: "harbor.lab.local"
+  NODEVAULT_ORAS_INSECURE_TLS: "true"
 ---
 apiVersion: apps/v1
 kind: Deployment

@@ -55,7 +55,7 @@
 | `security` referrer push | `pkg/oras/referrer.go` (`PushSecurityReferrer` 미구현) | **미구현 — 병렬 트랙** |
 | `security` artifactType | `application/vnd.nodevault.security.v1+json` | **미구현** |
 | `security` digest 저장 | `pkg/index/schema.go:Entry.SecurityScanDigest` (미추가) | **미구현 — 병렬 트랙** |
-| OCI referrer 라이브러리 | `github.com/seoyhaein/sori v0.0.2` + `oras.land/oras-go/v2 v2.6.0` | 구현 완료 |
+| OCI referrer 라이브러리 | `github.com/HeaInSeo/sori v0.8.0-rc4` | 구현 완료 |
 
 ---
 

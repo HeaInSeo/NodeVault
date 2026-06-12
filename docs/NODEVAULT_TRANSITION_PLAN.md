@@ -208,7 +208,7 @@ index의 상태는 두 축으로 분리한다. **이 두 축을 같은 필드에
 - `pkg/index/store.go`: `SetSpecReferrerDigest` 추가
 - `pkg/catalog/catalog.go`: 초기 `IntegrityHealth = Partial` (referrer 전까지)
 - `pkg/build/service.go`: 등록 후 referrer push → Healthy 전이 (non-fatal)
-- `go.mod/vendor`: `github.com/seoyhaein/sori v0.0.2`, `oras.land/oras-go/v2 v2.6.0`
+- `go.mod/vendor`: `github.com/HeaInSeo/sori v0.8.0-rc4`
 
 **선행 조건**: TODO-06 ✓, TODO-08 ✓
 

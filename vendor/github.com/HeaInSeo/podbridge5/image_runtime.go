@@ -21,7 +21,7 @@ type imageBuildRuntime interface {
 
 type realImageBuildRuntime struct{}
 
-func (realImageBuildRuntime) BuildDockerfiles(ctx context.Context, store storage.Store, options define.BuildOptions, dockerfilePath string) (string, string, error) {
+func (realImageBuildRuntime) BuildDockerfiles(ctx context.Context, store storage.Store, options define.BuildOptions, dockerfilePath string) (buildID, buildRef string, buildErr error) {
 	id, ref, err := imagebuildah.BuildDockerfiles(ctx, store, options, dockerfilePath)
 	if err != nil {
 		return "", "", err
@@ -41,7 +41,7 @@ func (realImageBuildRuntime) PushImage(ctx context.Context, store storage.Store,
 	_, manifestDigest, err := buildah.Push(ctx, imageRef, destRef, buildah.PushOptions{
 		Store: store,
 		SystemContext: &imageTypes.SystemContext{
-			DockerInsecureSkipTLSVerify: imageTypes.OptionalBoolTrue,
+			DockerInsecureSkipTLSVerify: imageTypes.OptionalBoolFalse,
 		},
 	})
 	if err != nil {
@@ -50,7 +50,7 @@ func (realImageBuildRuntime) PushImage(ctx context.Context, store storage.Store,
 	return manifestDigest.String(), nil
 }
 
-func writeDockerfileTempFile(dockerfileContent string) (string, func(), error) {
+func writeDockerfileTempFile(dockerfileContent string) (filePath string, cleanupFn func(), buildErr error) {
 	tmpFile, err := os.CreateTemp("", "nodeforge-dockerfile-*")
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to create temp Dockerfile: %w", err)

@@ -5,12 +5,13 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
-	"github.com/containers/podman/v5/pkg/bindings/containers"
-	"github.com/containers/podman/v5/pkg/specgen"
-	"github.com/opencontainers/runtime-spec/specs-go"
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/containers/podman/v5/pkg/bindings/containers"
+	"github.com/containers/podman/v5/pkg/specgen"
+	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
 // LogContainerStatsToCSV 지정한 컨테이너의 리소스 사용량(CPU, Memory 등)을 일정 간격으로 CSV 파일에 기록
@@ -20,8 +21,8 @@ func LogContainerStatsToCSV(ctx context.Context, containerID string, intervalSec
 	// 1) 기존 파일이 있으면 삭제
 	if _, err := os.Stat(csvPath); err == nil {
 		// 파일이 존재한다면
-		if err := os.Remove(csvPath); err != nil {
-			return fmt.Errorf("failed to remove existing CSV file %q: %w", csvPath, err)
+		if removeErr := os.Remove(csvPath); removeErr != nil {
+			return fmt.Errorf("failed to remove existing CSV file %q: %w", csvPath, removeErr)
 		}
 	} else if !os.IsNotExist(err) {
 		// Stat 자체가 에러인데 NotExist 가 아니라면
@@ -29,7 +30,7 @@ func LogContainerStatsToCSV(ctx context.Context, containerID string, intervalSec
 	}
 
 	// 2) 새로 파일 생성 (쓰기 전용)
-	file, err := os.OpenFile(csvPath, os.O_CREATE|os.O_WRONLY, 0644)
+	file, err := os.OpenFile(csvPath, os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("failed to create CSV file %q: %w", csvPath, err)
 	}
@@ -44,12 +45,12 @@ func LogContainerStatsToCSV(ctx context.Context, containerID string, intervalSec
 
 	// 3) 헤더 기록
 	header := []string{"Timestamp", "CPUNano", "MemUsage"}
-	if err := writer.Write(header); err != nil {
-		return fmt.Errorf("failed to write CSV header: %w", err)
+	if writeErr := writer.Write(header); writeErr != nil {
+		return fmt.Errorf("failed to write CSV header: %w", writeErr)
 	}
 	writer.Flush()
-	if err := writer.Error(); err != nil {
-		return fmt.Errorf("flush CSV header: %w", err)
+	if flushErr := writer.Error(); flushErr != nil {
+		return fmt.Errorf("flush CSV header: %w", flushErr)
 	}
 
 	// 4) Stats 스트리밍 구독 & 기록 (기존 로직 유지)
@@ -103,7 +104,7 @@ func LogContainerStatsToCSV(ctx context.Context, containerID string, intervalSec
 // 시스템의 가용 코어 전체에서 2코어 분량의 CPU 시간을 할당받게 됩.
 // 이 내용은 확인해봐야 함.
 
-func WithCPULimits(cpuQuota int64, cpuPeriod uint64, cpuShares uint64) ContainerOptions {
+func WithCPULimits(cpuQuota int64, cpuPeriod, cpuShares uint64) ContainerOptions {
 	return func(spec *specgen.SpecGenerator) error {
 		if spec.ResourceLimits == nil {
 			spec.ResourceLimits = &specs.LinuxResources{}

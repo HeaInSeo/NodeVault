@@ -1,0 +1,182 @@
+# golangci-lint v2.x
+# buildah/podman rootless 환경에 맞게 보안 규칙을 조정함
+version: "2"
+
+run:
+  timeout: 10m
+  # unit 빌드 태그와 동일하게 CGo 네이티브 드라이버를 제외해 CI 환경에서도 컴파일 가능
+  build-tags:
+    - exclude_graphdriver_btrfs
+    - containers_image_openpgp
+    - exclude_graphdriver_devicemapper
+
+linters:
+  default: none
+  enable:
+    # ── 필수 정확성 ────────────────────────────────────────────────
+    - errcheck        # 컨테이너/볼륨 ops에서 오류 무시는 자원 누수 직결
+    - govet           # 표준 go vet
+    - staticcheck     # SA*/S*/ST*/QF* 전체 — 가장 포괄적인 정적 분석
+    - ineffassign
+    - unused
+
+    # ── 보안 (1순위) ───────────────────────────────────────────────
+    - gosec           # G101~G602 전체 (아래 설정에서 일부 완화)
+    - bodyclose       # HTTP response body 미닫힘 → 커넥션 풀 고갈
+    - noctx           # HTTP 요청에 context 없음 → 타임아웃/취소 불가
+    - rowserrcheck    # sql.Rows.Err() 미체크
+    - sqlclosecheck   # sql.Rows/Stmt 미닫힘
+    - wrapcheck       # 외부 패키지 오류를 그대로 반환하면 컨텍스트 손실
+
+    # ── 오류 처리 정확성 ─────────────────────────────────────────────
+    - nilerr          # error 반환 위치에서 nil 반환
+    - exhaustive      # enum switch 불완전 처리
+
+    # ── 코드 품질 ─────────────────────────────────────────────────
+    - revive          # golint 후계자 — 포괄적 규칙셋
+    - gocritic        # diagnostic/performance/style 태그
+    - unparam         # 항상 동일한 값이 전달되는 파라미터
+    - prealloc        # 슬라이스 pre-allocation 기회
+    - tparallel       # t.Parallel() 누락 탐지
+
+    # ── 스타일 ────────────────────────────────────────────────────
+    - misspell        # 주석/문자열 오타
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+      exclude-functions:
+        # defer에서 Close/Sync 오류를 무시하는 것은 Go 관용 패턴
+        - (io.ReadCloser).Close
+        - (*os.File).Close
+        - (*os.File).Sync
+        # cleanup 경로에서 best-effort Remove는 무시
+        - os.Remove
+
+    govet:
+      enable-all: true
+      disable:
+        # fieldalignment: 컨테이너 스펙 구조체를 재정렬하면 가독성이 나빠짐
+        - fieldalignment
+
+    staticcheck:
+      checks:
+        - "all"
+        # SA1019: containers 생태계는 deprecation 사이클이 빠름 — 별도 업그레이드 이슈로 추적
+        - "-SA1019"
+
+    gosec:
+      # ── 완화 규칙 (buildah/rootless 코드에서 의도적으로 사용하는 패턴) ──
+      excludes:
+        # G204: buildah Run()/exec()는 변수 커맨드 인수가 설계상 필요
+        - G204
+        # G306: 컨테이너 빌드에서 0755 디렉터리/0644 파일은 정상
+        - G306
+        # G115: syscall/커널 인터페이스 코드의 정수 타입 변환
+        - G115
+        # G110: tar/io.Copy on trusted internal container archives (not user-supplied)
+        - G110
+      config:
+        G101:
+          # 컨테이너 이미지 다이제스트·UUID를 자격증명으로 오탐하지 않도록 엔트로피 임계치 조정
+          pattern: "(?i)passwd|password|secret|apikey|api_key|token|credential|private.?key"
+          ignore_entropy: false
+          entropy_threshold: "80.0"
+          per_char_threshold: "3.0"
+          truncate: "32"
+
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+          disabled: true
+        - name: if-return
+        - name: increment-decrement
+        - name: var-naming
+        - name: var-declaration
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+        - name: empty-block
+        - name: superfluous-else
+        - name: unused-parameter
+        - name: unreachable-code
+        - name: redefines-builtin-id
+        # package-comments: 아직 모든 파일에 패키지 주석 없음 — 점진적으로 추가
+        - name: package-comments
+          disabled: true
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+      disabled-checks:
+        # hugeParam: buildah/OCI spec 구조체는 크기가 클 수밖에 없음
+        - hugeParam
+        # rangeValCopy: storage 경로에서 의도적으로 사용하는 경우 있음
+        - rangeValCopy
+
+    wrapcheck:
+      ignore-sigs:
+        - .Errorf(
+        - errors.New(
+        - errors.Unwrap(
+        - errors.Join(
+        - fmt.Errorf(
+      ignore-package-globs:
+        # containers 생태계 패키지는 이미 구조화된 오류를 반환
+        - github.com/containers/*
+        - github.com/opencontainers/*
+        - github.com/docker/*
+
+    exhaustive:
+      # default case가 있으면 exhaustive로 간주
+      default-signifies-exhaustive: true
+
+  exclusions:
+    rules:
+      # ── 테스트 파일: 보안 규칙 완화 ─────────────────────────────────
+      - path: "_test\\.go$"
+        linters:
+          - gosec      # 테스트에서 하드코딩된 자격증명·경로는 의도적
+          - wrapcheck  # 테스트 오류는 wrap 불필요
+          - errcheck   # t.Log(err) 패턴 허용
+          - unparam
+
+      # ── 내부 도구 (hack/) ──────────────────────────────────────────
+      - path: "^hack/"
+        linters:
+          - gosec
+          - errcheck
+          - wrapcheck
+
+      # ── 이미지/executor/buildconfig: buildah 경로 변수·권한은 설계상 필요 ──
+      # G304: 이미지 레이어 경로는 내부 config 구조체에서 오는 경로 (외부 입력 X)
+      # G301/G302: 컨테이너 빌드 디렉터리·파일 권한 (0755/0644)은 의도적
+      - path: "executor\\.go$|buildconfig\\.go$|image_runtime\\.go$|image_builder_runtime\\.go$|image_export_runtime\\.go$|resource\\.go$|mount\\.go$"
+        linters:
+          - gosec
+
+      # ── 볼륨 ops: 컨테이너 데이터용 권한은 의도적 ─────────────────
+      - path: "volume\\.go$|volume_runtime\\.go$"
+        text: "G122|G302|G304|G306"
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+# ── 포매터 (goimports: import 정렬 + gofmt) ───────────────────────────
+formatters:
+  enable:
+    - goimports

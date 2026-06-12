@@ -1,4 +1,5 @@
 GO ?= go
+GO_REQUIRED_VERSION ?= 1.25.5
 
 PODBRIDGE5_VM_NAME ?= podbridge5-dev
 PODBRIDGE5_VM_CPUS ?= 2
@@ -19,35 +20,58 @@ VM_TEST_RUNTIME_INTEGRATION_LOG ?= $(ARTIFACTS_DIR)/vm-test-runtime-integration.
 REMOTE_VM_RUN = \
 	REMOTE_HOST='$(REMOTE_HOST)' REMOTE_USER='$(REMOTE_USER)' REMOTE_PORT='$(REMOTE_PORT)' REMOTE_PASS='$(REMOTE_PASS)' \
 	PODBRIDGE5_VM_NAME='$(PODBRIDGE5_VM_NAME)' PODBRIDGE5_VM_CPUS='$(PODBRIDGE5_VM_CPUS)' PODBRIDGE5_VM_MEMORY='$(PODBRIDGE5_VM_MEMORY)' PODBRIDGE5_VM_DISK='$(PODBRIDGE5_VM_DISK)' \
-	PODBRIDGE5_VM_REPO='$(PODBRIDGE5_VM_REPO)' PODBRIDGE5_LOCAL_REPO='$(PODBRIDGE5_LOCAL_REPO)' \
+	PODBRIDGE5_VM_REPO='$(PODBRIDGE5_VM_REPO)' PODBRIDGE5_LOCAL_REPO='$(PODBRIDGE5_LOCAL_REPO)' PODBRIDGE5_GO_VERSION='$(GO_REQUIRED_VERSION)' \
 	cd /opt/go/src/github.com/HeaInSeo/podbridge5/hack/remotevm && $(GO) run .
 
-.PHONY: test test-unit test-runtime test-runtime-integration runtime-env-check \
-	runtime-host-check runtime-integration-host-check check-remote-pass \
+.PHONY: test test-unit test-runtime test-runtime-integration go-version-check runtime-env-check \
+	runtime-host-check runtime-integration-host-check check-remote-auth \
 	vm-create-runtime vm-prepare-runtime vm-sync-runtime vm-run-runtime \
 	vm-run-runtime-integration vm-delete-runtime vm-test-runtime \
-	vm-test-runtime-integration
+	vm-test-runtime-integration lint lint-fix
 
 TEST_TAGS_BASE ?= exclude_graphdriver_btrfs containers_image_openpgp exclude_graphdriver_devicemapper
 TEST_TAGS_RUNTIME ?= $(TEST_TAGS_BASE) runtime
 TEST_TAGS_RUNTIME_INTEGRATION ?= $(TEST_TAGS_BASE) runtime integration
 
+lint: go-version-check
+	golangci-lint run --build-tags "$(TEST_TAGS_BASE)"
+
+lint-fix: go-version-check
+	golangci-lint run --build-tags "$(TEST_TAGS_BASE)" --fix
+
 # Legacy alias kept for compatibility.
 test: test-unit
 
-test-unit:
+test-unit: go-version-check
 	$(GO) test -v -race -cover -tags "$(TEST_TAGS_BASE)" ./...
 
-test-runtime: runtime-env-check runtime-host-check
+test-runtime: go-version-check runtime-env-check runtime-host-check
 	@echo "[test-runtime] tags: $(TEST_TAGS_RUNTIME)"
 	@echo "[test-runtime] running runtime-tagged tests on the current host"
 	$(GO) test -v -tags "$(TEST_TAGS_RUNTIME)" ./...
 
 # Runtime-sensitive integration tests.
-test-runtime-integration: runtime-env-check runtime-host-check runtime-integration-host-check
+test-runtime-integration: go-version-check runtime-env-check runtime-host-check runtime-integration-host-check
 	@echo "[test-runtime-integration] tags: $(TEST_TAGS_RUNTIME_INTEGRATION)"
 	@echo "[test-runtime-integration] running integration tests with unshare"
 	@unshare -r -m $(GO) test -v -tags "$(TEST_TAGS_RUNTIME_INTEGRATION)" ./...
+
+go-version-check:
+	@command -v $(GO) >/dev/null 2>&1 || { echo "missing: $(GO)" >&2; exit 1; }
+	@actual="$$( $(GO) env GOVERSION 2>/dev/null || true )"; \
+	if [ -z "$$actual" ]; then \
+		actual="$$( $(GO) version | awk '{print $$3}' )"; \
+	fi; \
+	case "$$actual" in \
+		go$(GO_REQUIRED_VERSION)) \
+			echo "[go-version-check] using $$actual"; \
+			;; \
+		*) \
+			echo "[go-version-check] required go$(GO_REQUIRED_VERSION), got $${actual:-<unknown>}" >&2; \
+			echo "[go-version-check] podbridge5 tracks the same Go 1.25.x baseline as sibling projects" >&2; \
+			exit 1; \
+			;; \
+	esac
 
 runtime-env-check:
 	@command -v buildah >/dev/null 2>&1 || { echo "missing: buildah" >&2; exit 1; }
@@ -98,25 +122,34 @@ runtime-integration-host-check:
 	@command -v unshare >/dev/null 2>&1 || { echo "missing: unshare" >&2; exit 1; }
 	@echo "[runtime-integration-host-check] unshare is available"
 
-check-remote-pass:
-	@test -n "$(REMOTE_PASS)" || { echo "set REMOTE_PASS for remote VM automation" >&2; exit 1; }
+check-remote-auth:
+	@if [ -n "$(REMOTE_PASS)" ]; then \
+		echo "[check-remote-auth] using REMOTE_PASS"; \
+	elif [ -n "$$SSH_AUTH_SOCK" ]; then \
+		echo "[check-remote-auth] using SSH agent"; \
+	elif [ -f "$$HOME/.ssh/id_ed25519" ] || [ -f "$$HOME/.ssh/id_rsa" ]; then \
+		echo "[check-remote-auth] using default SSH key file"; \
+	else \
+		echo "set REMOTE_PASS or configure SSH key auth for remote VM automation" >&2; \
+		exit 1; \
+	fi
 
-vm-create-runtime: check-remote-pass
+vm-create-runtime: check-remote-auth
 	@$(REMOTE_VM_RUN) create
 
-vm-prepare-runtime: check-remote-pass
+vm-prepare-runtime: check-remote-auth
 	@$(REMOTE_VM_RUN) prepare
 
-vm-sync-runtime: check-remote-pass
+vm-sync-runtime: check-remote-auth
 	@$(REMOTE_VM_RUN) sync
 
-vm-run-runtime: check-remote-pass
+vm-run-runtime: check-remote-auth
 	@$(REMOTE_VM_RUN) run
 
-vm-run-runtime-integration: check-remote-pass
+vm-run-runtime-integration: check-remote-auth
 	@$(REMOTE_VM_RUN) run-integration
 
-vm-delete-runtime: check-remote-pass
+vm-delete-runtime: check-remote-auth
 	@$(REMOTE_VM_RUN) delete
 
 vm-test-runtime:
@@ -132,6 +165,7 @@ vm-test-runtime:
 	{ \
 		echo "[vm-test-runtime] log file: $$log_file"; \
 		echo "[vm-test-runtime] local repo: $(PODBRIDGE5_LOCAL_REPO)"; \
+		echo "[vm-test-runtime] required Go version: $(GO_REQUIRED_VERSION)"; \
 		$(MAKE) --no-print-directory vm-create-runtime \
 			REMOTE_HOST='$(REMOTE_HOST)' REMOTE_USER='$(REMOTE_USER)' REMOTE_PORT='$(REMOTE_PORT)' REMOTE_PASS='$(REMOTE_PASS)' \
 			PODBRIDGE5_VM_NAME='$(PODBRIDGE5_VM_NAME)' PODBRIDGE5_VM_CPUS='$(PODBRIDGE5_VM_CPUS)' PODBRIDGE5_VM_MEMORY='$(PODBRIDGE5_VM_MEMORY)' PODBRIDGE5_VM_DISK='$(PODBRIDGE5_VM_DISK)'; \
@@ -161,6 +195,7 @@ vm-test-runtime-integration:
 	{ \
 		echo "[vm-test-runtime-integration] log file: $$log_file"; \
 		echo "[vm-test-runtime-integration] local repo: $(PODBRIDGE5_LOCAL_REPO)"; \
+		echo "[vm-test-runtime-integration] required Go version: $(GO_REQUIRED_VERSION)"; \
 		$(MAKE) --no-print-directory vm-create-runtime \
 			REMOTE_HOST='$(REMOTE_HOST)' REMOTE_USER='$(REMOTE_USER)' REMOTE_PORT='$(REMOTE_PORT)' REMOTE_PASS='$(REMOTE_PASS)' \
 			PODBRIDGE5_VM_NAME='$(PODBRIDGE5_VM_NAME)' PODBRIDGE5_VM_CPUS='$(PODBRIDGE5_VM_CPUS)' PODBRIDGE5_VM_MEMORY='$(PODBRIDGE5_VM_MEMORY)' PODBRIDGE5_VM_DISK='$(PODBRIDGE5_VM_DISK)'; \

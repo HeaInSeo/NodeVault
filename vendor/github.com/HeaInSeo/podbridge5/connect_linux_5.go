@@ -1,4 +1,4 @@
-//This file now only builds on Linux.
+// This file now only builds on Linux.
 //go:build linux
 // +build linux
 
@@ -7,10 +7,11 @@ package podbridge5
 import (
 	"context"
 	"errors"
+	"os"
+
+	"github.com/HeaInSeo/utils"
 	"github.com/containers/podman/v5/pkg/bindings"
 	"github.com/containers/storage/pkg/unshare"
-	"github.com/seoyhaein/utils"
-	"os"
 )
 
 func NewConnection5(ctx context.Context, ipcName string) (context.Context, error) {
@@ -31,10 +32,6 @@ func NewConnectionLinux5(ctx context.Context) (context.Context, error) {
 	}
 
 	return ctx, nil
-}
-
-func defaultLinuxSockDir5() string {
-	return currentRuntimeConnectionTarget().URI
 }
 
 func currentRuntimeConnectionTarget() runtimeConnectionTarget {

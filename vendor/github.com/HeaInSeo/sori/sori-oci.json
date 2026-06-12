@@ -1,0 +1,23 @@
+{
+  "local": {
+    "type": "oci",
+    "path": "/var/lib/sori/oci"
+  },
+  "remotes": [
+    {
+      "name": "harbor",
+      "type": "registry",
+      "registry": "harbor.local",
+      "repository": "demo-project/testrepo",
+      "tls": {
+        "insecure": false,
+        "ca_file": ""
+      },
+      "auth": {
+        "username": "admin",
+        "password": "${SORI_REGISTRY_PASSWORD}",
+        "token": ""
+      }
+    }
+  ]
+}

@@ -3,13 +3,14 @@ package podbridge5
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path"
+	"syscall"
+
 	"github.com/containers/podman/v5/pkg/specgen"
 	"github.com/containers/storage/pkg/unshare"
 	specgo "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
-	"os"
-	"path"
-	"syscall"
 )
 
 // WithMount 컨테이너에서 bind mount 같은 경우 마운트할 디렉토리가 없으면 자동으로 만들어줌. 또한 stop 이나 remove 하면 자동으로 unmount 됨.
@@ -43,7 +44,7 @@ func WithMount(source, destination, mountType string) ContainerOptions {
 func MountOverlay(lowerDir, upperDir, workDir, mergedDir string) error {
 	// 1. Ensure all necessary directories exist
 	for _, dir := range []string{lowerDir, upperDir, workDir, mergedDir} {
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}
 	}

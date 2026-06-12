@@ -14,11 +14,11 @@ const (
 	MinHealthcheckTimeout         = 1 * time.Second
 )
 
-func DefaultHealthcheckPolicy() (interval string, retries uint, timeout string, startPeriod string) {
+func DefaultHealthcheckPolicy() (interval string, retries uint, timeout, startPeriod string) {
 	return DefaultHealthcheckInterval.String(), DefaultHealthcheckRetries, DefaultHealthcheckTimeout.String(), DefaultHealthcheckStartPeriod.String()
 }
 
-func parsePolicyDuration(fieldName, value string, min time.Duration, allowZero bool) (time.Duration, error) {
+func parsePolicyDuration(fieldName, value string, minDur time.Duration, allowZero bool) (time.Duration, error) {
 	d, err := time.ParseDuration(value)
 	if err != nil {
 		return 0, fmt.Errorf("invalid %s: %w", fieldName, err)
@@ -26,8 +26,8 @@ func parsePolicyDuration(fieldName, value string, min time.Duration, allowZero b
 	if allowZero && d == 0 {
 		return 0, nil
 	}
-	if d < min {
-		return 0, fmt.Errorf("%s must be at least %s", fieldName, min)
+	if d < minDur {
+		return 0, fmt.Errorf("%s must be at least %s", fieldName, minDur)
 	}
 	return d, nil
 }

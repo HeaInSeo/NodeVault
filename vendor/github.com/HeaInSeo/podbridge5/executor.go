@@ -2,12 +2,14 @@ package podbridge5
 
 import (
 	"bytes"
+	"context"
 	"fmt"
-	"github.com/seoyhaein/utils"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/HeaInSeo/utils"
 )
 
 // GenerateExecutor path 생성될 executor.sh 의 path, fileName "executor.sh", userScriptPath 컨테이너내에서 executor.sh 가 실행 할 user_script.sh 의 위치
@@ -18,7 +20,7 @@ func GenerateExecutor(path, fileName, userScriptPath string) (*os.File, *string,
 
 	// Ensure the directory exists.
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		if err := os.MkdirAll(path, 0755); err != nil {
+		if err := os.MkdirAll(path, 0o755); err != nil {
 			return nil, nil, fmt.Errorf("failed to create directory: %w", err)
 		}
 	}
@@ -86,34 +88,36 @@ fi
 
 exit "${EXIT_CODE}"`, ContainerResultLogPath, ContainerExitCodeLogPath, userScriptPath, userScriptPath, userScriptPath, userScriptPath, userScriptPath, userScriptPath)
 
-	if _, writeErr := tmpFile.Write([]byte(scriptContent)); writeErr != nil {
+	if _, writeErr := tmpFile.WriteString(scriptContent); writeErr != nil {
 		if closeErr := tmpFile.Close(); closeErr != nil {
 			Log.Errorf("failed to close temporary file after write error: %v", closeErr)
 		}
 		return nil, nil, fmt.Errorf("failed to write script content to temporary file: %w", writeErr)
 	}
 
-	if err := tmpFile.Sync(); err != nil {
+	if syncErr := tmpFile.Sync(); syncErr != nil {
 		if closeErr := tmpFile.Close(); closeErr != nil {
 			Log.Errorf("failed to close temporary file after sync error: %v", closeErr)
 		}
-		return nil, nil, fmt.Errorf("failed to sync temporary file: %w", err)
+		return nil, nil, fmt.Errorf("failed to sync temporary file: %w", syncErr)
 	}
-	if err := tmpFile.Close(); err != nil {
-		return nil, nil, fmt.Errorf("failed to close temporary file: %w", err)
+	if closeErr := tmpFile.Close(); closeErr != nil {
+		return nil, nil, fmt.Errorf("failed to close temporary file: %w", closeErr)
 	}
 
 	// Compare with existing file if present
-	if exists, _, err := utils.FileExists(executorPath); err != nil {
-		return nil, nil, fmt.Errorf("failed to check if original file exists: %w", err)
-	} else if exists {
-		same, err := compareFiles(executorPath, tmpFilePath)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to compare files: %w", err)
+	exists, _, existsErr := utils.FileExists(executorPath)
+	if existsErr != nil {
+		return nil, nil, fmt.Errorf("failed to check if original file exists: %w", existsErr)
+	}
+	if exists {
+		same, compareErr := compareFiles(executorPath, tmpFilePath)
+		if compareErr != nil {
+			return nil, nil, fmt.Errorf("failed to compare files: %w", compareErr)
 		}
 		if same {
-			if err := os.Remove(tmpFilePath); err != nil {
-				Log.Errorf("failed to remove temporary file %s: %v", tmpFilePath, err)
+			if removeErr := os.Remove(tmpFilePath); removeErr != nil {
+				Log.Errorf("failed to remove temporary file %s: %v", tmpFilePath, removeErr)
 			}
 			return nil, &executorPath, nil
 		}
@@ -125,7 +129,7 @@ exit "${EXIT_CODE}"`, ContainerResultLogPath, ContainerExitCodeLogPath, userScri
 	}
 
 	// Set execute permissions
-	if err = os.Chmod(executorPath, 0755); err != nil {
+	if err = os.Chmod(executorPath, 0o755); err != nil {
 		return nil, nil, fmt.Errorf("failed to set file permissions: %w", err)
 	}
 
@@ -142,7 +146,7 @@ exit "${EXIT_CODE}"`, ContainerResultLogPath, ContainerExitCodeLogPath, userScri
 func compareFiles(file1, file2 string) (bool, error) {
 	f1, err := os.Open(file1)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("open %q: %w", file1, err)
 	}
 	defer func() {
 		if closeErr := f1.Close(); closeErr != nil {
@@ -152,7 +156,7 @@ func compareFiles(file1, file2 string) (bool, error) {
 
 	f2, err := os.Open(file2)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("open %q: %w", file2, err)
 	}
 	defer func() {
 		if closeErr := f2.Close(); closeErr != nil {
@@ -162,12 +166,12 @@ func compareFiles(file1, file2 string) (bool, error) {
 
 	f1Stat, err := f1.Stat()
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("stat %q: %w", file1, err)
 	}
 
 	f2Stat, err := f2.Stat()
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("stat %q: %w", file2, err)
 	}
 
 	// 파일 크기가 다르면 내용이 다르다고 간주
@@ -184,10 +188,10 @@ func compareFiles(file1, file2 string) (bool, error) {
 		n2, err2 := f2.Read(buf2)
 
 		if err1 != nil && err1 != io.EOF {
-			return false, err1
+			return false, fmt.Errorf("read %q: %w", file1, err1)
 		}
 		if err2 != nil && err2 != io.EOF {
-			return false, err2
+			return false, fmt.Errorf("read %q: %w", file2, err2)
 		}
 
 		if n1 != n2 || !bytes.Equal(buf1[:n1], buf2[:n1]) {
@@ -203,35 +207,37 @@ func compareFiles(file1, file2 string) (bool, error) {
 }
 
 // ProcessScript use_script.sh 만들어 주는 메서드
-func ProcessScript(scriptContent string, path string) (string, error) {
-	path, _ = utils.CheckPath(path)
+func ProcessScript(scriptContent, path string) (string, error) {
+	checkedPath, checkErr := utils.CheckPath(path)
+	if checkErr != nil {
+		return "", fmt.Errorf("invalid path: %w", checkErr)
+	}
+	path = checkedPath
 	// 디렉토리가 존재하지 않으면 생성
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		if err := os.MkdirAll(path, 0755); err != nil {
+		if err := os.MkdirAll(path, 0o755); err != nil {
 			return "", fmt.Errorf("failed to create directory: %w", err)
 		}
 	}
 
 	// 스크립트 내용의 앞뒤 공백 및 들여쓰기 제거
-	//scriptContent = ensureShebang(scriptContent)
+	// scriptContent = ensureShebang(scriptContent)
 
 	// 받은 스크립트를 텍스트 파일로 저장 (보관용)
 	txtFilePath := filepath.Join(path, "user_script.txt")
-	if err := os.WriteFile(txtFilePath, []byte(scriptContent), 0644); err != nil {
+	if err := os.WriteFile(txtFilePath, []byte(scriptContent), 0o644); err != nil {
 		return "", fmt.Errorf("failed to write script content to txt file: %w", err)
 	}
 
-	// 임시 파일 생성
-	tmpFile, err := os.CreateTemp("/tmp", "user_script_*.sh")
+	// 임시 파일은 목적지와 같은 디렉터리에 생성해야 os.Rename이 EXDEV 없이 작동
+	tmpFile, err := os.CreateTemp(path, "user_script_*.sh")
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp file: %w", err)
 	}
 
 	defer func() {
-		if err := os.Remove(tmpFile.Name()); err != nil && !os.IsNotExist(err) { // 문법 검사 실패 시 임시 파일 삭제
-			Log.Errorf("Failed to remove temporary file %s: %v", tmpFile.Name(), err)
-			// 리소스 해제시 발생하는 err 는 defer 외부 루틴의 err 와 분리하는게 바람직하다. 기억하기 위해서 지우지 않음.
-			// err = fmt.Errorf("failed to remove temporary file %s: %w", tmpFile.Name(), err)
+		if removeErr := os.Remove(tmpFile.Name()); removeErr != nil && !os.IsNotExist(removeErr) {
+			Log.Errorf("Failed to remove temporary file %s: %v", tmpFile.Name(), removeErr)
 		}
 	}()
 
@@ -246,7 +252,7 @@ func ProcessScript(scriptContent string, path string) (string, error) {
 	}
 
 	// 문법 검사 수행
-	if err = exec.Command("bash", "-n", tmpFile.Name()).Run(); err != nil {
+	if err = exec.CommandContext(context.Background(), "bash", "-n", tmpFile.Name()).Run(); err != nil {
 		// 문법 오류가 있으면 .sh 파일을 남기지 않고 에러 반환
 		return "", fmt.Errorf("syntax error in user script: %w", err)
 	}
@@ -257,11 +263,9 @@ func ProcessScript(scriptContent string, path string) (string, error) {
 		return "", fmt.Errorf("failed to move temp file to final location: %w", err)
 	}
 
-	if err = os.Chmod(shFilePath, 0777); err != nil {
+	if err = os.Chmod(shFilePath, 0o755); err != nil {
 		return "", fmt.Errorf("failed to set file permissions: %w", err)
 	}
 
-	// 문법 검사가 성공했을 때 .sh 파일 경로 반환
-	// 마지막 err 의 경우 defer 에서 nil 이 아닐 경우 err 를 반환한다.
-	return shFilePath, err
+	return shFilePath, nil
 }

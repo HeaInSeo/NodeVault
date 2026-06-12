@@ -41,7 +41,7 @@ func newBuilderWithRuntime(ctx context.Context, runtime imageBuilderFactoryRunti
 
 	builder, err := runtime.NewBuilder(ctx, store, *builderOpts)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("new builder: %w", err)
 	}
 	return builder, nil
 }
@@ -56,7 +56,7 @@ func createDirectoriesWithRuntime(builder imageBuilder, dirs []string) error {
 }
 
 func setFilePermissionsWithRuntime(builder imageBuilder, files []string) error {
-	chmodArgs := append([]string{"chmod", "777"}, files...)
+	chmodArgs := append([]string{"chmod", "755"}, files...)
 	if err := builder.Run(chmodArgs, defaultRunOptions); err != nil {
 		return fmt.Errorf("failed to set file permissions: %w", err)
 	}

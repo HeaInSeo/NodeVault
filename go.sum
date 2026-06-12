@@ -14,6 +14,8 @@ github.com/HeaInSeo/podbridge5 v0.1.1 h1:8z8LJqWyXnAEPm5sNVhffi6SOm/CeYNY2R5JCnD
 github.com/HeaInSeo/podbridge5 v0.1.1/go.mod h1:6ESfUd1nT6Frkevv5KXPAC0hlyCZEQJD3FrrQl2YOtc=
 github.com/HeaInSeo/sori v0.8.0-rc4 h1:Rd1sO3OlCUiCQ4UYtk72bhXA1T6ZlrEKRx22Acp2xh8=
 github.com/HeaInSeo/sori v0.8.0-rc4/go.mod h1:VQ0a4l8mpbM3tc64LwmhUiPkAff/G3DBolSdA2/tEhM=
+github.com/HeaInSeo/sori v0.8.0-rc5 h1:HcQCvSLmLbTLS2JgCR2B3IBkArc2A5myOhKRWe7IXZk=
+github.com/HeaInSeo/sori v0.8.0-rc5/go.mod h1:VQ0a4l8mpbM3tc64LwmhUiPkAff/G3DBolSdA2/tEhM=
 github.com/HeaInSeo/utils v0.0.7 h1:YSGKsFGybK57G0esXz4H8HtNWvndijf/86txQADzQlE=
 github.com/HeaInSeo/utils v0.0.7/go.mod h1:K2kPw+3g7hZvitjvwthDr6rcQl0nQptjKOd7EOlm6k8=
 github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERoyfY=

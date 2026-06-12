@@ -1,6 +1,6 @@
 # sori
 
-**v0.7.0-stable** — OCI 기반 참조 데이터(볼륨) 패키징 및 referrer push 라이브러리.  
+**v0.8.0-rc4** — OCI 기반 참조 데이터(볼륨) 패키징 및 registry-neutral `sorictl` CLI.
 디렉터리를 OCI 아티팩트로 변환하고, 로컬 OCI 스토어와 원격 레지스트리(Harbor 등) 사이의 push/fetch를 담당한다.
 
 ## 개요
@@ -15,6 +15,10 @@ OCI 이미지 형식으로 패키징하는 Go 라이브러리다.
 |------|------|
 | [docs/research/results-summary.md](docs/research/results-summary.md) | 벤치마크 결과 (v0.7.0-stable 실측값) |
 | [docs/public-api.md](docs/public-api.md) | 공개 API 안정도 분류 |
+| [docs/v1-readiness.md](docs/v1-readiness.md) | v1.0.0 준비 체크리스트와 release gate |
+| [docs/v1-test-plan.md](docs/v1-test-plan.md) | v1 smoke/integration/real dataset/release acceptance 테스트 계획 |
+| [docs/dataset-metadata-v1.md](docs/dataset-metadata-v1.md) | dataset-metadata.json v1 schema 계약 |
+| [docs/sorictl-contract.md](docs/sorictl-contract.md) | sorictl v1 CLI 명령/출력 계약 |
 | [docs/generalization-sprint-plan.md](docs/generalization-sprint-plan.md) | 범용 라이브러리화 로드맵 |
 | [docs/maturity-sprint-plan.md](docs/maturity-sprint-plan.md) | 성숙화 계획 |
 | [docs/stable-api-promotion.md](docs/stable-api-promotion.md) | stable API 승격 검토 항목 |
@@ -533,8 +537,9 @@ var (
 | **AtomicOverwrite** | `FetchOptions{AtomicOverwrite: true}` | staging 추출 → 기존 `destRoot` 백업 → staging rename. 갱신 워크플로에 권장. |
 | **FetchVolumeFresh** | `Client.FetchVolumeFresh(...)` | `RequireEmptyDestination:true` 묵시적 wrapper. 최초 설치용 zero-config API. |
 | **Safe fetch** | `FetchOptions{RequireEmptyDestination: true}` | `destRoot`가 없어야 시작. staging 추출 후 성공 시 rename. |
+| **FetchVolume 기본값** | `Client.FetchVolume(..., FetchOptions{})` | safe fetch와 동일하게 staging을 사용하고 기존 `destRoot`를 거부. |
 | **Remote fetch** | `Client.FetchVolumeFromRemote` | 기본값이 safe fetch. `AtomicOverwrite` opt-in 지원. |
-| **Legacy direct** | `FetchOptions{}` (기본) | `destRoot`에 직접 추출. 중간 실패 시 부분 상태 가능. 하위 호환용만. |
+| **Legacy direct** | `FetchVolumeSequential` / `FetchVolumeParallel` | `destRoot`에 직접 추출. 중간 실패 시 부분 상태 가능. 하위 호환용만. |
 
 `RequireEmptyDestination`과 `AtomicOverwrite`를 동시에 설정하면 `ErrValidation`을 반환한다.
 

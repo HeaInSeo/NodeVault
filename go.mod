@@ -17,7 +17,7 @@ require (
 
 require (
 	github.com/HeaInSeo/podbridge5 v0.1.1
-	github.com/HeaInSeo/sori v0.8.0-rc4
+	github.com/HeaInSeo/sori v0.8.0-rc5
 	github.com/containers/storage v1.55.0
 )
 

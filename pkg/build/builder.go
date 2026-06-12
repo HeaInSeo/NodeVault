@@ -26,7 +26,7 @@ var ErrBuildBackendDisabled = errors.New("build backend disabled in incluster sp
 // without initializing podbridge5 / container storage.
 type disabledBuilder struct{}
 
-func (disabledBuilder) Build(_ context.Context, _, _ string) (string, string, error) {
+func (disabledBuilder) Build(_ context.Context, _, _ string) (imageID, digest string, err error) {
 	return "", "", ErrBuildBackendDisabled
 }
 

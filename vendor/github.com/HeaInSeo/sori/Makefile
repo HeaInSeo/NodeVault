@@ -26,8 +26,9 @@ PKGS_SECURITY := ./...
 # regular test files, so its 0% coverage would drag down the combined total.
 PKGS_COVERAGE := $(shell go list ./... | grep -v 'internal/bench')
 
-.PHONY: test coverage fmt vet lint lint-depguard lint-fix lint-security \
-        vuln vuln-all build-sorictl release-dist golangci-lint govulncheck
+.PHONY: test coverage test-registry-integration smoke-cli test-real-dataset \
+        fmt vet lint lint-depguard lint-fix lint-security lint-security-observe vuln vuln-observe vuln-all vuln-all-observe \
+        build-sorictl release-dist golangci-lint govulncheck
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -35,6 +36,16 @@ PKGS_COVERAGE := $(shell go list ./... | grep -v 'internal/bench')
 test:
 	@mkdir -p "$(GOCACHE_DIR)" "$(GOTMPDIR)"
 	$(GOENV) go test -v -race -cover -short $(PKGS_ALL)
+
+test-registry-integration:
+	@mkdir -p "$(GOCACHE_DIR)" "$(GOTMPDIR)"
+	$(GOENV) go test -v -run TestRegistryIntegration ./...
+
+smoke-cli: build-sorictl
+	SORICTL_BIN="$(LOCALBIN)/sorictl" ./scripts/sorictl-registry-smoke.sh small
+
+test-real-dataset: build-sorictl
+	SORICTL_BIN="$(LOCALBIN)/sorictl" ./scripts/sorictl-registry-smoke.sh real
 
 # ── Coverage ──────────────────────────────────────────────────────────────────
 
@@ -86,9 +97,15 @@ lint-depguard: golangci-lint
 lint-fix: golangci-lint
 	$(GOLANGCI_LINT) run --config=.golangci.yml --fix $(PKGS_CORE)
 
-# Security-focused lint (gosec). Kept separate so findings do not block
-# regular development CI — run via security-observe workflow or manually.
+# Security-focused lint (gosec). The default target enforces findings; use
+# lint-security-observe when a report artifact is needed without failing CI.
 lint-security: golangci-lint
+	@mkdir -p "$(REPORT_DIR)" "$(GOCACHE_DIR)" "$(GOTMPDIR)"
+	@echo "[sori] security scan scope: $(PKGS_SECURITY)" | tee "$(REPORT_DIR)/lint-security-summary.txt"
+	$(GOENV) $(GOLANGCI_LINT) run --enable-only gosec $(PKGS_SECURITY) \
+	| tee "$(REPORT_DIR)/gosec.txt"
+
+lint-security-observe: golangci-lint
 	@mkdir -p "$(REPORT_DIR)" "$(GOCACHE_DIR)" "$(GOTMPDIR)"
 	@echo "[sori] security scan scope: $(PKGS_SECURITY)" | tee "$(REPORT_DIR)/lint-security-summary.txt"
 	@set +e; \
@@ -100,11 +117,19 @@ lint-security: golangci-lint
 
 vuln: govulncheck
 	@mkdir -p "$(REPORT_DIR)" "$(GOCACHE_DIR)" "$(GOTMPDIR)"
+	$(GOENV) $(GOVULNCHECK) $(PKGS_SECURITY) 2>&1 | tee "$(REPORT_DIR)/govulncheck-core.txt"
+
+vuln-observe: govulncheck
+	@mkdir -p "$(REPORT_DIR)" "$(GOCACHE_DIR)" "$(GOTMPDIR)"
 	@set +e; \
 	$(GOENV) $(GOVULNCHECK) $(PKGS_SECURITY) 2>&1 | tee "$(REPORT_DIR)/govulncheck-core.txt"; \
 	echo "govulncheck_exit=$$?" | tee "$(REPORT_DIR)/govulncheck-core.summary"
 
 vuln-all: govulncheck
+	@mkdir -p "$(REPORT_DIR)" "$(GOCACHE_DIR)" "$(GOTMPDIR)"
+	$(GOENV) $(GOVULNCHECK) ./... 2>&1 | tee "$(REPORT_DIR)/govulncheck-all.txt"
+
+vuln-all-observe: govulncheck
 	@mkdir -p "$(REPORT_DIR)" "$(GOCACHE_DIR)" "$(GOTMPDIR)"
 	@set +e; \
 	$(GOENV) $(GOVULNCHECK) ./... 2>&1 | tee "$(REPORT_DIR)/govulncheck-all.txt"; \

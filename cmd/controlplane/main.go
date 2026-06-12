@@ -179,12 +179,30 @@ func run() int {
 
 	rec := startBackground(ctx, indexStore, rc.webhookAddr, fastInterval, slowInterval)
 
-	// BuildService — select backend based on NODEVAULT_BUILD_BACKEND.
-	// disabled:       accepts gRPC connections, returns ErrBuildBackendDisabled.
-	//                 podbridge5/container-storage not initialized; safe for K8s Pods.
-	// k8s-job:        spawns a privileged K8s Job (buildah) for each build request.
-	//                 podbridge5 not initialized in-process.
-	// local-podbridge: full podbridge5 in-process build (host mode only).
+	registerBuildService(srv, &rc, validateSvc, registrySvc, indexStore, rec)
+
+	//nolint:gosec // listener address is normalized before being attached to logs.
+	slog.Info("NodeVault gRPC server starting", "addr", sanitizeLogValue(lis.Addr().String()))
+
+	if serveErr := srv.Serve(lis); serveErr != nil {
+		slog.Error("server exited", "err", serveErr)
+		return 1
+	}
+	return 0
+}
+
+// registerBuildService selects and registers the BuildService backend based on NODEVAULT_BUILD_BACKEND.
+// disabled: safe for K8s Pods (podbridge5 not initialized).
+// k8s-job: spawns a privileged K8s Job per build request.
+// default (local-podbridge): full podbridge5 in-process build (host mode only).
+func registerBuildService(
+	srv *grpc.Server,
+	rc *runtimeConfig,
+	validateSvc *validate.Service,
+	registrySvc *catalog.ToolRegistryService,
+	indexStore *index.Store,
+	rec *reconcile.Reconciler,
+) {
 	switch rc.buildBackend {
 	case "disabled":
 		nfv1.RegisterBuildServiceServer(srv, build.NewDisabledService())
@@ -205,15 +223,6 @@ func run() int {
 			nfv1.RegisterBuildServiceServer(srv, buildSvc)
 		}
 	}
-
-	//nolint:gosec // listener address is normalized before being attached to logs.
-	slog.Info("NodeVault gRPC server starting", "addr", sanitizeLogValue(lis.Addr().String()))
-
-	if serveErr := srv.Serve(lis); serveErr != nil {
-		slog.Error("server exited", "err", serveErr)
-		return 1
-	}
-	return 0
 }
 
 // startBackground initializes the reconcile loops and the Harbor webhook HTTP server.

@@ -75,6 +75,9 @@ func NewRetryHTTPClient(cfg RemoteConfig) (*http.Client, error) {
 	if cfg.Transport != nil {
 		base = cfg.Transport
 	}
+	if base == nil {
+		base = http.DefaultTransport
+	}
 	baseTransport, ok := base.(*http.Transport)
 	if ok {
 		clonedTransport := baseTransport.Clone()
@@ -100,6 +103,7 @@ func NewRetryHTTPClient(cfg RemoteConfig) (*http.Client, error) {
 }
 
 func LoadCertPool(caFile string) (*x509.CertPool, error) {
+	// #nosec G304 -- caFile is an explicit user-configured trust anchor path.
 	pemBytes, err := os.ReadFile(caFile)
 	if err != nil {
 		return nil, transportError("LoadCertPool", "read CA file "+caFile, err)

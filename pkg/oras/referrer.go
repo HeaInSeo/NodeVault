@@ -37,7 +37,7 @@ type toolSpec struct {
 // e.g. "harbor.lab.local/library/mytool".
 // subjectDigest is the image manifest digest, e.g. "sha256:abc...".
 //
-// TLS behaviour is controlled by env vars:
+// TLS behavior is controlled by env vars:
 //
 //	NODEVAULT_ORAS_INSECURE_TLS=true  — skip TLS verification (self-signed certs)
 //	NODEVAULT_ORAS_CA_FILE=/path/cert.pem — use custom CA
@@ -90,6 +90,8 @@ func newRemoteRepository(imageRepo string) (sori.ReferrerTarget, error) {
 	cfg := registryutil.RemoteConfig{
 		InsecureTLS: os.Getenv("NODEVAULT_ORAS_INSECURE_TLS") == "true",
 		CAFile:      os.Getenv("NODEVAULT_ORAS_CA_FILE"),
+		Username:    os.Getenv("HARBOR_USER"),
+		Password:    os.Getenv("HARBOR_PASS"),
 	}
 	repo, err := registryutil.NewRepository(imageRepo, cfg)
 	if err != nil {

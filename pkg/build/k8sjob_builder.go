@@ -85,7 +85,9 @@ func newK8sJobBuilder(runtimeMode string) (*K8sJobBuilder, error) {
 }
 
 // Build submits a K8s Job that builds and pushes the image, then returns the digest.
-func (b *K8sJobBuilder) Build(ctx context.Context, dockerfileContent, outputRef string) (imageID, digest string, err error) {
+func (b *K8sJobBuilder) Build(
+	ctx context.Context, dockerfileContent, outputRef string,
+) (imageID, digest string, err error) {
 	suffix := fmt.Sprintf("%x", time.Now().UnixNano())[:8]
 	jobName := "nvbuild-" + suffix
 	cmName := "nvbuild-df-" + suffix
@@ -258,7 +260,7 @@ func (b *K8sJobBuilder) extractDigestFromLogs(ctx context.Context, jobName strin
 	if err != nil {
 		return "", fmt.Errorf("stream logs from pod %s: %w", podName, err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	logBytes, err := io.ReadAll(rc)
 	if err != nil {
@@ -287,4 +289,4 @@ func (b *K8sJobBuilder) ensureNamespace(ctx context.Context) error {
 	return err
 }
 
-func (b *K8sJobBuilder) Close() error { return nil }
+func (*K8sJobBuilder) Close() error { return nil }

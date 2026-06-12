@@ -136,8 +136,7 @@ func (b *K8sJobBuilder) buildJob(jobName, cmName, destination string) *batchv1.J
 	buildScript := strings.Join([]string{
 		"set -e",
 		`buildah bud --tls-verify=false -t "$DESTINATION" /workspace/`,
-		`buildah push --tls-verify=false --creds "$HARBOR_USER:$HARBOR_PASS" \` +
-			` --digestfile=/tmp/digest.txt "$DESTINATION" docker://"$DESTINATION"`,
+		`buildah push --tls-verify=false --creds "$HARBOR_USER:$HARBOR_PASS" --digestfile=/tmp/digest.txt "$DESTINATION"`,
 		`printf 'BUILD_DIGEST=%s\n' "$(cat /tmp/digest.txt)"`,
 	}, "\n")
 

@@ -175,3 +175,56 @@ jobs:
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck -tags "${{ env.BUILD_TAGS }}" ./...
+
+  # ──────────────────────────────────────────────────────────────────
+  # 5. kube-slint gate (churn suppression + reconcile regression check)
+  # ──────────────────────────────────────────────────────────────────
+  slint-gate:
+    name: kube-slint Gate
+    runs-on: [self-hosted, linux, podbridge5]
+    needs: [build]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+          cache: true
+
+      - name: Ensure CGo system dependencies
+        run: |
+          if [ -x /usr/bin/dnf ]; then
+            sudo /usr/bin/dnf install -y --enablerepo=powertools \
+              gpgme-devel libassuan-devel device-mapper-devel \
+              libseccomp-devel pkgconf-pkg-config
+          elif [ -x /usr/bin/apt-get ]; then
+            sudo /usr/bin/apt-get update -q
+            sudo /usr/bin/apt-get install -y --no-install-recommends \
+              libgpgme-dev libassuan-dev libbtrfs-dev \
+              libdevmapper-dev libseccomp-dev pkg-config
+          else
+            echo "Unsupported package manager" >&2; exit 1
+          fi
+
+      - name: Build NodeVault binary
+        run: go build -tags "${{ env.BUILD_TAGS }}" -o bin/nodevault ./cmd/controlplane/...
+
+      - name: Run kube-slint gate (churn + regression)
+        run: |
+          go test \
+            -tags "slint ${{ env.BUILD_TAGS }}" \
+            -timeout 120s \
+            -v \
+            -run TestNodeVaultSlintGate \
+            ./test/slint/...
+        env:
+          NODEVAULT_BIN: bin/nodevault
+
+      - name: Upload SLI artifacts
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: slint-${{ github.run_id }}
+          path: |
+            artifacts/sli-summary*.json
+          retention-days: 14

@@ -18,6 +18,7 @@ import (
 
 	"github.com/HeaInSeo/NodeVault/pkg/catalog"
 	"github.com/HeaInSeo/NodeVault/pkg/index"
+	"github.com/HeaInSeo/NodeVault/pkg/metrics"
 	"github.com/HeaInSeo/NodeVault/pkg/oras"
 	"github.com/HeaInSeo/NodeVault/pkg/validate"
 )
@@ -118,10 +119,12 @@ func (s *Service) BuildAndRegister(req *nfv1.BuildRequest, stream grpc.ServerStr
 
 	_, digest, err := s.builder.Build(ctx, req.DockerfileContent, destination)
 	if err != nil {
+		metrics.BuildFailureTotal.Add(1)
 		_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_FAILED, err.Error())
 		return fmt.Errorf("image build: %w", err)
 	}
 
+	metrics.BuildSuccessTotal.Add(1)
 	slog.Info("image build succeeded", "destination", destination, "digest", digest)
 	_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_PUSH_SUCCEEDED, "image pushed to "+destination)
 

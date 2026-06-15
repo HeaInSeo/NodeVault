@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/HeaInSeo/NodeVault/pkg/index"
+	"github.com/HeaInSeo/NodeVault/pkg/metrics"
 )
 
 // RegistryChecker is the interface for checking artifact state in the OCI registry.
@@ -159,7 +160,9 @@ func (r *Reconciler) RunFastLoop(ctx context.Context, fastInterval time.Duration
 			case <-ticker.C:
 				if err := r.FastRun(ctx); err != nil && ctx.Err() == nil {
 					fmt.Printf("reconcile: fast loop error: %v\n", err)
+					metrics.ReconcileErrorTotal.Add(1)
 				}
+				metrics.ReconcileFastTotal.Add(1)
 			}
 		}
 	}()
@@ -178,7 +181,9 @@ func (r *Reconciler) RunSlowLoop(ctx context.Context, slowInterval time.Duration
 			case <-ticker.C:
 				if err := r.SlowRun(ctx); err != nil && ctx.Err() == nil {
 					fmt.Printf("reconcile: slow loop error: %v\n", err)
+					metrics.ReconcileErrorTotal.Add(1)
 				}
+				metrics.ReconcileSlowTotal.Add(1)
 			}
 		}
 	}()

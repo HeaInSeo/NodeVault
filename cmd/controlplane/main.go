@@ -25,6 +25,7 @@ import (
 	"github.com/HeaInSeo/NodeVault/pkg/catalog"
 	"github.com/HeaInSeo/NodeVault/pkg/catalogrest"
 	"github.com/HeaInSeo/NodeVault/pkg/index"
+	"github.com/HeaInSeo/NodeVault/pkg/metrics"
 	"github.com/HeaInSeo/NodeVault/pkg/ping"
 	"github.com/HeaInSeo/NodeVault/pkg/policy"
 	"github.com/HeaInSeo/NodeVault/pkg/reconcile"
@@ -107,6 +108,8 @@ func run() int {
 	slog.SetDefault(logger)
 
 	rc := loadRuntimeConfig()
+
+	metrics.StartServer(os.Getenv("NODEVAULT_METRICS_ADDR"))
 
 	// Log startup configuration for observability.
 	kubeConfigMode := "kubeconfig_file"

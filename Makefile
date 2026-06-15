@@ -1,6 +1,6 @@
 .PHONY: fmt lint lint-fix lint-config golangci-lint test test-integration test-integration-infralab \
         deploy-infralab undeploy-infralab build push-image vendor \
-        proto coverage vuln clean all deploy-seoy
+        proto coverage vuln slint clean all deploy-seoy
 
 LOCALBIN      ?= $(CURDIR)/bin
 GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
@@ -164,6 +164,12 @@ coverage:
 vuln:
 	go install golang.org/x/vuln/cmd/govulncheck@latest
 	govulncheck -tags "$(BUILDTAGS)" ./...
+
+# ── kube-slint gate (churn suppression + reconcile regression) ────────────────
+# 사전 조건: make build (bin/nodevault 존재해야 함)
+slint: build
+	NODEVAULT_BIN=bin/nodevault \
+	go test -tags "slint $(BUILDTAGS)" -timeout 120s -v -run TestNodeVaultSlintGate ./test/slint/...
 
 # ── 정리 ──────────────────────────────────────────────────────────────────────
 clean:

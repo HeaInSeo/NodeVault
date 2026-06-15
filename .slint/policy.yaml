@@ -1,0 +1,31 @@
+schema_version: "slint.policy.v1"
+
+# NodeVault kube-slint gate policy.
+#
+# Purpose:
+#   - Churn suppression: reconcile loop must not run more than 15 times in a 25-second window.
+#   - Regression detection: reconcile errors must be zero; build failures must be zero.
+#   - Liveness check: reconcile loop must run at least once per window.
+#
+# Measurement window: 25s with NODEVAULT_FAST_RECONCILE=5s (~5 ticks expected).
+
+thresholds:
+  - name: reconcile_fast_liveness
+    metric: reconcile_fast_delta
+    operator: ">="
+    value: 1
+
+  - name: reconcile_churn_guard
+    metric: reconcile_fast_delta
+    operator: "<="
+    value: 15
+
+  - name: reconcile_zero_errors
+    metric: reconcile_error_delta
+    operator: "=="
+    value: 0
+
+  - name: build_zero_failures
+    metric: build_failure_delta
+    operator: "=="
+    value: 0

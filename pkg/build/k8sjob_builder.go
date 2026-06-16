@@ -16,6 +16,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -32,6 +33,13 @@ const (
 	buildsNamespace     = "nodevault-builds"
 	defaultBuilderImage = "quay.io/buildah/stable:v1.37.1"
 	buildJobTimeout     = 15 * time.Minute
+
+	// defaultNanBinaryPath is where the nan (node-artifact-runtime) static binary
+	// is expected to live inside the NodeVault container image, unless overridden.
+	defaultNanBinaryPath = "/opt/nodevault/bin/nan"
+
+	// nanImagePath is the path nan is injected to inside every built tool image.
+	nanImagePath = "/usr/local/bin/nan"
 )
 
 var buildJobTTL = int32(300)
@@ -45,6 +53,15 @@ type K8sJobBuilder struct {
 	builderImage string
 	harborUser   string
 	harborPass   string
+
+	// nanBinaryPath is the path to the nan static binary on the host/NodeVault
+	// container image, read into the build ConfigMap and copied into every
+	// built tool image at nanImagePath. Configurable via NODEVAULT_NAN_BINARY.
+	nanBinaryPath string
+
+	// nanVersion identifies the injected nan binary, recorded on ToolBuildRecord.
+	// Configurable via NODEVAULT_NAN_VERSION; resolved once at construction time.
+	nanVersion string
 }
 
 // newK8sJobBuilder creates a K8sJobBuilder using incluster SA token or local kubeconfig.
@@ -76,24 +93,53 @@ func newK8sJobBuilder(runtimeMode string) (*K8sJobBuilder, error) {
 		img = defaultBuilderImage
 	}
 
+	nanBinaryPath := os.Getenv("NODEVAULT_NAN_BINARY")
+	if nanBinaryPath == "" {
+		nanBinaryPath = defaultNanBinaryPath
+	}
+
 	return &K8sJobBuilder{
-		kube:         kube,
-		builderImage: img,
-		harborUser:   os.Getenv("HARBOR_USER"),
-		harborPass:   os.Getenv("HARBOR_PASS"),
+		kube:          kube,
+		builderImage:  img,
+		harborUser:    os.Getenv("HARBOR_USER"),
+		harborPass:    os.Getenv("HARBOR_PASS"),
+		nanBinaryPath: nanBinaryPath,
+		nanVersion:    resolveNanVersion(nanBinaryPath),
 	}, nil
 }
 
+// resolveNanVersion determines the version of the nan binary that will be injected
+// into built tool images. It first tries `<nanBinaryPath> version` (nan supports a
+// "version" subcommand printing e.g. "v0.1.5"); if the binary is missing or the
+// command fails (common in dev/test environments without nan installed), it falls
+// back to the NODEVAULT_NAN_VERSION env var, then to "" (best-effort, non-fatal —
+// ToolBuildRecord.NanVersion is simply left blank).
+func resolveNanVersion(nanBinaryPath string) string {
+	if out, err := exec.Command(nanBinaryPath, "version").Output(); err == nil {
+		if v := strings.TrimSpace(string(out)); v != "" {
+			return v
+		}
+	}
+	return os.Getenv("NODEVAULT_NAN_VERSION")
+}
+
 // Build submits a K8s Job that builds and pushes the image, then returns the digest.
+// The image's final stage always has the nan (node-artifact-runtime) binary copied
+// to nanImagePath, regardless of the caller-supplied Dockerfile content.
 func (b *K8sJobBuilder) Build(
 	ctx context.Context, dockerfileContent, outputRef string,
-) (imageID, digest string, err error) {
+) (imageID, digest, nanVersion string, err error) {
 	suffix := fmt.Sprintf("%x", time.Now().UnixNano())[:8]
 	jobName := "nvbuild-" + suffix
 	cmName := "nvbuild-df-" + suffix
 
 	if ensureErr := b.ensureNamespace(ctx); ensureErr != nil {
-		return "", "", fmt.Errorf("k8s-job builder: ensure namespace: %w", ensureErr)
+		return "", "", "", fmt.Errorf("k8s-job builder: ensure namespace: %w", ensureErr)
+	}
+
+	nanBytes, nanErr := os.ReadFile(b.nanBinaryPath)
+	if nanErr != nil {
+		return "", "", "", fmt.Errorf("k8s-job builder: read nan binary %q: %w", b.nanBinaryPath, nanErr)
 	}
 
 	cm := &corev1.ConfigMap{
@@ -102,10 +148,11 @@ func (b *K8sJobBuilder) Build(
 			Namespace: buildsNamespace,
 			Labels:    map[string]string{"app": "nodevault-builder"},
 		},
-		Data: map[string]string{"Dockerfile": dockerfileContent},
+		Data:       map[string]string{"Dockerfile": injectNanCopyStep(dockerfileContent)},
+		BinaryData: map[string][]byte{"nan": nanBytes},
 	}
 	if _, cmErr := b.kube.CoreV1().ConfigMaps(buildsNamespace).Create(ctx, cm, metav1.CreateOptions{}); cmErr != nil {
-		return "", "", fmt.Errorf("k8s-job builder: create dockerfile configmap: %w", cmErr)
+		return "", "", "", fmt.Errorf("k8s-job builder: create dockerfile configmap: %w", cmErr)
 	}
 	defer func() {
 		bg := context.Background()
@@ -114,7 +161,7 @@ func (b *K8sJobBuilder) Build(
 
 	job := b.buildJob(jobName, cmName, outputRef)
 	if _, jobErr := b.kube.BatchV1().Jobs(buildsNamespace).Create(ctx, job, metav1.CreateOptions{}); jobErr != nil {
-		return "", "", fmt.Errorf("k8s-job builder: create build job: %w", jobErr)
+		return "", "", "", fmt.Errorf("k8s-job builder: create build job: %w", jobErr)
 	}
 	defer func() {
 		bg := context.Background()
@@ -122,14 +169,43 @@ func (b *K8sJobBuilder) Build(
 		_ = b.kube.BatchV1().Jobs(buildsNamespace).Delete(bg, jobName, metav1.DeleteOptions{PropagationPolicy: &pp})
 	}()
 
-	slog.Info("k8s build job created", "job", jobName, "destination", outputRef)
+	slog.Info("k8s build job created", "job", jobName, "destination", outputRef, "nan_version", b.nanVersion)
 
 	digest, err = b.waitAndCollectDigest(ctx, jobName)
 	if err != nil {
-		return "", "", fmt.Errorf("k8s-job builder: %w", err)
+		return "", "", "", fmt.Errorf("k8s-job builder: %w", err)
 	}
 	slog.Info("k8s build job complete", "job", jobName, "digest", digest)
-	return jobName, digest, nil
+	return jobName, digest, b.nanVersion, nil
+}
+
+// injectNanCopyStep appends a COPY+RUN step to the final build stage of dockerfileContent
+// so the nan binary (mounted into the build context at /workspace/nan via ConfigMap
+// BinaryData) ends up at nanImagePath in every built tool image. The step is inserted
+// right after the last "FROM" line, so it always lands in the final stage of a
+// multi-stage build rather than an intermediate builder stage.
+func injectNanCopyStep(dockerfileContent string) string {
+	lines := strings.Split(dockerfileContent, "\n")
+	lastFrom := -1
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "FROM ") || strings.TrimSpace(line) == "FROM" {
+			lastFrom = i
+		}
+	}
+	nanStep := []string{
+		"COPY nan " + nanImagePath,
+		"RUN chmod +x " + nanImagePath,
+	}
+	if lastFrom == -1 {
+		// No FROM found (malformed Dockerfile) — fall back to prepending; buildah
+		// will surface the real error to the caller via the build job failure.
+		return strings.Join(append(nanStep, lines...), "\n")
+	}
+	out := make([]string, 0, len(lines)+len(nanStep))
+	out = append(out, lines[:lastFrom+1]...)
+	out = append(out, nanStep...)
+	out = append(out, lines[lastFrom+1:]...)
+	return strings.Join(out, "\n")
 }
 
 // buildJob constructs the K8s Job spec for the buildah build+push step.

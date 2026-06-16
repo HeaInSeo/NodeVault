@@ -11,7 +11,10 @@ import (
 )
 
 const (
-	schemaVersion   = 1
+	// schemaVersion 2 adds ResolvedToolSpecs, ToolBuildRecords, and ToolImageRecords.
+	// Files written under schema version 1 omit these fields; load() treats an
+	// absent field as an empty slice, so no migration step is required.
+	schemaVersion   = 2
 	defaultIndexDir = "assets/index"
 	indexFileName   = "vault-index.json"
 )
@@ -206,6 +209,154 @@ func (s *Store) All() ([]Entry, error) {
 
 	out := make([]Entry, len(s.idx.Entries))
 	copy(out, s.idx.Entries)
+	return out, nil
+}
+
+// ── ResolvedToolSpec ──────────────────────────────────────────────────────────
+
+// AppendResolvedToolSpec adds a new resolved tool spec to the index.
+// Returns an error if an entry with the same ToolSpecDigest already exists.
+func (s *Store) AppendResolvedToolSpec(r ResolvedToolSpec) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if r.ToolSpecDigest == "" {
+		return errors.New("index: ToolSpecDigest must not be empty")
+	}
+	for i := range s.idx.ResolvedToolSpecs {
+		if s.idx.ResolvedToolSpecs[i].ToolSpecDigest == r.ToolSpecDigest {
+			return fmt.Errorf("index: resolved tool spec %q already exists", r.ToolSpecDigest)
+		}
+	}
+	if r.ResolvedAt.IsZero() {
+		r.ResolvedAt = time.Now().UTC()
+	}
+	s.idx.ResolvedToolSpecs = append(s.idx.ResolvedToolSpecs, r)
+	return s.save()
+}
+
+// GetResolvedToolSpecByDigest returns the resolved tool spec with the given ToolSpecDigest.
+// Returns ErrNotFound if no such entry exists.
+func (s *Store) GetResolvedToolSpecByDigest(toolSpecDigest string) (ResolvedToolSpec, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for i := range s.idx.ResolvedToolSpecs {
+		if s.idx.ResolvedToolSpecs[i].ToolSpecDigest == toolSpecDigest {
+			return s.idx.ResolvedToolSpecs[i], nil
+		}
+	}
+	return ResolvedToolSpec{}, fmt.Errorf("%w: tool_spec_digest=%q", ErrNotFound, toolSpecDigest)
+}
+
+// ListResolvedToolSpecs returns a snapshot of all resolved tool specs.
+func (s *Store) ListResolvedToolSpecs() ([]ResolvedToolSpec, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]ResolvedToolSpec, len(s.idx.ResolvedToolSpecs))
+	copy(out, s.idx.ResolvedToolSpecs)
+	return out, nil
+}
+
+// ── ToolBuildRecord ───────────────────────────────────────────────────────────
+
+// AppendToolBuildRecord adds a new build record to the index.
+// Returns an error if a record with the same BuildID already exists.
+func (s *Store) AppendToolBuildRecord(r ToolBuildRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if r.BuildID == "" {
+		return errors.New("index: BuildID must not be empty")
+	}
+	for i := range s.idx.ToolBuildRecords {
+		if s.idx.ToolBuildRecords[i].BuildID == r.BuildID {
+			return fmt.Errorf("index: tool build record %q already exists", r.BuildID)
+		}
+	}
+	s.idx.ToolBuildRecords = append(s.idx.ToolBuildRecords, r)
+	return s.save()
+}
+
+// GetToolBuildRecordByBuildID returns the build record with the given BuildID.
+// Returns ErrNotFound if no such record exists.
+func (s *Store) GetToolBuildRecordByBuildID(buildID string) (ToolBuildRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for i := range s.idx.ToolBuildRecords {
+		if s.idx.ToolBuildRecords[i].BuildID == buildID {
+			return s.idx.ToolBuildRecords[i], nil
+		}
+	}
+	return ToolBuildRecord{}, fmt.Errorf("%w: build_id=%q", ErrNotFound, buildID)
+}
+
+// ListToolBuildRecordsByToolSpecDigest returns all build records for the given ToolSpecDigest.
+// Returns an empty slice (not an error) if none match.
+func (s *Store) ListToolBuildRecordsByToolSpecDigest(toolSpecDigest string) ([]ToolBuildRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var out []ToolBuildRecord
+	for i := range s.idx.ToolBuildRecords {
+		if s.idx.ToolBuildRecords[i].ToolSpecDigest == toolSpecDigest {
+			out = append(out, s.idx.ToolBuildRecords[i])
+		}
+	}
+	return out, nil
+}
+
+// ── ToolImageRecord ───────────────────────────────────────────────────────────
+
+// AppendToolImageRecord adds a new image record to the index.
+// Returns an error if a record with the same ImageDigest already exists.
+func (s *Store) AppendToolImageRecord(r ToolImageRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if r.ImageDigest == "" {
+		return errors.New("index: ImageDigest must not be empty")
+	}
+	for i := range s.idx.ToolImageRecords {
+		if s.idx.ToolImageRecords[i].ImageDigest == r.ImageDigest {
+			return fmt.Errorf("index: tool image record %q already exists", r.ImageDigest)
+		}
+	}
+	if r.PushedAt.IsZero() {
+		r.PushedAt = time.Now().UTC()
+	}
+	s.idx.ToolImageRecords = append(s.idx.ToolImageRecords, r)
+	return s.save()
+}
+
+// GetToolImageRecordByDigest returns the image record with the given ImageDigest.
+// Returns ErrNotFound if no such record exists.
+func (s *Store) GetToolImageRecordByDigest(imageDigest string) (ToolImageRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for i := range s.idx.ToolImageRecords {
+		if s.idx.ToolImageRecords[i].ImageDigest == imageDigest {
+			return s.idx.ToolImageRecords[i], nil
+		}
+	}
+	return ToolImageRecord{}, fmt.Errorf("%w: image_digest=%q", ErrNotFound, imageDigest)
+}
+
+// ListToolImageRecordsByBuildID returns all image records for the given BuildID.
+// Returns an empty slice (not an error) if none match.
+func (s *Store) ListToolImageRecordsByBuildID(buildID string) ([]ToolImageRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var out []ToolImageRecord
+	for i := range s.idx.ToolImageRecords {
+		if s.idx.ToolImageRecords[i].BuildID == buildID {
+			out = append(out, s.idx.ToolImageRecords[i])
+		}
+	}
 	return out, nil
 }
 

@@ -12,9 +12,11 @@ import (
 // Builder builds and pushes a container image from Dockerfile content.
 // outputRef is the full destination reference, e.g. "harbor.example.com/myimage:latest".
 // Build builds the image, pushes it to the registry, and returns the remote digest
-// as reported by the registry after push.
+// as reported by the registry after push. nanVersion is the version of the nan
+// (node-artifact-runtime) binary injected into the image, or "" if the backend
+// does not inject nan (e.g. podbridge5Builder, disabledBuilder).
 type Builder interface {
-	Build(ctx context.Context, dockerfileContent, outputRef string) (imageID, digest string, err error)
+	Build(ctx context.Context, dockerfileContent, outputRef string) (imageID, digest, nanVersion string, err error)
 	Close() error
 }
 
@@ -26,8 +28,8 @@ var ErrBuildBackendDisabled = errors.New("build backend disabled in incluster sp
 // without initializing podbridge5 / container storage.
 type disabledBuilder struct{}
 
-func (disabledBuilder) Build(_ context.Context, _, _ string) (imageID, digest string, err error) {
-	return "", "", ErrBuildBackendDisabled
+func (disabledBuilder) Build(_ context.Context, _, _ string) (imageID, digest, nanVersion string, err error) {
+	return "", "", "", ErrBuildBackendDisabled
 }
 
 func (disabledBuilder) Close() error { return nil }
@@ -46,14 +48,16 @@ func newPodbridge5Builder() (Builder, error) {
 	return &podbridge5Builder{store: store}, nil
 }
 
+// Build does not inject nan; podbridge5Builder is a legacy/local backend predating
+// the nan injection requirement. nanVersion is always returned empty.
 func (b *podbridge5Builder) Build(
 	ctx context.Context, dockerfileContent, outputRef string,
-) (imageID, remoteDigest string, err error) {
+) (imageID, remoteDigest, nanVersion string, err error) {
 	imageID, remoteDigest, err = podbridge5.BuildAndPushDockerfileContent(ctx, b.store, dockerfileContent, outputRef)
 	if err != nil {
-		return "", "", fmt.Errorf("build and push image: %w", err)
+		return "", "", "", fmt.Errorf("build and push image: %w", err)
 	}
-	return imageID, remoteDigest, nil
+	return imageID, remoteDigest, "", nil
 }
 
 func (b *podbridge5Builder) Close() error {

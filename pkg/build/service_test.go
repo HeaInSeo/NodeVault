@@ -2,12 +2,15 @@ package build
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/metadata"
 
+	"github.com/HeaInSeo/NodeVault/pkg/index"
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
@@ -48,15 +51,16 @@ func (f *fakeStream) kindsSent() []nfv1.BuildEventKind {
 // ─── mockBuilder ─────────────────────────────────────────────────────────────
 
 type mockBuilder struct {
-	imageID string
-	digest  string
-	err     error
+	imageID    string
+	digest     string
+	nanVersion string
+	err        error
 }
 
 func (m *mockBuilder) Build(
 	_ context.Context, _, _ string,
-) (imageID, digest string, err error) {
-	return m.imageID, m.digest, m.err
+) (imageID, digest, nanVersion string, err error) {
+	return m.imageID, m.digest, m.nanVersion, m.err
 }
 
 func (m *mockBuilder) Close() error {
@@ -190,6 +194,131 @@ func TestBuildAndRegister_BuilderError_JobCreatedFirst(t *testing.T) {
 	if kinds[0] != nfv1.BuildEventKind_BUILD_EVENT_KIND_JOB_CREATED {
 		t.Errorf("first event: got %v, want JOB_CREATED", kinds[0])
 	}
+}
+
+// ─── ToolBuildRecord / ToolImageRecord index recording ───────────────────────
+
+// TestBuildAndRegister_BuilderError_RecordsFailedToolBuildRecord verifies that a
+// build failure is recorded as a ToolBuildRecord with Success=false and a
+// FailureReason, completing Sprint 1's "BuildAndRegister 후 Index에 조회됨" goal
+// for the failure path.
+func TestBuildAndRegister_BuilderError_RecordsFailedToolBuildRecord(t *testing.T) {
+	store, err := index.NewAt(t.TempDir())
+	if err != nil {
+		t.Fatalf("index.NewAt: %v", err)
+	}
+	svc := &Service{
+		builder:    &mockBuilder{err: fmt.Errorf("image build backend: exec format error")},
+		indexStore: store,
+	}
+	stream := newFakeStream()
+	req := &nfv1.BuildRequest{RequestId: "req-fail-001", ToolName: "test-tool"}
+
+	if err := svc.BuildAndRegister(req, stream); err == nil {
+		t.Fatal("expected error from BuildAndRegister")
+	}
+
+	builds, lerr := store.ListToolBuildRecordsByToolSpecDigest("")
+	if lerr != nil {
+		t.Fatalf("ListToolBuildRecordsByToolSpecDigest: %v", lerr)
+	}
+	// ToolSpecDigest is not wired yet (Sprint 1 scope), so failed records carry "".
+	if len(builds) != 1 {
+		t.Fatalf("expected 1 ToolBuildRecord, got %d", len(builds))
+	}
+	if builds[0].Success {
+		t.Error("Success: got true, want false")
+	}
+	if builds[0].FailureReason == "" {
+		t.Error("FailureReason should be populated")
+	}
+	if !strings.HasPrefix(builds[0].BuildID, "req-fail-001-") {
+		t.Errorf("BuildID: got %q, want prefix %q", builds[0].BuildID, "req-fail-001-")
+	}
+}
+
+// TestRecordBuildSuccess_WritesToolBuildRecordAndToolImageRecord verifies the
+// pkg/build → pkg/index integration point in isolation from the L3/L4 validator,
+// which requires a live Kubernetes client and is out of scope for this unit test.
+func TestRecordBuildSuccess_WritesToolBuildRecordAndToolImageRecord(t *testing.T) {
+	store, err := index.NewAt(t.TempDir())
+	if err != nil {
+		t.Fatalf("index.NewAt: %v", err)
+	}
+	svc := &Service{builder: &mockBuilder{}, indexStore: store}
+
+	startedAt := mustParseTime(t, "2026-06-15T00:00:00Z")
+	svc.recordBuildSuccess("build-xyz", startedAt, "sha256:imgdigest", "harbor.example.com/library/tool:latest", "v0.1.5")
+
+	rec, gerr := store.GetToolBuildRecordByBuildID("build-xyz")
+	if gerr != nil {
+		t.Fatalf("GetToolBuildRecordByBuildID: %v", gerr)
+	}
+	if !rec.Success {
+		t.Error("Success: got false, want true")
+	}
+	if rec.ImageDigest != "sha256:imgdigest" {
+		t.Errorf("ImageDigest: got %q", rec.ImageDigest)
+	}
+	if rec.NanVersion != "v0.1.5" {
+		t.Errorf("NanVersion: got %q, want %q", rec.NanVersion, "v0.1.5")
+	}
+	if rec.Backend != "podbridge5" {
+		t.Errorf("Backend: got %q, want podbridge5 (default mockBuilder type)", rec.Backend)
+	}
+
+	img, ierr := store.GetToolImageRecordByDigest("sha256:imgdigest")
+	if ierr != nil {
+		t.Fatalf("GetToolImageRecordByDigest: %v", ierr)
+	}
+	if img.BuildID != "build-xyz" {
+		t.Errorf("BuildID: got %q, want build-xyz", img.BuildID)
+	}
+	if img.ImageRef != "harbor.example.com/library/tool:latest" {
+		t.Errorf("ImageRef: got %q", img.ImageRef)
+	}
+}
+
+// TestRecordBuildFailure_WritesFailedToolBuildRecord verifies recordBuildFailure
+// in isolation.
+func TestRecordBuildFailure_WritesFailedToolBuildRecord(t *testing.T) {
+	store, err := index.NewAt(t.TempDir())
+	if err != nil {
+		t.Fatalf("index.NewAt: %v", err)
+	}
+	svc := &Service{builder: &mockBuilder{}, indexStore: store}
+
+	startedAt := mustParseTime(t, "2026-06-15T00:00:00Z")
+	svc.recordBuildFailure("build-failed-1", startedAt, errors.New("kaniko exited 1"))
+
+	rec, gerr := store.GetToolBuildRecordByBuildID("build-failed-1")
+	if gerr != nil {
+		t.Fatalf("GetToolBuildRecordByBuildID: %v", gerr)
+	}
+	if rec.Success {
+		t.Error("Success: got true, want false")
+	}
+	if rec.FailureReason != "kaniko exited 1" {
+		t.Errorf("FailureReason: got %q", rec.FailureReason)
+	}
+}
+
+// TestRecordBuildSuccess_NilIndexStore_NoOp verifies that recording is a safe
+// no-op when no Store is wired (e.g. NewDisabledService).
+func TestRecordBuildSuccess_NilIndexStore_NoOp(t *testing.T) {
+	svc := &Service{builder: &mockBuilder{}}
+	// Must not panic.
+	svc.recordBuildSuccess("build-noop", mustParseTime(t, "2026-06-15T00:00:00Z"), "sha256:x", "ref", "v0.1.5")
+	svc.recordBuildFailure("build-noop-2", mustParseTime(t, "2026-06-15T00:00:00Z"), errors.New("err"))
+}
+
+func mustParseTime(t *testing.T, s string) time.Time {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		t.Fatalf("time.Parse(%q): %v", s, err)
+	}
+	return parsed
 }
 
 // ─── disabled backend ─────────────────────────────────────────────────────────

@@ -112,18 +112,26 @@ func (s *Service) BuildAndRegister(req *nfv1.BuildRequest, stream grpc.ServerStr
 
 	destination := fmt.Sprintf("%s/library/%s:latest", registryAddr(), sanitizeName(req.ToolName))
 
+	// buildID identifies this single build execution for ToolBuildRecord/ToolImageRecord.
+	// Derived from RequestId + start time to reduce collision risk across retries that
+	// reuse the same RequestId (see risk note in service.go doc comment).
+	buildStartedAt := time.Now().UTC()
+	buildID := fmt.Sprintf("%s-%d", req.RequestId, buildStartedAt.UnixNano())
+
 	// ── L2: image build + push ───────────────────────────────────────────────────
 
 	_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_JOB_CREATED, "image build starting: "+destination)
 	slog.Info("image build starting", "destination", destination)
 
-	_, digest, err := s.builder.Build(ctx, req.DockerfileContent, destination)
+	_, digest, nanVersion, err := s.builder.Build(ctx, req.DockerfileContent, destination)
 	if err != nil {
 		metrics.BuildFailureTotal.Add(1)
 		_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_FAILED, err.Error())
+		s.recordBuildFailure(buildID, buildStartedAt, err)
 		return fmt.Errorf("image build: %w", err)
 	}
 
+	s.recordBuildSuccess(buildID, buildStartedAt, digest, destination, nanVersion)
 	metrics.BuildSuccessTotal.Add(1)
 	slog.Info("image build succeeded", "destination", destination, "digest", digest)
 	_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_PUSH_SUCCEEDED, "image pushed to "+destination)
@@ -218,6 +226,72 @@ func (s *Service) BuildAndRegister(req *nfv1.BuildRequest, stream grpc.ServerStr
 	_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_SUCCEEDED,
 		fmt.Sprintf("build+register complete: %s@%s", destination, digest))
 	return nil
+}
+
+// recordBuildFailure persists a failed ToolBuildRecord to the index, if a Store is wired.
+// Best-effort: a recording failure is logged but never fails the RPC.
+func (s *Service) recordBuildFailure(buildID string, startedAt time.Time, buildErr error) {
+	if s.indexStore == nil {
+		return
+	}
+	rec := index.ToolBuildRecord{
+		BuildID:       buildID,
+		Backend:       s.builderBackendName(),
+		StartedAt:     startedAt,
+		CompletedAt:   time.Now().UTC(),
+		Success:       false,
+		FailureReason: buildErr.Error(),
+	}
+	if err := s.indexStore.AppendToolBuildRecord(rec); err != nil {
+		slog.Warn("index: failed to record failed ToolBuildRecord", "build_id", buildID, "err", err)
+	}
+}
+
+// recordBuildSuccess persists a successful ToolBuildRecord and the corresponding
+// ToolImageRecord to the index, if a Store is wired. Best-effort: a recording
+// failure is logged but never fails the RPC — the image has already been pushed.
+// nanVersion is the version of the nan (node-artifact-runtime) binary injected into
+// the build by the active Builder; "" if the backend does not inject nan.
+func (s *Service) recordBuildSuccess(buildID string, startedAt time.Time, digest, imageRef, nanVersion string) {
+	if s.indexStore == nil {
+		return
+	}
+	completedAt := time.Now().UTC()
+	rec := index.ToolBuildRecord{
+		BuildID:     buildID,
+		ImageDigest: digest,
+		NanVersion:  nanVersion,
+		Backend:     s.builderBackendName(),
+		StartedAt:   startedAt,
+		CompletedAt: completedAt,
+		Success:     true,
+	}
+	if err := s.indexStore.AppendToolBuildRecord(rec); err != nil {
+		slog.Warn("index: failed to record successful ToolBuildRecord", "build_id", buildID, "err", err)
+	}
+
+	img := index.ToolImageRecord{
+		ImageDigest: digest,
+		ImageRef:    imageRef,
+		BuildID:     buildID,
+		PushedAt:    completedAt,
+	}
+	if err := s.indexStore.AppendToolImageRecord(img); err != nil {
+		slog.Warn("index: failed to record ToolImageRecord", "build_id", buildID, "image_digest", digest, "err", err)
+	}
+}
+
+// builderBackendName returns a human-readable identifier of the active build backend,
+// used to populate ToolBuildRecord.Backend.
+func (s *Service) builderBackendName() string {
+	switch s.builder.(type) {
+	case *K8sJobBuilder:
+		return "k8s-job"
+	case disabledBuilder:
+		return "disabled"
+	default:
+		return "podbridge5"
+	}
 }
 
 // sanitizeName makes a string safe for use as an image name component.

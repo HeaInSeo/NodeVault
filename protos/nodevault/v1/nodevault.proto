@@ -68,6 +68,21 @@ message ListPoliciesResponse {
 
 service BuildService {
   rpc BuildAndRegister(BuildRequest) returns (stream BuildEvent);
+  rpc ResolveToolSpec(ToolSpecRequest) returns (ResolvedToolSpecResponse);
+}
+
+message ToolSpecRequest {
+  string tool_name = 1;
+  string version = 2;
+  string raw_spec = 3;
+  int64 requested_at = 4;
+}
+
+message ResolvedToolSpecResponse {
+  string tool_spec_digest = 1;
+  string tool_name = 2;
+  string version = 3;
+  int64 resolved_at = 4;
 }
 
 message BuildRequest {

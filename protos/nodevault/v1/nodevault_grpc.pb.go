@@ -160,6 +160,7 @@ var PolicyService_ServiceDesc = grpc.ServiceDesc{
 
 const (
 	BuildService_BuildAndRegister_FullMethodName = "/nodevault.v1.BuildService/BuildAndRegister"
+	BuildService_ResolveToolSpec_FullMethodName  = "/nodevault.v1.BuildService/ResolveToolSpec"
 )
 
 // BuildServiceClient is the client API for BuildService service.
@@ -167,6 +168,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type BuildServiceClient interface {
 	BuildAndRegister(ctx context.Context, in *BuildRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BuildEvent], error)
+	ResolveToolSpec(ctx context.Context, in *ToolSpecRequest, opts ...grpc.CallOption) (*ResolvedToolSpecResponse, error)
 }
 
 type buildServiceClient struct {
@@ -196,11 +198,22 @@ func (c *buildServiceClient) BuildAndRegister(ctx context.Context, in *BuildRequ
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type BuildService_BuildAndRegisterClient = grpc.ServerStreamingClient[BuildEvent]
 
+func (c *buildServiceClient) ResolveToolSpec(ctx context.Context, in *ToolSpecRequest, opts ...grpc.CallOption) (*ResolvedToolSpecResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolvedToolSpecResponse)
+	err := c.cc.Invoke(ctx, BuildService_ResolveToolSpec_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BuildServiceServer is the server API for BuildService service.
 // All implementations must embed UnimplementedBuildServiceServer
 // for forward compatibility.
 type BuildServiceServer interface {
 	BuildAndRegister(*BuildRequest, grpc.ServerStreamingServer[BuildEvent]) error
+	ResolveToolSpec(context.Context, *ToolSpecRequest) (*ResolvedToolSpecResponse, error)
 	mustEmbedUnimplementedBuildServiceServer()
 }
 
@@ -213,6 +226,9 @@ type UnimplementedBuildServiceServer struct{}
 
 func (UnimplementedBuildServiceServer) BuildAndRegister(*BuildRequest, grpc.ServerStreamingServer[BuildEvent]) error {
 	return status.Error(codes.Unimplemented, "method BuildAndRegister not implemented")
+}
+func (UnimplementedBuildServiceServer) ResolveToolSpec(context.Context, *ToolSpecRequest) (*ResolvedToolSpecResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResolveToolSpec not implemented")
 }
 func (UnimplementedBuildServiceServer) mustEmbedUnimplementedBuildServiceServer() {}
 func (UnimplementedBuildServiceServer) testEmbeddedByValue()                      {}
@@ -246,13 +262,36 @@ func _BuildService_BuildAndRegister_Handler(srv interface{}, stream grpc.ServerS
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type BuildService_BuildAndRegisterServer = grpc.ServerStreamingServer[BuildEvent]
 
+func _BuildService_ResolveToolSpec_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ToolSpecRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BuildServiceServer).ResolveToolSpec(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BuildService_ResolveToolSpec_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BuildServiceServer).ResolveToolSpec(ctx, req.(*ToolSpecRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BuildService_ServiceDesc is the grpc.ServiceDesc for BuildService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var BuildService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "nodevault.v1.BuildService",
 	HandlerType: (*BuildServiceServer)(nil),
-	Methods:     []grpc.MethodDesc{},
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ResolveToolSpec",
+			Handler:    _BuildService_ResolveToolSpec_Handler,
+		},
+	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "BuildAndRegister",

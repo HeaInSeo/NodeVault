@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.1
 // - protoc             v7.34.1
-// source: nodevault.proto
+// source: nodevault/v1/nodevault.proto
 
 package nodevaultv1
 
@@ -155,7 +155,7 @@ var PolicyService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "nodevault.proto",
+	Metadata: "nodevault/v1/nodevault.proto",
 }
 
 const (
@@ -299,7 +299,7 @@ var BuildService_ServiceDesc = grpc.ServiceDesc{
 			ServerStreams: true,
 		},
 	},
-	Metadata: "nodevault.proto",
+	Metadata: "nodevault/v1/nodevault.proto",
 }
 
 const (
@@ -439,7 +439,7 @@ var ValidateService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "nodevault.proto",
+	Metadata: "nodevault/v1/nodevault.proto",
 }
 
 const (
@@ -693,7 +693,7 @@ var ToolRegistryService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "nodevault.proto",
+	Metadata: "nodevault/v1/nodevault.proto",
 }
 
 const (
@@ -871,7 +871,192 @@ var DataRegistryService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "nodevault.proto",
+	Metadata: "nodevault/v1/nodevault.proto",
+}
+
+const (
+	ValidationResultService_SubmitToolCheckRecord_FullMethodName = "/nodevault.v1.ValidationResultService/SubmitToolCheckRecord"
+	ValidationResultService_SubmitToolScanRecord_FullMethodName  = "/nodevault.v1.ValidationResultService/SubmitToolScanRecord"
+	ValidationResultService_ListCertifiedTools_FullMethodName    = "/nodevault.v1.ValidationResultService/ListCertifiedTools"
+)
+
+// ValidationResultServiceClient is the client API for ValidationResultService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type ValidationResultServiceClient interface {
+	// SubmitToolCheckRecord receives a L5-a functional validation result from NodeSentinel.
+	SubmitToolCheckRecord(ctx context.Context, in *ToolCheckRecordRequest, opts ...grpc.CallOption) (*SubmitRecordResponse, error)
+	// SubmitToolScanRecord receives a L5-b trivy security scan result from NodeSentinel.
+	SubmitToolScanRecord(ctx context.Context, in *ToolScanRecordRequest, opts ...grpc.CallOption) (*SubmitRecordResponse, error)
+	// ListCertifiedTools returns all active certified tool catalog entries.
+	ListCertifiedTools(ctx context.Context, in *ListCertifiedToolsRequest, opts ...grpc.CallOption) (*ListCertifiedToolsResponse, error)
+}
+
+type validationResultServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewValidationResultServiceClient(cc grpc.ClientConnInterface) ValidationResultServiceClient {
+	return &validationResultServiceClient{cc}
+}
+
+func (c *validationResultServiceClient) SubmitToolCheckRecord(ctx context.Context, in *ToolCheckRecordRequest, opts ...grpc.CallOption) (*SubmitRecordResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SubmitRecordResponse)
+	err := c.cc.Invoke(ctx, ValidationResultService_SubmitToolCheckRecord_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *validationResultServiceClient) SubmitToolScanRecord(ctx context.Context, in *ToolScanRecordRequest, opts ...grpc.CallOption) (*SubmitRecordResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SubmitRecordResponse)
+	err := c.cc.Invoke(ctx, ValidationResultService_SubmitToolScanRecord_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *validationResultServiceClient) ListCertifiedTools(ctx context.Context, in *ListCertifiedToolsRequest, opts ...grpc.CallOption) (*ListCertifiedToolsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListCertifiedToolsResponse)
+	err := c.cc.Invoke(ctx, ValidationResultService_ListCertifiedTools_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ValidationResultServiceServer is the server API for ValidationResultService service.
+// All implementations must embed UnimplementedValidationResultServiceServer
+// for forward compatibility.
+type ValidationResultServiceServer interface {
+	// SubmitToolCheckRecord receives a L5-a functional validation result from NodeSentinel.
+	SubmitToolCheckRecord(context.Context, *ToolCheckRecordRequest) (*SubmitRecordResponse, error)
+	// SubmitToolScanRecord receives a L5-b trivy security scan result from NodeSentinel.
+	SubmitToolScanRecord(context.Context, *ToolScanRecordRequest) (*SubmitRecordResponse, error)
+	// ListCertifiedTools returns all active certified tool catalog entries.
+	ListCertifiedTools(context.Context, *ListCertifiedToolsRequest) (*ListCertifiedToolsResponse, error)
+	mustEmbedUnimplementedValidationResultServiceServer()
+}
+
+// UnimplementedValidationResultServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedValidationResultServiceServer struct{}
+
+func (UnimplementedValidationResultServiceServer) SubmitToolCheckRecord(context.Context, *ToolCheckRecordRequest) (*SubmitRecordResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SubmitToolCheckRecord not implemented")
+}
+func (UnimplementedValidationResultServiceServer) SubmitToolScanRecord(context.Context, *ToolScanRecordRequest) (*SubmitRecordResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SubmitToolScanRecord not implemented")
+}
+func (UnimplementedValidationResultServiceServer) ListCertifiedTools(context.Context, *ListCertifiedToolsRequest) (*ListCertifiedToolsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListCertifiedTools not implemented")
+}
+func (UnimplementedValidationResultServiceServer) mustEmbedUnimplementedValidationResultServiceServer() {
+}
+func (UnimplementedValidationResultServiceServer) testEmbeddedByValue() {}
+
+// UnsafeValidationResultServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to ValidationResultServiceServer will
+// result in compilation errors.
+type UnsafeValidationResultServiceServer interface {
+	mustEmbedUnimplementedValidationResultServiceServer()
+}
+
+func RegisterValidationResultServiceServer(s grpc.ServiceRegistrar, srv ValidationResultServiceServer) {
+	// If the following call panics, it indicates UnimplementedValidationResultServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&ValidationResultService_ServiceDesc, srv)
+}
+
+func _ValidationResultService_SubmitToolCheckRecord_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ToolCheckRecordRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ValidationResultServiceServer).SubmitToolCheckRecord(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ValidationResultService_SubmitToolCheckRecord_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ValidationResultServiceServer).SubmitToolCheckRecord(ctx, req.(*ToolCheckRecordRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ValidationResultService_SubmitToolScanRecord_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ToolScanRecordRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ValidationResultServiceServer).SubmitToolScanRecord(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ValidationResultService_SubmitToolScanRecord_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ValidationResultServiceServer).SubmitToolScanRecord(ctx, req.(*ToolScanRecordRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ValidationResultService_ListCertifiedTools_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListCertifiedToolsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ValidationResultServiceServer).ListCertifiedTools(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ValidationResultService_ListCertifiedTools_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ValidationResultServiceServer).ListCertifiedTools(ctx, req.(*ListCertifiedToolsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// ValidationResultService_ServiceDesc is the grpc.ServiceDesc for ValidationResultService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var ValidationResultService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "nodevault.v1.ValidationResultService",
+	HandlerType: (*ValidationResultServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "SubmitToolCheckRecord",
+			Handler:    _ValidationResultService_SubmitToolCheckRecord_Handler,
+		},
+		{
+			MethodName: "SubmitToolScanRecord",
+			Handler:    _ValidationResultService_SubmitToolScanRecord_Handler,
+		},
+		{
+			MethodName: "ListCertifiedTools",
+			Handler:    _ValidationResultService_ListCertifiedTools_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "nodevault/v1/nodevault.proto",
 }
 
 const (
@@ -973,5 +1158,5 @@ var PingService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "nodevault.proto",
+	Metadata: "nodevault/v1/nodevault.proto",
 }

@@ -144,15 +144,155 @@ type ToolImageRecord struct {
 	Platform string `json:"platform,omitempty"`
 }
 
+// ObservedIoProfile records the actual I/O file observations from a functional validation run.
+type ObservedIoProfile struct {
+	Inputs  []PortObservation `json:"inputs,omitempty"`
+	Outputs []PortObservation `json:"outputs,omitempty"`
+}
+
+// PortObservation is a single port's observed file state.
+type PortObservation struct {
+	Port      string `json:"port"`
+	FileCount int    `json:"file_count"`
+	NonEmpty  bool   `json:"non_empty"`
+}
+
+// ObservedResourceProfile records resource usage observed during a validation run.
+type ObservedResourceProfile struct {
+	PeakCPUMillicores int64 `json:"peak_cpu_millicores,omitempty"`
+	PeakMemoryMiB     int64 `json:"peak_memory_mib,omitempty"`
+	DurationSeconds   int64 `json:"duration_seconds,omitempty"`
+	DiskReadMiB       int64 `json:"disk_read_mib,omitempty"`
+	DiskWriteMiB      int64 `json:"disk_write_mib,omitempty"`
+	Timeout           bool  `json:"timeout,omitempty"`
+	TimeoutSeconds    int64 `json:"timeout_seconds,omitempty"`
+}
+
+// ContractCheck records whether the tool met its declared I/O contract.
+type ContractCheck struct {
+	AllOutputsPresent bool   `json:"all_outputs_present"`
+	Result            string `json:"result"` // "pass" | "fail" | "unknown"
+}
+
+// ToolCheckRecord is the result of a NodeSentinel L5-a functional validation run.
+// Primary key: CheckID. Foreign keys: ToolSpecDigest, ImageDigest.
+type ToolCheckRecord struct {
+	CheckID string `json:"check_id"`
+
+	// ToolSpecDigest references ResolvedToolSpec.
+	ToolSpecDigest string `json:"tool_spec_digest,omitempty"`
+	ImageDigest    string `json:"image_digest"`
+	ToolName       string `json:"tool_name,omitempty"`
+	Version        string `json:"version,omitempty"`
+
+	// ValidationStatus: "succeeded" | "infra_failed" | "app_failed"
+	ValidationStatus string `json:"validation_status"`
+
+	// ValidationHash is the content-deterministic fingerprint of a successful run.
+	// Empty when ValidationStatus != "succeeded".
+	ValidationHash string `json:"validation_hash,omitempty"`
+
+	Command  string `json:"command,omitempty"`
+	ExitCode int    `json:"exit_code,omitempty"`
+
+	ObservedIoProfile       *ObservedIoProfile       `json:"observed_io_profile,omitempty"`
+	ObservedResourceProfile *ObservedResourceProfile `json:"observed_resource_profile,omitempty"`
+	ContractCheck           *ContractCheck           `json:"contract_check,omitempty"`
+
+	FailureReason string    `json:"failure_reason,omitempty"`
+	CheckedAt     time.Time `json:"checked_at"`
+}
+
+// ToolScanRecord is the result of a NodeSentinel L5-b trivy security scan.
+// Primary key: ScanID. Foreign key: ImageDigest.
+type ToolScanRecord struct {
+	ScanID      string `json:"scan_id"`
+	ImageDigest string `json:"image_digest"`
+	ToolName    string `json:"tool_name,omitempty"`
+
+	Scanner        string `json:"scanner,omitempty"`         // "trivy"
+	ScannerVersion string `json:"scanner_version,omitempty"` // "0.50.0"
+	Source         string `json:"source,omitempty"`          // "trivy-operator" | "not-available"
+
+	CriticalCount int `json:"critical_count"`
+	HighCount     int `json:"high_count"`
+	MediumCount   int `json:"medium_count"`
+	LowCount      int `json:"low_count"`
+
+	// PolicyMode: "record_only" | "gate_critical" | "gate_high"
+	PolicyMode string `json:"policy_mode"`
+	// PolicyResult: "pass" | "warning" | "blocked"
+	PolicyResult string `json:"policy_result"`
+
+	ScannedAt time.Time `json:"scanned_at"`
+}
+
+// PromotionStatus reflects a CertifiedToolImageRecord's lifecycle.
+type PromotionStatus string
+
+const (
+	PromotionActive     PromotionStatus = "active"
+	PromotionSuperseded PromotionStatus = "superseded"
+	PromotionRetracted  PromotionStatus = "retracted"
+)
+
+// CertifiedToolImageRecord is the NodeVault decision record after reviewing
+// a ToolCheckRecord + ToolScanRecord. It is the source of truth for whether a
+// given imageDigest is safe to expose via NodePalette.
+// Primary key: ImageDigest.
+type CertifiedToolImageRecord struct {
+	ImageDigest    string `json:"image_digest"`
+	ToolSpecDigest string `json:"tool_spec_digest,omitempty"`
+	ToolName       string `json:"tool_name,omitempty"`
+	Version        string `json:"version,omitempty"`
+	CasHash        string `json:"cas_hash,omitempty"`
+
+	PromotionStatus PromotionStatus `json:"promotion_status"`
+	CertifiedAt     time.Time       `json:"certified_at"`
+
+	// Reference IDs to the Records that drove this decision.
+	CheckID string `json:"check_id,omitempty"`
+	ScanID  string `json:"scan_id,omitempty"`
+}
+
+// ToolFunctionCatalogEntry is the stable catalog projection of a certified tool,
+// ready for NodePalette to serve to pipeline builders.
+// Primary key: CasHash.
+type ToolFunctionCatalogEntry struct {
+	CasHash     string `json:"cas_hash"`
+	ToolName    string `json:"tool_name,omitempty"`
+	Version     string `json:"version,omitempty"`
+	StableRef   string `json:"stable_ref,omitempty"`
+	ImageDigest string `json:"image_digest,omitempty"`
+	ImageRef    string `json:"image_ref,omitempty"`
+
+	DisplayLabel       string   `json:"display_label,omitempty"`
+	DisplayDescription string   `json:"display_description,omitempty"`
+	DisplayCategory    string   `json:"display_category,omitempty"`
+	DisplayTags        []string `json:"display_tags,omitempty"`
+
+	PromotionStatus PromotionStatus `json:"promotion_status"`
+	CertifiedAt     time.Time       `json:"certified_at"`
+
+	// ValidationHash from the ToolCheckRecord that drove this entry.
+	ValidationHash string `json:"validation_hash,omitempty"`
+}
+
 // indexFile is the on-disk representation of the index.
+// schemaVersion 3 adds ToolCheckRecords, ToolScanRecords,
+// CertifiedToolImageRecords, and ToolFunctionCatalogEntries.
 type indexFile struct {
 	SchemaVersion int     `json:"schema_version"`
 	Entries       []Entry `json:"entries"`
 
-	// ResolvedToolSpecs, ToolBuildRecords, and ToolImageRecords are additive sections
-	// introduced in schema version 2. Older files omit these fields; load() treats
-	// missing fields as empty slices (zero value of a nil slice), so no migration is needed.
+	// schema_version >= 2: typed build records
 	ResolvedToolSpecs []ResolvedToolSpec `json:"resolved_tool_specs,omitempty"`
 	ToolBuildRecords  []ToolBuildRecord  `json:"tool_build_records,omitempty"`
 	ToolImageRecords  []ToolImageRecord  `json:"tool_image_records,omitempty"`
+
+	// schema_version >= 3: validation records + certification
+	ToolCheckRecords           []ToolCheckRecord          `json:"tool_check_records,omitempty"`
+	ToolScanRecords            []ToolScanRecord           `json:"tool_scan_records,omitempty"`
+	CertifiedToolImageRecords  []CertifiedToolImageRecord `json:"certified_tool_image_records,omitempty"`
+	ToolFunctionCatalogEntries []ToolFunctionCatalogEntry `json:"tool_function_catalog_entries,omitempty"`
 }

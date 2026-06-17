@@ -24,6 +24,7 @@ import (
 	"github.com/HeaInSeo/NodeVault/pkg/build"
 	"github.com/HeaInSeo/NodeVault/pkg/catalog"
 	"github.com/HeaInSeo/NodeVault/pkg/catalogrest"
+	"github.com/HeaInSeo/NodeVault/pkg/certification"
 	"github.com/HeaInSeo/NodeVault/pkg/index"
 	"github.com/HeaInSeo/NodeVault/pkg/metrics"
 	"github.com/HeaInSeo/NodeVault/pkg/ping"
@@ -31,6 +32,7 @@ import (
 	"github.com/HeaInSeo/NodeVault/pkg/reconcile"
 	"github.com/HeaInSeo/NodeVault/pkg/registry"
 	"github.com/HeaInSeo/NodeVault/pkg/validate"
+	"github.com/HeaInSeo/NodeVault/pkg/validation"
 )
 
 const (
@@ -173,16 +175,22 @@ func run() int {
 	dataRegistrySvc := catalog.NewDataRegistryService(dataCat, indexStore)
 	nfv1.RegisterDataRegistryServiceServer(srv, dataRegistrySvc)
 
-	// Reconcile loops + webhook
+	// Reconcile loops + webhook + validation REST
 	fastInterval := parseDuration("NODEVAULT_FAST_RECONCILE", defaultFastReconcile)
 	slowInterval := parseDuration("NODEVAULT_SLOW_RECONCILE", defaultSlowReconcile)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	rec := startBackground(ctx, indexStore, rc.webhookAddr, fastInterval, slowInterval)
+	// Certification service — shared between gRPC and REST validation paths.
+	certSvc := certification.New(indexStore)
+
+	rec := startBackground(ctx, indexStore, cat, dataCat, certSvc, rc.webhookAddr, fastInterval, slowInterval)
 
 	registerBuildService(srv, &rc, validateSvc, registrySvc, indexStore, rec)
+
+	// ValidationResultService — receives L5-a/L5-b results from NodeSentinel via gRPC.
+	nfv1.RegisterValidationResultServiceServer(srv, validation.New(indexStore, certSvc))
 
 	//nolint:gosec // listener address is normalized before being attached to logs.
 	slog.Info("NodeVault gRPC server starting", "addr", sanitizeLogValue(lis.Addr().String()))
@@ -228,23 +236,30 @@ func registerBuildService(
 	}
 }
 
-// startBackground initializes the reconcile loops and the Harbor webhook HTTP server.
-// Both run as background goroutines; ctx cancellation stops the reconcile loops.
+// startBackground initializes the reconcile loops and the combined webhook+validation
+// HTTP server. Both run as background goroutines; ctx cancellation stops the reconcile loops.
 // Returns the Reconciler so callers can trigger targeted reconciles (e.g. BuildService).
 func startBackground(
-	ctx context.Context, store *index.Store, webhookAddr string, fastInterval, slowInterval time.Duration,
+	ctx context.Context,
+	store *index.Store,
+	cat *catalog.Catalog,
+	dataCat *catalog.DataCatalog,
+	certSvc *certification.Service,
+	webhookAddr string,
+	fastInterval, slowInterval time.Duration,
 ) *reconcile.Reconciler {
 	rec := reconcile.New(store, registry.NewHarborChecker())
 	rec.RunFastLoop(ctx, fastInterval)
 	rec.RunSlowLoop(ctx, slowInterval)
 	slog.Info("reconcile loops started", "fast", fastInterval, "slow", slowInterval)
 
-	webhookMux := http.NewServeMux()
+	// Single HTTP server: Harbor webhook + validation REST POST endpoints.
+	webhookMux := catalogrest.NewMuxWithCert(store, cat, dataCat, certSvc)
 	catalogrest.RegisterWebhook(webhookMux, store, rec)
 
 	go func() {
 		//nolint:gosec // webhookAddr is operator-configured (NODEVAULT_WEBHOOK_ADDR)
-		slog.Info("NodeVault webhook server starting", "addr", webhookAddr)
+		slog.Info("NodeVault webhook+validation server starting", "addr", webhookAddr)
 		webhookSrv := &http.Server{
 			Addr:         webhookAddr,
 			Handler:      webhookMux,

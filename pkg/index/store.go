@@ -11,10 +11,10 @@ import (
 )
 
 const (
-	// schemaVersion 2 adds ResolvedToolSpecs, ToolBuildRecords, and ToolImageRecords.
-	// Files written under schema version 1 omit these fields; load() treats an
-	// absent field as an empty slice, so no migration step is required.
-	schemaVersion   = 2
+	// schemaVersion 3 adds ToolCheckRecords, ToolScanRecords,
+	// CertifiedToolImageRecords, and ToolFunctionCatalogEntries.
+	// Older files omit these fields; load() treats absent fields as empty slices.
+	schemaVersion   = 3
 	defaultIndexDir = "assets/index"
 	indexFileName   = "vault-index.json"
 )
@@ -355,6 +355,197 @@ func (s *Store) ListToolImageRecordsByBuildID(buildID string) ([]ToolImageRecord
 	for i := range s.idx.ToolImageRecords {
 		if s.idx.ToolImageRecords[i].BuildID == buildID {
 			out = append(out, s.idx.ToolImageRecords[i])
+		}
+	}
+	return out, nil
+}
+
+// ── ToolCheckRecord ───────────────────────────────────────────────────────────
+
+// AppendToolCheckRecord stores a new L5-a functional validation result.
+// Returns an error if a record with the same CheckID already exists.
+func (s *Store) AppendToolCheckRecord(r ToolCheckRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if r.CheckID == "" {
+		return errors.New("index: CheckID must not be empty")
+	}
+	for i := range s.idx.ToolCheckRecords {
+		if s.idx.ToolCheckRecords[i].CheckID == r.CheckID {
+			return fmt.Errorf("index: tool check record %q already exists", r.CheckID)
+		}
+	}
+	if r.CheckedAt.IsZero() {
+		r.CheckedAt = time.Now().UTC()
+	}
+	s.idx.ToolCheckRecords = append(s.idx.ToolCheckRecords, r)
+	return s.save()
+}
+
+// GetToolCheckRecordByID returns the check record with the given CheckID.
+func (s *Store) GetToolCheckRecordByID(checkID string) (ToolCheckRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for i := range s.idx.ToolCheckRecords {
+		if s.idx.ToolCheckRecords[i].CheckID == checkID {
+			return s.idx.ToolCheckRecords[i], nil
+		}
+	}
+	return ToolCheckRecord{}, fmt.Errorf("%w: check_id=%q", ErrNotFound, checkID)
+}
+
+// ListToolCheckRecordsByImageDigest returns all check records for the given image digest.
+func (s *Store) ListToolCheckRecordsByImageDigest(imageDigest string) ([]ToolCheckRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var out []ToolCheckRecord
+	for i := range s.idx.ToolCheckRecords {
+		if s.idx.ToolCheckRecords[i].ImageDigest == imageDigest {
+			out = append(out, s.idx.ToolCheckRecords[i])
+		}
+	}
+	return out, nil
+}
+
+// ── ToolScanRecord ────────────────────────────────────────────────────────────
+
+// AppendToolScanRecord stores a new L5-b security scan result.
+// Returns an error if a record with the same ScanID already exists.
+func (s *Store) AppendToolScanRecord(r ToolScanRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if r.ScanID == "" {
+		return errors.New("index: ScanID must not be empty")
+	}
+	for i := range s.idx.ToolScanRecords {
+		if s.idx.ToolScanRecords[i].ScanID == r.ScanID {
+			return fmt.Errorf("index: tool scan record %q already exists", r.ScanID)
+		}
+	}
+	if r.ScannedAt.IsZero() {
+		r.ScannedAt = time.Now().UTC()
+	}
+	s.idx.ToolScanRecords = append(s.idx.ToolScanRecords, r)
+	return s.save()
+}
+
+// GetToolScanRecordByID returns the scan record with the given ScanID.
+func (s *Store) GetToolScanRecordByID(scanID string) (ToolScanRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for i := range s.idx.ToolScanRecords {
+		if s.idx.ToolScanRecords[i].ScanID == scanID {
+			return s.idx.ToolScanRecords[i], nil
+		}
+	}
+	return ToolScanRecord{}, fmt.Errorf("%w: scan_id=%q", ErrNotFound, scanID)
+}
+
+// ListToolScanRecordsByImageDigest returns all scan records for the given image digest.
+func (s *Store) ListToolScanRecordsByImageDigest(imageDigest string) ([]ToolScanRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var out []ToolScanRecord
+	for i := range s.idx.ToolScanRecords {
+		if s.idx.ToolScanRecords[i].ImageDigest == imageDigest {
+			out = append(out, s.idx.ToolScanRecords[i])
+		}
+	}
+	return out, nil
+}
+
+// ── CertifiedToolImageRecord ──────────────────────────────────────────────────
+
+// UpsertCertifiedToolImageRecord creates or replaces the certification record
+// for the given ImageDigest. Replaces on conflict to allow re-certification.
+func (s *Store) UpsertCertifiedToolImageRecord(r CertifiedToolImageRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if r.ImageDigest == "" {
+		return errors.New("index: ImageDigest must not be empty")
+	}
+	if r.CertifiedAt.IsZero() {
+		r.CertifiedAt = time.Now().UTC()
+	}
+	for i := range s.idx.CertifiedToolImageRecords {
+		if s.idx.CertifiedToolImageRecords[i].ImageDigest == r.ImageDigest {
+			s.idx.CertifiedToolImageRecords[i] = r
+			return s.save()
+		}
+	}
+	s.idx.CertifiedToolImageRecords = append(s.idx.CertifiedToolImageRecords, r)
+	return s.save()
+}
+
+// GetCertifiedToolImageRecord returns the certification record for the given image digest.
+func (s *Store) GetCertifiedToolImageRecord(imageDigest string) (CertifiedToolImageRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for i := range s.idx.CertifiedToolImageRecords {
+		if s.idx.CertifiedToolImageRecords[i].ImageDigest == imageDigest {
+			return s.idx.CertifiedToolImageRecords[i], nil
+		}
+	}
+	return CertifiedToolImageRecord{}, fmt.Errorf("%w: image_digest=%q", ErrNotFound, imageDigest)
+}
+
+// ListCertifiedToolImageRecords returns all certification records with the given status.
+// Pass "" to return all records.
+func (s *Store) ListCertifiedToolImageRecords(status PromotionStatus) ([]CertifiedToolImageRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var out []CertifiedToolImageRecord
+	for i := range s.idx.CertifiedToolImageRecords {
+		if status == "" || s.idx.CertifiedToolImageRecords[i].PromotionStatus == status {
+			out = append(out, s.idx.CertifiedToolImageRecords[i])
+		}
+	}
+	return out, nil
+}
+
+// ── ToolFunctionCatalogEntry ──────────────────────────────────────────────────
+
+// UpsertToolFunctionCatalogEntry creates or replaces the catalog entry for the
+// given CasHash. Replaces on conflict to allow re-certification updates.
+func (s *Store) UpsertToolFunctionCatalogEntry(e ToolFunctionCatalogEntry) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if e.CasHash == "" {
+		return errors.New("index: CasHash must not be empty")
+	}
+	if e.CertifiedAt.IsZero() {
+		e.CertifiedAt = time.Now().UTC()
+	}
+	for i := range s.idx.ToolFunctionCatalogEntries {
+		if s.idx.ToolFunctionCatalogEntries[i].CasHash == e.CasHash {
+			s.idx.ToolFunctionCatalogEntries[i] = e
+			return s.save()
+		}
+	}
+	s.idx.ToolFunctionCatalogEntries = append(s.idx.ToolFunctionCatalogEntries, e)
+	return s.save()
+}
+
+// ListToolFunctionCatalogEntries returns all catalog entries with the given promotion status.
+// Pass "" to return all entries.
+func (s *Store) ListToolFunctionCatalogEntries(status PromotionStatus) ([]ToolFunctionCatalogEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var out []ToolFunctionCatalogEntry
+	for i := range s.idx.ToolFunctionCatalogEntries {
+		if status == "" || s.idx.ToolFunctionCatalogEntries[i].PromotionStatus == status {
+			out = append(out, s.idx.ToolFunctionCatalogEntries[i])
 		}
 	}
 	return out, nil

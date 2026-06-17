@@ -1,7 +1,7 @@
 # NodeVault 배포 가이드
 
 버전: 2.0  
-갱신: 2026-04-19
+갱신: 2026-06-17
 
 ---
 
@@ -19,7 +19,7 @@ overlay/idmap 또는 fuse-overlayfs 경로는 NodeVault 기본 전환 전에 별
 | NodeVault 바이너리 (gRPC :50051, REST :8080) | seoy 호스트 직접 실행 |
 | L2 이미지 빌드 | seoy 호스트 `local-podbridge` 또는 K8s `k8s-job` |
 | L3 dry-run / L4 smoke run | K8s Job (`nodevault-smoke` namespace) |
-| Harbor | harbor.10.113.24.96.nip.io (Cilium LB VIP) |
+| Harbor | harbor.lab.local (Cilium Gateway VIP 10.113.24.96) |
 
 ---
 
@@ -27,7 +27,8 @@ overlay/idmap 또는 fuse-overlayfs 경로는 NodeVault 기본 전환 전에 별
 
 - seoy 장비 (100.123.80.48) 접근 가능
 - infra-lab 클러스터 실행 중 (multipass 또는 libvirt backend)
-- Harbor 접근 가능: `http://harbor.10.113.24.96.nip.io`
+- Harbor 접근 가능: `https://harbor.lab.local`
+- infra-lab CoreDNS에 `harbor.lab.local -> 10.113.24.96` 매핑 적용
 - `infra-lab/kubeconfig` 존재
 
 ---
@@ -41,7 +42,7 @@ L2 builder Job과 L3/L4 Job 실행에 필요한 네임스페이스와 RBAC을 �
 ```bash
 make deploy-infralab
 # 적용 대상:
-#   deploy/00-namespaces.yaml — nodevault-system, nodevault-smoke 네임스페이스
+#   deploy/00-namespaces.yaml — nodevault-system, nodevault-builds, nodevault-smoke 네임스페이스
 #   deploy/02-rbac.yaml       — ServiceAccount + ClusterRole (ConfigMap/Job/log 권한)
 ```
 
@@ -56,7 +57,7 @@ make build    # bin/nodevault 생성
 
 ```bash
 KUBECONFIG=/path/to/infra-lab/kubeconfig \
-NODEVAULT_REGISTRY_ADDR=harbor.10.113.24.96.nip.io \
+NODEVAULT_REGISTRY_ADDR=harbor.lab.local \
 ./bin/nodevault
 ```
 
@@ -67,10 +68,13 @@ gRPC는 `:50051`, NodePalette REST는 `:8080`에서 수신 대기한다.
 podbridge5가 Harbor에 push하려면 seoy 호스트에서 먼저 로그인해야 한다.
 
 ```bash
-podman login harbor.10.113.24.96.nip.io
+podman login harbor.lab.local --tls-verify=false
 # Username: admin
 # Password: <harbor-admin-password>
 ```
+
+`k8s-job` builder는 `NODEVAULT_BUILDER_PUSH_ADDR=harbor.lab.local`을 사용한다.
+컨테이너 이미지 참조와 builder Pod 내부 push 경로를 Harbor Gateway hostname으로 통일한다.
 
 ---
 
@@ -78,7 +82,7 @@ podman login harbor.10.113.24.96.nip.io
 
 | 파일 | 상태 | 설명 |
 |------|------|------|
-| `deploy/00-namespaces.yaml` | **사용 중** | nodevault-system, nodevault-smoke 네임스페이스 |
+| `deploy/00-namespaces.yaml` | **사용 중** | nodevault-system, nodevault-builds, nodevault-smoke 네임스페이스 |
 | `deploy/02-rbac.yaml` | **사용 중** | ServiceAccount + ClusterRole (L2 builder, L3/L4 Job 권한) |
 | `deploy/03-nodevault.yaml` | 선택 | NodeVault K8s Deployment 템플릿 (`k8s-job` 백엔드) |
 | `deploy/04-grpcroute.yaml` | 미사용 (미래용) | Cilium GRPCRoute (in-cluster 전환 시 사용) |
@@ -101,9 +105,10 @@ NodePalette REST:    http://100.123.80.48:8080
 
 ## seoy → Harbor 라우트
 
-seoy 호스트에서 Harbor Cilium LB VIP에 접근하려면 라우트가 필요하다.
+seoy 호스트에서 Harbor Cilium Gateway VIP에 접근하려면 라우트와 hosts 항목이 필요하다.
 
 ```bash
+echo "10.113.24.96 harbor.lab.local" | sudo tee -a /etc/hosts
 ip route add 10.113.24.96/32 via 10.113.24.254
 ```
 

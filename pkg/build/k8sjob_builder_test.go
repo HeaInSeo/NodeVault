@@ -134,6 +134,21 @@ func TestBuildJob_EnvVars(t *testing.T) {
 	}
 }
 
+func TestBuildJob_RewritesBuilderPushRegistry(t *testing.T) {
+	t.Setenv("NODEVAULT_BUILDER_PUSH_ADDR", "harbor.lab.local")
+	b := newTestK8sJobBuilder()
+	job := b.buildJob("j", "cm", "harbor.example.com/library/mytool:latest")
+	c := job.Spec.Template.Spec.Containers[0]
+
+	envMap := make(map[string]string, len(c.Env))
+	for _, e := range c.Env {
+		envMap[e.Name] = e.Value
+	}
+	if envMap["DESTINATION"] != "harbor.lab.local/library/mytool:latest" {
+		t.Fatalf("unexpected builder destination: %q", envMap["DESTINATION"])
+	}
+}
+
 func TestBuildJob_Volumes(t *testing.T) {
 	b := newTestK8sJobBuilder()
 	job := b.buildJob("j", "my-cm", "dest")
@@ -164,13 +179,14 @@ func TestBuildJob_BuildScript(t *testing.T) {
 	required := []string{
 		"set -e",
 		"CONTAINERS_STORAGE_CONF=/tmp/storage.conf",
-		"buildah bud",
-		"buildah push",
+		"buildah --registries-conf /tmp/registries.conf bud",
+		"buildah --registries-conf /tmp/registries.conf push",
 		"BUILD_DIGEST=",
 		"--digestfile",
 		"--isolation chroot",
 		"--runtime crun",
 		`driver = "vfs"`,
+		"CONTAINERS_REGISTRIES_CONF=/tmp/registries.conf",
 	}
 	for _, s := range required {
 		if !strings.Contains(script, s) {
@@ -185,15 +201,12 @@ func TestInjectNanCopyStep_SingleStage(t *testing.T) {
 	df := "FROM alpine:3.19\nRUN echo hello\n"
 	got := injectNanCopyStep(df)
 
-	if !strings.Contains(got, "COPY nan "+nanImagePath) {
+	if !strings.Contains(got, "COPY --chmod=0755 nan "+nanImagePath) {
 		t.Errorf("missing nan COPY step:\n%s", got)
-	}
-	if !strings.Contains(got, "RUN chmod +x "+nanImagePath) {
-		t.Errorf("missing nan chmod step:\n%s", got)
 	}
 	// COPY step must come after FROM and before the original RUN.
 	fromIdx := strings.Index(got, "FROM alpine")
-	copyIdx := strings.Index(got, "COPY nan")
+	copyIdx := strings.Index(got, "COPY --chmod=0755 nan")
 	runIdx := strings.Index(got, "RUN echo hello")
 	if !(fromIdx < copyIdx && copyIdx < runIdx) {
 		t.Errorf("nan COPY step not placed between FROM and original RUN:\n%s", got)
@@ -210,7 +223,7 @@ CMD ["/app"]
 	got := injectNanCopyStep(df)
 
 	lastFromIdx := strings.LastIndex(got, "FROM alpine:3.19")
-	copyIdx := strings.Index(got, "COPY nan "+nanImagePath)
+	copyIdx := strings.Index(got, "COPY --chmod=0755 nan "+nanImagePath)
 	cmdIdx := strings.Index(got, `CMD ["/app"]`)
 
 	if copyIdx < lastFromIdx {
@@ -220,7 +233,7 @@ CMD ["/app"]
 		t.Errorf("nan COPY step landed after CMD:\n%s", got)
 	}
 	// Must not appear in the builder stage (only one COPY nan occurrence expected).
-	if n := strings.Count(got, "COPY nan "+nanImagePath); n != 1 {
+	if n := strings.Count(got, "COPY --chmod=0755 nan "+nanImagePath); n != 1 {
 		t.Errorf("expected exactly 1 nan COPY step, got %d:\n%s", n, got)
 	}
 }
@@ -229,10 +242,10 @@ func TestInjectNanCopyStep_NoFrom_PrependsStep(t *testing.T) {
 	df := "RUN echo no-from-here\n"
 	got := injectNanCopyStep(df)
 
-	if !strings.Contains(got, "COPY nan "+nanImagePath) {
+	if !strings.Contains(got, "COPY --chmod=0755 nan "+nanImagePath) {
 		t.Errorf("missing nan COPY step:\n%s", got)
 	}
-	copyIdx := strings.Index(got, "COPY nan")
+	copyIdx := strings.Index(got, "COPY --chmod=0755 nan")
 	runIdx := strings.Index(got, "RUN echo no-from-here")
 	if copyIdx > runIdx {
 		t.Errorf("nan COPY step should precede content when no FROM found:\n%s", got)
@@ -485,7 +498,7 @@ func TestBuild_InjectsNanBinaryIntoConfigMap(t *testing.T) {
 	if string(capturedCM.BinaryData["nan"]) != string(nanContents) {
 		t.Errorf("ConfigMap BinaryData[nan] = %q, want %q", capturedCM.BinaryData["nan"], nanContents)
 	}
-	if !strings.Contains(capturedCM.Data["Dockerfile"], "COPY nan "+nanImagePath) {
+	if !strings.Contains(capturedCM.Data["Dockerfile"], "COPY --chmod=0755 nan "+nanImagePath) {
 		t.Errorf("ConfigMap Dockerfile missing nan COPY step:\n%s", capturedCM.Data["Dockerfile"])
 	}
 	if b.nanVersion != "v0.1.5-test" {

@@ -7,17 +7,18 @@
 
 ## 실행 환경
 
-**NodeVault는 seoy 호스트 바이너리로 실행한다 (K8s Pod 아님).**
+**기본 배포는 seoy 호스트 바이너리 실행이다.**
 
-podbridge5(buildah)의 rootless 제약으로 인해 K8s Pod 안에서 overlay 파일시스템 마운트가
-불가능하다. 이미지 빌드(L2)는 NodeVault 바이너리가 직접 in-process로 처리하며,
-L3/L4 dry-run / smoke run만 kubeconfig를 통해 K8s Job으로 제출한다.
+NodeVault는 이제 `NODEVAULT_BUILD_BACKEND=k8s-job` 경로에서 Kubernetes
+`hostUsers:false` user namespace Buildah Job을 제출할 수 있다. 현재 infra-lab에서는
+overlay storage가 mount propagation 단계에서 막혀 `vfs`를 기본 smoke 경로로 사용한다.
+overlay/idmap 또는 fuse-overlayfs 경로는 NodeVault 기본 전환 전에 별도 검증이 필요하다.
 
 | 구분 | 실행 위치 |
 |------|-----------|
 | NodeVault 바이너리 (gRPC :50051, REST :8080) | seoy 호스트 직접 실행 |
-| L2 이미지 빌드 (podbridge5 in-process) | seoy 호스트 (NodeVault 프로세스 내) |
-| L3 dry-run / L4 smoke run | K8s Job (nodevault-smoke namespace) |
+| L2 이미지 빌드 | seoy 호스트 `local-podbridge` 또는 K8s `k8s-job` |
+| L3 dry-run / L4 smoke run | K8s Job (`nodevault-smoke` namespace) |
 | Harbor | harbor.10.113.24.96.nip.io (Cilium LB VIP) |
 
 ---
@@ -35,13 +36,13 @@ L3/L4 dry-run / smoke run만 kubeconfig를 통해 K8s Job으로 제출한다.
 
 ### 1. K8s 지원 리소스 배포 (최초 1회 또는 클러스터 재설치 후)
 
-L3/L4 Job 실행에 필요한 네임스페이스와 RBAC만 배포한다.
+L2 builder Job과 L3/L4 Job 실행에 필요한 네임스페이스와 RBAC을 배포한다.
 
 ```bash
 make deploy-infralab
 # 적용 대상:
 #   deploy/00-namespaces.yaml — nodevault-system, nodevault-smoke 네임스페이스
-#   deploy/02-rbac.yaml       — ServiceAccount + ClusterRole (Job 제출 권한)
+#   deploy/02-rbac.yaml       — ServiceAccount + ClusterRole (ConfigMap/Job/log 권한)
 ```
 
 ### 2. NodeVault 바이너리 빌드
@@ -78,8 +79,8 @@ podman login harbor.10.113.24.96.nip.io
 | 파일 | 상태 | 설명 |
 |------|------|------|
 | `deploy/00-namespaces.yaml` | **사용 중** | nodevault-system, nodevault-smoke 네임스페이스 |
-| `deploy/02-rbac.yaml` | **사용 중** | ServiceAccount + ClusterRole (L3/L4 Job 권한) |
-| `deploy/03-nodevault.yaml` | 미사용 (미래용) | NodeVault K8s Deployment 템플릿 (in-cluster 전환 시 사용) |
+| `deploy/02-rbac.yaml` | **사용 중** | ServiceAccount + ClusterRole (L2 builder, L3/L4 Job 권한) |
+| `deploy/03-nodevault.yaml` | 선택 | NodeVault K8s Deployment 템플릿 (`k8s-job` 백엔드) |
 | `deploy/04-grpcroute.yaml` | 미사용 (미래용) | Cilium GRPCRoute (in-cluster 전환 시 사용) |
 
 > `03-nodevault.yaml`과 `04-grpcroute.yaml`은 현재 적용하지 않는다.

@@ -3,6 +3,7 @@ package build
 import (
 	"context"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -19,7 +20,7 @@ import (
 func newTestK8sJobBuilder() *K8sJobBuilder {
 	return &K8sJobBuilder{
 		kube:         fake.NewSimpleClientset(),
-		builderImage: "quay.io/buildah/stable:v1.37.1",
+		builderImage: defaultBuilderImage,
 		harborUser:   "testuser",
 		harborPass:   "testpass",
 		nanVersion:   "v0.1.5-test",
@@ -53,12 +54,43 @@ func TestBuildJob_ContainerImage(t *testing.T) {
 	}
 }
 
-func TestBuildJob_Privileged(t *testing.T) {
+func TestBuildJob_UserNamespaceSecurityContext(t *testing.T) {
 	b := newTestK8sJobBuilder()
 	job := b.buildJob("j", "cm", "dest")
+	podSpec := job.Spec.Template.Spec
 	c := job.Spec.Template.Spec.Containers[0]
-	if c.SecurityContext == nil || c.SecurityContext.Privileged == nil || !*c.SecurityContext.Privileged {
-		t.Error("container must be privileged (buildah requirement)")
+	if podSpec.HostUsers == nil || *podSpec.HostUsers {
+		t.Fatal("pod must set hostUsers=false for Kubernetes user namespaces")
+	}
+	if podSpec.AutomountServiceAccountToken == nil || *podSpec.AutomountServiceAccountToken {
+		t.Fatal("builder pod should not automount service account tokens")
+	}
+	if podSpec.SecurityContext == nil ||
+		podSpec.SecurityContext.SeccompProfile == nil ||
+		podSpec.SecurityContext.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Fatal("pod must use RuntimeDefault seccomp")
+	}
+	if c.SecurityContext == nil {
+		t.Fatal("container security context must be set")
+	}
+	if c.SecurityContext.Privileged == nil || *c.SecurityContext.Privileged {
+		t.Fatal("container must not be privileged")
+	}
+	if c.SecurityContext.AllowPrivilegeEscalation == nil || *c.SecurityContext.AllowPrivilegeEscalation {
+		t.Fatal("container must disable privilege escalation")
+	}
+	if c.SecurityContext.RunAsUser == nil || *c.SecurityContext.RunAsUser != 0 {
+		t.Fatalf("container must run as root inside the pod user namespace, got %v", c.SecurityContext.RunAsUser)
+	}
+	if c.SecurityContext.Capabilities == nil {
+		t.Fatal("container capabilities must be set")
+	}
+	if !reflect.DeepEqual(c.SecurityContext.Capabilities.Drop, []corev1.Capability{"ALL"}) {
+		t.Fatalf("unexpected dropped capabilities: %v", c.SecurityContext.Capabilities.Drop)
+	}
+	wantCaps := []corev1.Capability{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETFCAP", "SYS_CHROOT"}
+	if !reflect.DeepEqual(c.SecurityContext.Capabilities.Add, wantCaps) {
+		t.Fatalf("unexpected added capabilities: got %v want %v", c.SecurityContext.Capabilities.Add, wantCaps)
 	}
 }
 
@@ -85,6 +117,15 @@ func TestBuildJob_EnvVars(t *testing.T) {
 		{"DESTINATION", dest},
 		{"HARBOR_USER", "testuser"},
 		{"HARBOR_PASS", "testpass"},
+		{"CACHE_REF", ""},
+		{"_CONTAINERS_USERNS_CONFIGURED", "done"},
+		{"_CONTAINERS_ROOTLESS_UID", "1000"},
+		{"_CONTAINERS_ROOTLESS_GID", "1000"},
+		{"BUILDAH_ISOLATION", "chroot"},
+		{"BUILDAH_RUNTIME", "crun"},
+		{"HOME", "/tmp/buildhome"},
+		{"XDG_CONFIG_HOME", "/tmp/buildhome/.config"},
+		{"XDG_DATA_HOME", "/tmp/buildhome/.local/share"},
 	}
 	for _, tc := range tests {
 		if envMap[tc.key] != tc.want {
@@ -107,6 +148,9 @@ func TestBuildJob_Volumes(t *testing.T) {
 	if _, ok := volumes["container-storage"]; !ok {
 		t.Error("missing container-storage volume")
 	}
+	if _, ok := volumes["tmp"]; !ok {
+		t.Error("missing tmp volume")
+	}
 	if ws := volumes["workspace"]; ws.ConfigMap == nil || ws.ConfigMap.Name != "my-cm" {
 		t.Errorf("workspace volume: want ConfigMap=my-cm, got %+v", ws)
 	}
@@ -119,10 +163,14 @@ func TestBuildJob_BuildScript(t *testing.T) {
 
 	required := []string{
 		"set -e",
+		"CONTAINERS_STORAGE_CONF=/tmp/storage.conf",
 		"buildah bud",
 		"buildah push",
 		"BUILD_DIGEST=",
 		"--digestfile",
+		"--isolation chroot",
+		"--runtime crun",
+		`driver = "vfs"`,
 	}
 	for _, s := range required {
 		if !strings.Contains(script, s) {

@@ -1,14 +1,15 @@
 package build
 
-// k8sjob_builder.go — Option A spike: run podbridge5/buildah as a K8s Job.
+// k8sjob_builder.go — run Buildah as a K8s user-namespace Job.
 //
-// NodeVault Pod spawns a privileged K8s Job (quay.io/buildah/stable), waits for
+// NodeVault Pod spawns a Buildah K8s Job (quay.io/buildah/stable), waits for
 // completion, reads the pushed digest from pod logs, and returns it to the caller.
 //
-// Spike constraints (must NOT be carried forward to production):
+// Current lab constraints:
 //   - --tls-verify=false (Harbor self-signed cert)
-//   - privileged: true  (required for overlay/fuse-overlayfs inside K8s)
 //   - Harbor creds in env vars (not mounted from a properly managed secret)
+//   - vfs storage driver by default; overlay is still blocked by mount propagation
+//     in the current K8s user namespace lab.
 
 import (
 	"context"
@@ -31,8 +32,9 @@ import (
 
 const (
 	buildsNamespace     = "nodevault-builds"
-	defaultBuilderImage = "quay.io/buildah/stable:v1.37.1"
-	buildJobTimeout     = 15 * time.Minute
+	defaultBuilderImage = "quay.io/buildah/stable:latest"
+	buildJobTimeout     = 2 * time.Hour
+	buildStorageDriver  = "vfs"
 
 	// defaultNanBinaryPath is where the nan (node-artifact-runtime) static binary
 	// is expected to live inside the NodeVault container image, unless overridden.
@@ -45,7 +47,8 @@ const (
 var buildJobTTL = int32(300)
 var buildJobBackoff = int32(0)
 var buildJobDeadline = int64(buildJobTimeout.Seconds())
-var privileged = true
+var boolFalse = false
+var int64Zero = int64(0)
 
 // K8sJobBuilder implements Builder by submitting a K8s Job that runs buildah.
 type K8sJobBuilder struct {
@@ -211,12 +214,34 @@ func injectNanCopyStep(dockerfileContent string) string {
 // buildJob constructs the K8s Job spec for the buildah build+push step.
 func (b *K8sJobBuilder) buildJob(jobName, cmName, destination string) *batchv1.Job {
 	// Shell script: build image, push to registry, print digest marker to stdout.
+	storageDriver := os.Getenv("NODEVAULT_BUILDER_STORAGE_DRIVER")
+	if storageDriver == "" {
+		storageDriver = buildStorageDriver
+	}
+	cacheRef := os.Getenv("NODEVAULT_BUILDER_CACHE_REF")
+	cacheArgs := ""
+	if cacheRef != "" {
+		cacheArgs = ` --cache-from "$CACHE_REF" --cache-to "$CACHE_REF"`
+	}
+
 	buildScript := strings.Join([]string{
 		"set -e",
-		`buildah bud --tls-verify=false -t "$DESTINATION" /workspace/`,
-		`buildah push --tls-verify=false --creds "$HARBOR_USER:$HARBOR_PASS" --digestfile=/tmp/digest.txt "$DESTINATION"`,
+		`mkdir -p "$HOME/.config" "$XDG_DATA_HOME/containers" /home/build/.config /home/build/.local/share/containers /tmp/run/containers/storage /storage/.local/share/containers/storage`,
+		`chown -R 1000:1000 /home/build`,
+		`cat > /tmp/storage.conf <<EOF`,
+		`[storage]`,
+		`driver = "` + storageDriver + `"`,
+		`runroot = "/tmp/run/containers/storage"`,
+		`graphroot = "/storage/.local/share/containers/storage"`,
+		`rootless_storage_path = "/storage/.local/share/containers/storage"`,
+		`[storage.options.pull_options]`,
+		`enable_partial_images = "true"`,
+		`EOF`,
+		`CONTAINERS_STORAGE_CONF=/tmp/storage.conf buildah bud --tls-verify=false --isolation chroot --runtime crun --layers` + cacheArgs + ` -t "$DESTINATION" /workspace/`,
+		`CONTAINERS_STORAGE_CONF=/tmp/storage.conf buildah push --tls-verify=false --creds "$HARBOR_USER:$HARBOR_PASS" --digestfile=/tmp/digest.txt "$DESTINATION"`,
 		`printf 'BUILD_DIGEST=%s\n' "$(cat /tmp/digest.txt)"`,
 	}, "\n")
+	hostUsers := false
 
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -236,24 +261,38 @@ func (b *K8sJobBuilder) buildJob(jobName, cmName, destination string) *batchv1.J
 					},
 				},
 				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
+					RestartPolicy:                corev1.RestartPolicyNever,
+					AutomountServiceAccountToken: &boolFalse,
+					HostUsers:                    &hostUsers,
+					SecurityContext: &corev1.PodSecurityContext{
+						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+					},
 					Containers: []corev1.Container{
 						{
 							Name:    "builder",
 							Image:   b.builderImage,
 							Command: []string{"/bin/sh", "-c"},
 							Args:    []string{buildScript},
-							Env: []corev1.EnvVar{
+							Env: appendUserNamespaceBuildEnvironment([]corev1.EnvVar{
 								{Name: "DESTINATION", Value: destination},
 								{Name: "HARBOR_USER", Value: b.harborUser},
 								{Name: "HARBOR_PASS", Value: b.harborPass},
-							},
+								{Name: "CACHE_REF", Value: cacheRef},
+							}),
 							SecurityContext: &corev1.SecurityContext{
-								Privileged: &privileged,
+								Privileged:               &boolFalse,
+								AllowPrivilegeEscalation: &boolFalse,
+								RunAsUser:                &int64Zero,
+								RunAsGroup:               &int64Zero,
+								Capabilities: &corev1.Capabilities{
+									Drop: []corev1.Capability{"ALL"},
+									Add:  userNamespaceBuildCapabilities(),
+								},
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "workspace", MountPath: "/workspace"},
-								{Name: "container-storage", MountPath: "/var/lib/containers"},
+								{Name: "container-storage", MountPath: "/storage"},
+								{Name: "tmp", MountPath: "/tmp"},
 							},
 						},
 					},
@@ -270,11 +309,42 @@ func (b *K8sJobBuilder) buildJob(jobName, cmName, destination string) *batchv1.J
 							Name:         "container-storage",
 							VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 						},
+						{
+							Name:         "tmp",
+							VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+						},
 					},
 				},
 			},
 		},
 	}
+}
+
+// userNamespaceBuildEnv returns the environment variables required for rootless
+// buildah in user-namespace mode inside a K8s Job pod. Values are sourced from
+// podbridge5 v0.1.2 DefaultUserNamespaceBuildEnvironment() — inlined here so
+// NodeVault remains pinned to podbridge5 v0.1.1 which lacks these exports.
+func appendUserNamespaceBuildEnvironment(env []corev1.EnvVar) []corev1.EnvVar {
+	for _, kv := range [][2]string{
+		{"_CONTAINERS_USERNS_CONFIGURED", "done"},
+		{"_CONTAINERS_ROOTLESS_UID", "1000"},
+		{"_CONTAINERS_ROOTLESS_GID", "1000"},
+		{"BUILDAH_ISOLATION", "chroot"},
+		{"BUILDAH_RUNTIME", "crun"},
+		{"HOME", "/tmp/buildhome"},
+		{"XDG_CONFIG_HOME", "/tmp/buildhome/.config"},
+		{"XDG_DATA_HOME", "/tmp/buildhome/.local/share"},
+	} {
+		env = append(env, corev1.EnvVar{Name: kv[0], Value: kv[1]})
+	}
+	return env
+}
+
+// userNamespaceBuildCapabilities returns the Linux capabilities required for
+// rootless buildah in user-namespace mode. Values sourced from podbridge5 v0.1.2
+// DefaultUserNamespaceBuildCapabilities() — inlined to stay on v0.1.1.
+func userNamespaceBuildCapabilities() []corev1.Capability {
+	return []corev1.Capability{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETFCAP", "SYS_CHROOT"}
 }
 
 // waitAndCollectDigest watches the Job until Complete or Failed, then reads digest from pod logs.

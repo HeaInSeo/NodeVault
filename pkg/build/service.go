@@ -14,6 +14,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	nsv1 "github.com/HeaInSeo/NodeVault/protos/nodesentinel/v1"
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 
 	"github.com/HeaInSeo/NodeVault/pkg/catalog"
@@ -22,6 +23,15 @@ import (
 	"github.com/HeaInSeo/NodeVault/pkg/oras"
 	"github.com/HeaInSeo/NodeVault/pkg/validate"
 )
+
+// SentinelEnqueuer enqueues post-build L3/L4 validation work with NodeSentinel.
+// Implemented by *sentinelclient.Client in production; nil disables enqueueing
+// (e.g. when NodeSentinel is not deployed yet).
+type SentinelEnqueuer interface {
+	EnqueueValidationWork(
+		ctx context.Context, req *nsv1.EnqueueValidationWorkRequest,
+	) (*nsv1.EnqueueValidationWorkResponse, error)
+}
 
 // ReconcileTriggerer triggers a targeted integrity check for one artifact.
 // Implemented by *reconcile.Reconciler in production; nil disables eager reconcile.
@@ -47,6 +57,7 @@ type Service struct {
 	registry   *catalog.ToolRegistryService
 	indexStore *index.Store
 	reconciler ReconcileTriggerer // nil = no eager reconcile
+	sentinel   SentinelEnqueuer   // nil = no L3/L4 enqueue
 }
 
 // NewService creates a BuildService backed by podbridge5.
@@ -220,6 +231,38 @@ func (s *Service) BuildAndRegister(req *nfv1.BuildRequest, stream grpc.ServerStr
 					slog.Warn("eager reconcile after referrer push failed", "err", recErr)
 				}
 			}
+		}
+	}
+
+	// ── NodeSentinel: enqueue L3/L4 validation work ──────────────────────────────
+	// Non-fatal: build+registration already succeeded; enqueue failure is logged
+	// but does not fail the RPC. NodeSentinel handles its own L3/L4 asynchronously.
+	if s.sentinel != nil {
+		casHash := ""
+		if regErr == nil {
+			casHash = regResp.CasHash
+		}
+		imageRepo := destination
+		if idx := strings.LastIndex(destination, "@"); idx != -1 {
+			imageRepo = destination[:idx]
+		}
+		enqReq := &nsv1.EnqueueValidationWorkRequest{
+			ArtifactKind:     "tool",
+			ImageRepository:  imageRepo,
+			ImageDigest:      digest,
+			ToolName:         req.ToolName,
+			Version:          req.Version,
+			CasHash:          casHash,
+			RequestedActions: []string{"smoke_run"},
+		}
+		enqCtx, enqCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer enqCancel()
+		if enqResp, enqErr := s.sentinel.EnqueueValidationWork(enqCtx, enqReq); enqErr != nil {
+			slog.Warn("NodeSentinel EnqueueValidationWork failed (validation deferred)", "err", enqErr)
+			_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_LOG, "sentinel enqueue failed: "+enqErr.Error())
+		} else {
+			slog.Info("NodeSentinel job enqueued", "job_id", enqResp.JobId, "status", enqResp.Status)
+			_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_LOG, "sentinel job enqueued: "+enqResp.JobId)
 		}
 	}
 

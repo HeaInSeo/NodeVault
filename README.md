@@ -1,7 +1,7 @@
 # NodeVault
 
-관리자 UI(NodeKit)에서 `BuildRequest`를 받아 tool 이미지를 빌드·검증·등록하는 제어 플레인 서버.
-gRPC 서버 + Catalog REST API를 단일 바이너리(`bin/nodevault`)로 제공한다.
+관리자 UI(NodeKit)에서 `BuildRequest`를 받아 tool 이미지를 빌드·검증·인증·등록하는 제어 플레인 서버.
+gRPC 서버 + Catalog/Validation REST API를 단일 바이너리(`bin/nodevault`)로 제공한다.
 
 → 전체 플랫폼 구성 및 end-to-end 흐름: [docs/PLATFORM_MAP.md](docs/PLATFORM_MAP.md)
 → TrueNAS/iLO/NFS 운영 메모: [docs/TRUENAS_NFS_RUNBOOK.md](docs/TRUENAS_NFS_RUNBOOK.md)
@@ -18,17 +18,28 @@ NodeVault (이 프로젝트 — Go gRPC + REST 서버)
     │
     ├── L2: 이미지 빌드 백엔드 (NODEVAULT_BUILD_BACKEND 선택)
     │       local-podbridge  → podbridge5 in-process (seoy 호스트)
-    │       k8s-job          → K8s Job (buildah, privileged, incluster)
+    │       k8s-job          → K8s Job (buildah, userns, Harbor gateway 지원)
     │       disabled         → 빌드 없이 gRPC 서버만 기동
-    ├── L3: K8s Job dry-run (스키마 검증)
-    ├── L4: K8s smoke run (컨테이너 실행 검증)
-    ├── 등록: CAS 저장 + pkg/index append (lifecycle_phase=Active)
-    ├── Catalog REST: pkg/catalogrest (lifecycle_phase=Active만 노출)
+    ├── 등록: CAS 저장 + pkg/index append
+    ├── NodeSentinel enqueue: pkg/sentinelclient → EnqueueValidationWork gRPC
+    ├── Catalog REST: pkg/catalogrest (lifecycle_phase=Active 목록)
+    ├── Validation REST: POST /v1/validation/check-records, scan-records (L5 수신)
     └── /debug/vars: expvar 메트릭 (NODEVAULT_METRICS_ADDR, 기본 :9090)
     │
     ▼
 Harbor (harbor.10.113.24.96.nip.io)
-    └── library/<tool>:latest + digest
+    └── library/<tool>@sha256:<digest>
+
+    ▼ EnqueueValidationWork (gRPC)
+NodeSentinel (별도 서비스)
+    ├── L3: K8s Job dry-run (manifest 검증)
+    ├── L4: K8s smoke run (컨테이너 기동 확인)
+    ├── L5-a: functional validation Job → validationHash → POST /v1/validation/check-records
+    └── L5-b: trivy-operator VulnerabilityReport → POST /v1/validation/scan-records
+
+    ▼ certification.Service (NodeVault 내부)
+CertifiedToolImageRecord + ToolFunctionCatalogEntry 생성
+→ GET /v1/catalog/certified-tools (NodePalette 조회)
 ```
 
 ---
@@ -39,22 +50,43 @@ Harbor (harbor.10.113.24.96.nip.io)
 |--------|--------|------|
 | `PingService` | `pkg/ping` | 연결 확인 |
 | `PolicyService` | `pkg/policy` | DockGuard `.wasm` 번들 제공 (NodeKit L1 정책 평가) |
-| `BuildService` | `pkg/build` | L2→L3→L4→등록 전체 파이프라인 + BuildEvent 스트림 |
+| `BuildService` | `pkg/build` | L2 빌드 + 등록 + NodeSentinel enqueue; BuildEvent 스트림 |
 | `ValidateService` | `pkg/validate` | L3 dry-run / L4 smoke run (BuildService 내부 호출) |
+| `ToolRegistryService` | `pkg/catalog` | ToolDefinition CAS 저장 (gRPC write path) |
+| `DataRegistryService` | `pkg/catalog` | DataDefinition CAS 저장 (gRPC write path) |
+| `ValidationResultService` | `pkg/validation` | L5-a ToolCheckRecord / L5-b ToolScanRecord 수신 + 인증 평가 |
 
 프로토 정의: [`protos/nodevault/v1`](protos/nodevault/v1/)
 
 ---
 
-## Catalog REST API
+## REST API (`:8082`)
 
 `pkg/catalogrest`가 동일 바이너리 안에서 HTTP REST를 제공한다.
+
+### Catalog (읽기)
 
 | 엔드포인트 | 설명 |
 |------------|------|
 | `GET /api/v1/tools` | `lifecycle_phase=Active` tool 목록 |
-| `GET /api/v1/data` | `lifecycle_phase=Active` data 목록 |
 | `GET /api/v1/tools/{casHash}` | casHash 기준 단건 조회 |
+| `GET /api/v1/data` | `lifecycle_phase=Active` data 목록 |
+| `GET /v1/catalog/certified-tools` | 인증된 tool 팔레트 (PromotionStatus=active) |
+| `GET /v1/catalog/certified-tools/{casHash}` | 인증 tool 단건 조회 |
+
+### Validation (NodeSentinel → NodeVault)
+
+| 엔드포인트 | 설명 |
+|------------|------|
+| `POST /v1/validation/check-records` | L5-a ToolCheckRecord 수신 → certification 평가 |
+| `POST /v1/validation/scan-records` | L5-b ToolScanRecord 수신 → certification 재평가 |
+
+### Webhook
+
+| 엔드포인트 | 설명 |
+|------------|------|
+| `POST /harbor/events` | Harbor push 이벤트 수신 → reconcile 트리거 |
+| `GET /healthz` | 헬스체크 → `200 ok` |
 
 ---
 
@@ -73,8 +105,6 @@ curl http://localhost:9090/debug/vars
 | `nodevault_reconcile_error_total` | 리콘사일 루프 오류 횟수 |
 | `nodevault_build_success_total` | L2 이미지 빌드 성공 횟수 |
 | `nodevault_build_failure_total` | L2 이미지 빌드 실패 횟수 |
-
-헬스체크: `GET /healthz` → `200 ok`
 
 ---
 
@@ -106,14 +136,16 @@ NODEVAULT_BUILD_BACKEND=disabled ./bin/nodevault
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
 | `NODEVAULT_ADDR` | `:50051` | gRPC 서버 바인딩 주소 |
-| `NODEVAULT_WEBHOOK_ADDR` | `:8082` | Harbor webhook 수신 주소 |
+| `NODEVAULT_WEBHOOK_ADDR` | `:8082` | Catalog/Validation REST + webhook 수신 주소 |
 | `NODEVAULT_METRICS_ADDR` | `:9090` | expvar 메트릭 HTTP 서버 주소 |
 | `NODEVAULT_BUILD_BACKEND` | `local-podbridge` | 빌드 백엔드: `local-podbridge` / `k8s-job` / `disabled` |
 | `NODEVAULT_RUNTIME_MODE` | `host` | 실행 모드: `host` / `incluster` |
 | `NODEVAULT_FAST_RECONCILE` | `5m` | FastRun 주기 (integrity 존재 확인) |
 | `NODEVAULT_SLOW_RECONCILE` | `30m` | SlowRun 주기 (pull 도달 가능성) |
 | `NODEVAULT_REGISTRY_ADDR` | `harbor.10.113.24.96.nip.io` | 이미지 push 대상 Harbor 주소 |
+| `NODEVAULT_BUILDER_PUSH_ADDR` | — | k8s-job 빌더가 push할 Harbor gateway 주소 (미설정 시 NODEVAULT_REGISTRY_ADDR 사용) |
 | `NODEVAULT_ORAS_INSECURE_TLS` | `false` | ORAS referrer push TLS 검증 비활성화 |
+| `NODESENTINEL_GRPC_ADDR` | `nodesentinel.nodevault-system.svc.cluster.local:50052` | NodeSentinel EnqueueValidationWork 엔드포인트 |
 | `HARBOR_USER` / `HARBOR_PASS` | — | Harbor 인증 정보 |
 | `CATALOG_DIR` | `assets/catalog` | tool CAS 파일 저장 디렉토리 |
 | `DATA_CATALOG_DIR` | `assets/data-catalog` | data CAS 파일 저장 디렉토리 |
@@ -169,57 +201,82 @@ make vuln
 ## 패키지 구조
 
 ```
-cmd/controlplane/     — gRPC + webhook 서버 진입점 (main.go)
-cmd/palette/          — NodePalette REST 서버 (별도 바이너리)
+cmd/controlplane/     — gRPC + REST 서버 진입점 (main.go)
 pkg/
-  build/              — BuildService: L2 빌드 백엔드 + L3/L4 오케스트레이션
-  catalog/            — RegisteredDefinition CAS 저장/조회
-  catalogrest/        — Catalog REST API + Harbor webhook 수신
-  index/              — vault-index.json: lifecycle_phase / integrity_health 이중 축
+  build/              — BuildService: L2 빌드 백엔드 (podbridge5 / k8s-job) + 등록
+  catalog/            — ToolRegistryService / DataRegistryService: CAS 저장/조회
+  catalogrest/        — Catalog REST API + Validation REST + Harbor webhook
+  certification/      — CertifiedToolImageRecord + ToolFunctionCatalogEntry 생성
+  index/              — vault-index.json schema v3: lifecycle, integrity, check/scan/cert 레코드
   metrics/            — expvar 카운터 + /debug/vars HTTP 서버
   oras/               — OCI spec referrer push (sori wrapping)
   ping/               — PingService: 헬스체크
   policy/             — PolicyService: DockGuard .wasm 번들 제공
   reconcile/          — Harbor 현실 대조 → integrity_health 갱신 (FastRun / SlowRun)
   registry/           — OCI 레지스트리 클라이언트
+  sentinelclient/     — NodeSentinel EnqueueValidationWork gRPC 클라이언트
   validate/           — ValidateService: L3 dry-run / L4 smoke run
+  validation/         — ValidationResultService: L5-a/b 결과 수신 + certification 트리거
 test/
   slint/              — kube-slint gate 테스트 (build tag: slint)
-protos/nodevault/v1/  — gRPC proto 정의
+protos/nodevault/v1/  — NodeVault gRPC proto 정의
+protos/nodesentinel/v1/ — NodeSentinel IngressService proto (EnqueueValidationWork)
 deploy/               — K8s 매니페스트 (namespaces, RBAC, Deployment)
 .slint/               — kube-slint policy.yaml (슬린트 게이트 임계값)
 ```
 
 ---
 
-## artifact 상태 이중 축
+## artifact 상태 모델 (Index schema v3)
 
-`vault-index.json`은 두 축으로 artifact 상태를 분리한다.
+`vault-index.json`은 세 계층으로 artifact 상태를 추적한다.
+
+### 이중 축 (lifecycle / integrity)
 
 | 축 | 값 | 변경 주체 | 의미 |
 |----|-----|-----------|------|
 | `lifecycle_phase` | Pending / Active / Retracted / Deleted | NodeVault 명시적 호출만 | 관리자의 승인 의도 |
 | `integrity_health` | Healthy / Partial / Missing / Unreachable / Orphaned | reconcile loop만 | Harbor 현실 대조 결과 |
 
-**Catalog 노출**: `lifecycle_phase = Active`인 것만. `integrity_health`는 무관.
+### 검증·인증 레코드 (v3 추가)
+
+| 레코드 | 생성 주체 | 설명 |
+|--------|-----------|------|
+| `ToolCheckRecord` | NodeSentinel L5-a | functional validation 결과 (validationHash 포함) |
+| `ToolScanRecord` | NodeSentinel L5-b | trivy-operator 취약성 스캔 결과 |
+| `CertifiedToolImageRecord` | NodeVault `certification.Service` | check+scan 평가 후 인증 결정 (PromotionStatus) |
+| `ToolFunctionCatalogEntry` | NodeVault `certification.Service` | NodePalette 노출 항목 (PromotionStatus=active만 표시) |
+
+**Catalog 노출**: `lifecycle_phase = Active`인 것만. **팔레트 노출**: `PromotionStatus = active`인 것만.
 
 ---
 
 ## 오케스트레이션 흐름
 
-`BuildService.BuildAndRegister` 스트리밍 RPC 실행 순서:
+빌드 요청부터 팔레트 노출까지 전체 순서:
 
 ```
-1. L2: 빌드 백엔드 (local-podbridge / k8s-job) → Harbor push → digest 확보
-2. L3: K8s dry-run — smoke Job spec 스키마 검증
-3. L4: K8s smoke run — 실제 Job 실행, 정상 종료 확인
-4. 등록:
+1. L2: BuildService — 빌드 백엔드 → Harbor push → digest 확보
+2. 등록:
    ├── pkg/catalog: CAS JSON 저장
    ├── pkg/index: vault-index.json append (lifecycle_phase=Active)
    └── pkg/oras: OCI spec referrer push → integrity_health=Healthy
+3. pkg/sentinelclient: NodeSentinel EnqueueValidationWork 호출
+
+[NodeSentinel이 비동기 실행]
+4. L3: K8s Job dry-run — manifest admission 검증
+5. L4: K8s smoke run — 컨테이너 기동 + 정상 종료 확인
+6. L5-a: functional validation Job → validationHash 계산
+   → POST /v1/validation/check-records (NodeVault REST)
+7. L5-b: trivy-operator VulnerabilityReport 조회
+   → POST /v1/validation/scan-records (NodeVault REST)
+
+[NodeVault certification.Service 평가]
+8. ToolCheckRecord / ToolScanRecord → CertifiedToolImageRecord + ToolFunctionCatalogEntry
+9. GET /v1/catalog/certified-tools → NodePalette → DagEdit 팔레트 노출
 ```
 
-이벤트는 `BuildEvent` 스트림으로 NodeKit에 실시간 전달.
+이벤트는 `BuildEvent` 스트림으로 NodeKit에 실시간 전달 (L2까지).
 
 ---
 
@@ -240,6 +297,8 @@ NodeKit L1 정책 평가에 사용되는 `.wasm` 번들은 [`DockGuard`](https:/
 | 프로젝트 | 역할 |
 |----------|------|
 | [`NodeKit`](https://github.com/HeaInSeo/NodeKit) | C# 어드민 UI — ToolDefinition 편집, L1 검증, BuildRequest gRPC 전송 |
+| [`NodeSentinel`](https://github.com/HeaInSeo/NodeSentinel) | K8s data-plane 검증 에이전트 — L3/L4/L5-a/L5-b Job 실행 |
+| [`NodePalette`](https://github.com/HeaInSeo/NodePalette) | 인증 tool 팔레트 REST 서비스 — GET /v1/palette/tools (DagEdit 등 소비) |
 | [`DockGuard`](https://github.com/HeaInSeo/DockGuard) | OPA/Rego Dockerfile 정책 + .wasm 번들 빌드 |
 | [`kube-slint`](https://github.com/HeaInSeo/kube-slint) | K8s SLI 게이트 (churn 억제, 회귀 검증) |
 | [`bori`](https://github.com/HeaInSeo/bori) | K8s 오퍼레이터 — BoriDataPlane CRD로 NodeVault 배포 관리 (예정) |

@@ -1,7 +1,7 @@
 # NodeVault
 
-관리자 UI(NodeKit)에서 `BuildRequest`를 받아 tool 이미지를 빌드·검증·인증·등록하는 제어 플레인 서버.
-gRPC 서버 + Catalog/Validation REST API를 단일 바이너리(`bin/nodevault`)로 제공한다.
+NodeKit에서 `BuildRequest`를 받아 tool 이미지를 빌드·검증·인증·등록하는 Kubernetes 데이터플레인 애플리케이션.
+NodeVault는 장기 실행 Pod로 배포되며, 같은 Pod 안에서 podbridge5가 Buildah Go API를 사용해 이미지를 빌드하고 Harbor에 push한다.
 
 → 전체 플랫폼 구성 및 end-to-end 흐름: [docs/PLATFORM_MAP.md](docs/PLATFORM_MAP.md)
 → TrueNAS/iLO/NFS 운영 메모: [docs/TRUENAS_NFS_RUNBOOK.md](docs/TRUENAS_NFS_RUNBOOK.md)
@@ -16,10 +16,10 @@ NodeKit (C# 어드민 UI)
     ▼
 NodeVault (이 프로젝트 — Go gRPC + REST 서버)
     │
-    ├── L2: 이미지 빌드 백엔드 (NODEVAULT_BUILD_BACKEND 선택)
-    │       local-podbridge  → podbridge5 in-process (seoy 호스트)
-    │       k8s-job          → K8s Job (buildah, userns, Harbor gateway 지원)
-    │       disabled         → 빌드 없이 gRPC 서버만 기동
+    ├── L2: in-pod-buildah
+    │       NodeVault process → podbridge5 wrapper → Buildah Go API
+    │       별도 builder Job/worker Pod를 생성하지 않음
+    │       disabled → 빌드 없이 gRPC 서버만 기동
     ├── 등록: CAS 저장 + pkg/index append
     ├── NodeSentinel enqueue: pkg/sentinelclient → EnqueueValidationWork gRPC
     ├── Catalog REST: pkg/catalogrest (lifecycle_phase=Active 목록)
@@ -114,22 +114,25 @@ curl http://localhost:9090/debug/vars
 
 | 도구 | 용도 |
 |------|------|
-| Go 1.22+ | 빌드 |
+| Go 1.25.11 | 빌드 |
 | CGO 빌드 의존성 | `pkg/build` (podbridge5): gpgme, btrfs-progs-devel 등 |
 | kubectl | L3/L4 K8s 연동 |
 
 ### 빌드 및 실행
 
 ```bash
-# 바이너리 빌드 (CGO 의존성 필요)
-make build
+# vendor와 NodeVault image 생성/push
+make vendor
+make push-image
 
-# seoy 배포 (SSH + rsync)
-make deploy-seoy
+# Kubernetes 데이터플레인 앱 배포
+make deploy-infralab
 
-# 직접 실행 (disabled 모드 — 빌드 없이 gRPC 서버만 기동)
-NODEVAULT_BUILD_BACKEND=disabled ./bin/nodevault
+# 배포된 Service를 port-forward하여 in-pod-buildah 통합 테스트
+make test-integration-infralab
 ```
+
+로컬 바이너리 실행은 디버깅 또는 `disabled` 모드 확인용 compatibility 경로다.
 
 ### 환경 변수
 
@@ -138,19 +141,18 @@ NODEVAULT_BUILD_BACKEND=disabled ./bin/nodevault
 | `NODEVAULT_ADDR` | `:50051` | gRPC 서버 바인딩 주소 |
 | `NODEVAULT_WEBHOOK_ADDR` | `:8082` | Catalog/Validation REST + webhook 수신 주소 |
 | `NODEVAULT_METRICS_ADDR` | `:9090` | expvar 메트릭 HTTP 서버 주소 |
-| `NODEVAULT_BUILD_BACKEND` | `local-podbridge` | 빌드 백엔드: `local-podbridge` / `k8s-job` / `disabled` |
-| `NODEVAULT_RUNTIME_MODE` | `host` | 실행 모드: `host` / `incluster` |
+| `NODEVAULT_BUILD_BACKEND` | `in-pod-buildah` | 빌드 모드: `in-pod-buildah` / `disabled` (`local-podbridge`는 deprecated alias) |
+| `NODEVAULT_RUNTIME_MODE` | `host` | Kubernetes 배포에서는 `incluster`; 로컬 compatibility 실행은 `host` |
 | `NODEVAULT_FAST_RECONCILE` | `5m` | FastRun 주기 (integrity 존재 확인) |
 | `NODEVAULT_SLOW_RECONCILE` | `30m` | SlowRun 주기 (pull 도달 가능성) |
 | `NODEVAULT_REGISTRY_ADDR` | `harbor.10.113.24.96.nip.io` | 이미지 push 대상 Harbor 주소 |
-| `NODEVAULT_BUILDER_PUSH_ADDR` | — | k8s-job 빌더가 push할 Harbor gateway 주소 (미설정 시 NODEVAULT_REGISTRY_ADDR 사용) |
 | `NODEVAULT_ORAS_INSECURE_TLS` | `false` | ORAS referrer push TLS 검증 비활성화 |
 | `NODESENTINEL_GRPC_ADDR` | `nodesentinel.nodevault-system.svc.cluster.local:50052` | NodeSentinel EnqueueValidationWork 엔드포인트 |
-| `HARBOR_USER` / `HARBOR_PASS` | — | Harbor 인증 정보 |
+| `HARBOR_USER` / `HARBOR_PASS` | — | ORAS referrer 호환용 Harbor 인증 정보; Buildah push는 mounted auth.json 사용 |
 | `CATALOG_DIR` | `assets/catalog` | tool CAS 파일 저장 디렉토리 |
 | `DATA_CATALOG_DIR` | `assets/data-catalog` | data CAS 파일 저장 디렉토리 |
 | `INDEX_DIR` | `assets/index` | vault-index.json 저장 디렉토리 |
-| `KUBECONFIG` | `~/.kube/config` | K8s 클러스터 인증 |
+| `KUBECONFIG` | `~/.kube/config` | 로컬 compatibility/테스트 경로에서만 사용; Pod는 ServiceAccount 사용 |
 
 ---
 
@@ -203,7 +205,7 @@ make vuln
 ```
 cmd/controlplane/     — gRPC + REST 서버 진입점 (main.go)
 pkg/
-  build/              — BuildService: L2 빌드 백엔드 (podbridge5 / k8s-job) + 등록
+  build/              — BuildService: in-Pod podbridge5/Buildah 빌드 + 등록
   catalog/            — ToolRegistryService / DataRegistryService: CAS 저장/조회
   catalogrest/        — Catalog REST API + Validation REST + Harbor webhook
   certification/      — CertifiedToolImageRecord + ToolFunctionCatalogEntry 생성

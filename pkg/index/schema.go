@@ -113,7 +113,7 @@ type ToolBuildRecord struct {
 	// build. Populated by the nan injection step (Sprint 1, separate work item).
 	NanVersion string `json:"nan_version,omitempty"`
 
-	// Backend identifies the build executor, e.g. "k8s-job".
+	// Backend identifies the build executor, e.g. "in-pod-buildah".
 	Backend string `json:"backend,omitempty"`
 
 	StartedAt   time.Time `json:"started_at"`

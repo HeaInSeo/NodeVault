@@ -31,7 +31,7 @@ RUN go build \
     ./cmd/controlplane/...
 
 # ── Stage 2: 런타임 이미지 ────────────────────────────────────────────────────
-# 런타임 이미지는 k8s-job builder와 동일한 Buildah 계열 기반 이미지를 사용한다.
+# 런타임 이미지 자체가 NodeVault의 in-Pod Buildah 실행 환경이다.
 FROM quay.io/buildah/stable:latest
 
 COPY --from=builder /bin/nodevault /usr/local/bin/nodevault

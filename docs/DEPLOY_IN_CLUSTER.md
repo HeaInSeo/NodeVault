@@ -1,115 +1,122 @@
-# NodeVault 배포 가이드
+# NodeVault Kubernetes 배포 가이드
 
-버전: 2.0  
+버전: 3.0  
 갱신: 2026-06-17
 
----
+## 배포 모델
 
-## 실행 환경
+NodeVault는 Kubernetes 데이터플레인 애플리케이션으로 장기 실행 Pod에 배포한다.
 
-**기본 배포는 seoy 호스트 바이너리 실행이다.**
+```text
+NodeVault Pod
+  └── NodeVault process
+      └── podbridge5 wrapper
+          └── Buildah Go API
+              ├── containers/storage
+              ├── image build
+              └── Harbor push
+```
 
-NodeVault는 이제 `NODEVAULT_BUILD_BACKEND=k8s-job` 경로에서 Kubernetes
-`hostUsers:false` user namespace Buildah Job을 제출할 수 있다. 현재 infra-lab에서는
-overlay storage가 mount propagation 단계에서 막혀 `vfs`를 기본 smoke 경로로 사용한다.
-overlay/idmap 또는 fuse-overlayfs 경로는 NodeVault 기본 전환 전에 별도 검증이 필요하다.
+NodeVault는 이미지 빌드를 위해 Kubernetes Job이나 별도 worker Pod를 생성하지 않는다.
+`NODEVAULT_BUILD_BACKEND=k8s-job` 경로는 제거되었다.
 
-| 구분 | 실행 위치 |
-|------|-----------|
-| NodeVault 바이너리 (gRPC :50051, REST :8080) | seoy 호스트 직접 실행 |
-| L2 이미지 빌드 | seoy 호스트 `local-podbridge` 또는 K8s `k8s-job` |
-| L3 dry-run / L4 smoke run | K8s Job (`nodevault-smoke` namespace) |
-| Harbor | harbor.lab.local (Cilium Gateway VIP 10.113.24.96) |
+L3/L4 검증은 아직 `ValidateService`가 별도 Kubernetes Job으로 실행하므로 해당 권한은
+`deploy/02-rbac.yaml`에 제한적으로 남아 있다. 이것은 이미지 빌드 경로와 별개다.
 
----
+## 보안 기준
+
+대상 클러스터에서 User Namespace 실행을 검증했으므로 기본 Deployment는 다음을 사용한다.
+
+```yaml
+hostUsers: false
+securityContext:
+  runAsUser: 0
+  seccompProfile:
+    type: RuntimeDefault
+```
+
+컨테이너 root는 host의 비특권 UID에 매핑된다. 컨테이너는 privileged 권한을 사용하지 않으며,
+검증된 최소 capability(`CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETFCAP`, `SYS_CHROOT`)만 추가한다.
 
 ## 사전 조건
 
-- seoy 장비 (100.123.80.48) 접근 가능
-- infra-lab 클러스터 실행 중 (multipass 또는 libvirt backend)
-- Harbor 접근 가능: `https://harbor.lab.local`
-- infra-lab CoreDNS에 `harbor.lab.local -> 10.113.24.96` 매핑 적용
-- `infra-lab/kubeconfig` 존재
-
----
-
-## 배포 절차
-
-### 1. K8s 지원 리소스 배포 (최초 1회 또는 클러스터 재설치 후)
-
-L2 builder Job과 L3/L4 Job 실행에 필요한 네임스페이스와 RBAC을 배포한다.
+- NodeVault 이미지를 `harbor.lab.local/nodevault/controlplane:latest`에 push
+- image pull과 Buildah push에 공통으로 사용하는 `nodevault-registry-auth` 생성
+- ORAS referrer 호환용 username/password secret 생성
 
 ```bash
+kubectl apply -f deploy/00-namespaces.yaml
+
+kubectl create secret docker-registry nodevault-registry-auth \
+  --docker-server=harbor.lab.local \
+  --docker-username=<username> \
+  --docker-password=<password> \
+  -n nodevault-system
+
+kubectl create secret generic nodevault-harbor-auth \
+  --from-literal=username=<username> \
+  --from-literal=password=<password> \
+  -n nodevault-system
+```
+
+## 배포
+
+```bash
+make vendor
+make push-image
 make deploy-infralab
-# 적용 대상:
-#   deploy/00-namespaces.yaml — nodevault-system, nodevault-builds, nodevault-smoke 네임스페이스
-#   deploy/02-rbac.yaml       — ServiceAccount + ClusterRole (ConfigMap/Job/log 권한)
 ```
 
-### 2. NodeVault 바이너리 빌드
+`make deploy-infralab`은 다음을 적용한다.
+
+```text
+deploy/00-namespaces.yaml
+  - nodevault-system
+  - nodevault-smoke
+
+deploy/02-rbac.yaml
+  - ValidateService 전용 ServiceAccount/RBAC
+
+deploy/03-nodevault.yaml
+  - hostUsers:false NodeVault Deployment
+  - in-pod-buildah backend
+  - containers/storage.conf
+  - graphroot/runroot/data volumes
+```
+
+## 저장소 구성
+
+첫 전환 패치에서는 기존 lab 호환성을 위해 `vfs` driver와 `emptyDir`를 사용한다.
+
+```text
+/var/lib/nodevault/containers  Buildah graphroot
+/run/nodevault/containers      Buildah runroot
+/data                           catalog/index 임시 저장
+```
+
+이 구성은 실행 모델 검증용이다. 다음 단계에서 graphroot/cache와 durable state를 PVC 및
+SQLite WAL로 전환해야 한다.
+
+## 확인
 
 ```bash
-make vendor   # go mod vendor (podbridge5 등 의존성)
-make build    # bin/nodevault 생성
+kubectl -n nodevault-system get pod
+kubectl -n nodevault-system logs deployment/nodevault-controlplane
 ```
 
-### 3. NodeVault 실행 (seoy 호스트)
+기동 로그에는 다음 값이 보여야 한다.
 
-```bash
-KUBECONFIG=/path/to/infra-lab/kubeconfig \
-NODEVAULT_REGISTRY_ADDR=harbor.lab.local \
-./bin/nodevault
+```text
+runtime_mode=incluster
+build_backend=in-pod-buildah
 ```
 
-gRPC는 `:50051`, NodePalette REST는 `:8080`에서 수신 대기한다.
+다음 리소스가 생성되면 안 된다.
 
-### 4. Harbor 인증 설정
-
-podbridge5가 Harbor에 push하려면 seoy 호스트에서 먼저 로그인해야 한다.
-
-```bash
-podman login harbor.lab.local --tls-verify=false
-# Username: admin
-# Password: <harbor-admin-password>
+```text
+nodevault-builds namespace
+builder Job
+Buildah worker Pod
 ```
 
-`k8s-job` builder는 `NODEVAULT_BUILDER_PUSH_ADDR=harbor.lab.local`을 사용한다.
-컨테이너 이미지 참조와 builder Pod 내부 push 경로를 Harbor Gateway hostname으로 통일한다.
-
----
-
-## K8s 리소스 파일 현황
-
-| 파일 | 상태 | 설명 |
-|------|------|------|
-| `deploy/00-namespaces.yaml` | **사용 중** | nodevault-system, nodevault-builds, nodevault-smoke 네임스페이스 |
-| `deploy/02-rbac.yaml` | **사용 중** | ServiceAccount + ClusterRole (L2 builder, L3/L4 Job 권한) |
-| `deploy/03-nodevault.yaml` | 선택 | NodeVault K8s Deployment 템플릿 (`k8s-job` 백엔드) |
-| `deploy/04-grpcroute.yaml` | 미사용 (미래용) | Cilium GRPCRoute (in-cluster 전환 시 사용) |
-
-> `03-nodevault.yaml`과 `04-grpcroute.yaml`은 현재 적용하지 않는다.
-> NodeVault가 K8s Pod로 이동할 경우를 대비해 보존.
-
----
-
-## NodeKit 연결 설정
-
-NodeKit은 NodeVault gRPC에 seoy 호스트 IP로 직접 연결한다.
-
-```
-NodeVault gRPC addr: 100.123.80.48:50051
-NodePalette REST:    http://100.123.80.48:8080
-```
-
----
-
-## seoy → Harbor 라우트
-
-seoy 호스트에서 Harbor Cilium Gateway VIP에 접근하려면 라우트와 hosts 항목이 필요하다.
-
-```bash
-echo "10.113.24.96 harbor.lab.local" | sudo tee -a /etc/hosts
-ip route add 10.113.24.96/32 via 10.113.24.254
-```
-
-multipassd 시작 시 자동 추가됨 (`discard-ns.conf` ExecStartPost).
+L3/L4 검증 요청이 발생한 경우 `nodevault-smoke`의 검증 Job은 생성될 수 있다.

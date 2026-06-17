@@ -431,7 +431,7 @@ func TestAppendToolBuildRecord_Success(t *testing.T) {
 		BuildID:        "build-001",
 		ToolSpecDigest: "spec-001",
 		ImageDigest:    "sha256:bbbb",
-		Backend:        "k8s-job",
+		Backend:        "in-pod-buildah",
 		Success:        true,
 	}
 	if err := s.AppendToolBuildRecord(r); err != nil {
@@ -444,8 +444,8 @@ func TestAppendToolBuildRecord_Success(t *testing.T) {
 	if !got.Success {
 		t.Error("Success: got false want true")
 	}
-	if got.Backend != "k8s-job" {
-		t.Errorf("Backend: got %q want k8s-job", got.Backend)
+	if got.Backend != "in-pod-buildah" {
+		t.Errorf("Backend: got %q want in-pod-buildah", got.Backend)
 	}
 }
 

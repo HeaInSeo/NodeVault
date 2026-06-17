@@ -21,11 +21,11 @@ type Builder interface {
 }
 
 // ErrBuildBackendDisabled is returned by disabledBuilder when a build is attempted.
-var ErrBuildBackendDisabled = errors.New("build backend disabled in incluster spike mode")
+var ErrBuildBackendDisabled = errors.New("build backend disabled by configuration")
 
 // disabledBuilder is a no-op Builder that always returns ErrBuildBackendDisabled.
 // Used when NODEVAULT_BUILD_BACKEND=disabled to allow the gRPC server to start
-// without initializing podbridge5 / container storage.
+// without initializing podbridge5 / containers-storage.
 type disabledBuilder struct{}
 
 func (disabledBuilder) Build(_ context.Context, _, _ string) (imageID, digest, nanVersion string, err error) {
@@ -34,12 +34,13 @@ func (disabledBuilder) Build(_ context.Context, _, _ string) (imageID, digest, n
 
 func (disabledBuilder) Close() error { return nil }
 
-// podbridge5Builder implements Builder using podbridge5.
+// podbridge5Builder is NodeVault's in-process image builder.
+// podbridge5 wraps the Buildah Go API; it is not a separate service or Pod.
 type podbridge5Builder struct {
 	store storage.Store
 }
 
-// newPodbridge5Builder creates a Builder backed by podbridge5.
+// newPodbridge5Builder creates the in-Pod Builder backed by podbridge5/Buildah.
 func newPodbridge5Builder() (Builder, error) {
 	store, err := podbridge5.NewStore()
 	if err != nil {
@@ -48,8 +49,8 @@ func newPodbridge5Builder() (Builder, error) {
 	return &podbridge5Builder{store: store}, nil
 }
 
-// Build does not inject nan; podbridge5Builder is a legacy/local backend predating
-// the nan injection requirement. nanVersion is always returned empty.
+// Build does not inject nan yet. nanVersion remains empty until the Tool Image
+// generation path explicitly includes nan as part of the generated build context.
 func (b *podbridge5Builder) Build(
 	ctx context.Context, dockerfileContent, outputRef string,
 ) (imageID, remoteDigest, nanVersion string, err error) {

@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.1
 // - protoc             v7.34.1
-// source: nodesentinel.proto
+// source: nodesentinel/v1/nodesentinel.proto
 
 package nodesentinelv1
 
@@ -117,5 +117,5 @@ var IngressService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "nodesentinel.proto",
+	Metadata: "nodesentinel/v1/nodesentinel.proto",
 }

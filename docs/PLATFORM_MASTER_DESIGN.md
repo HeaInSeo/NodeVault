@@ -106,7 +106,7 @@
 | Harbor | `harbor.10.113.24.96.nip.io` (Cilium LB VIP 10.113.24.96) |
 | NodeVault gRPC | `100.123.80.48:50051` (seoy 호스트 직접, Cilium GRPCRoute 미사용) |
 | NodePalette REST | `http://100.123.80.48:8080` (seoy 호스트 직접) |
-| Harbor admin | `Harbor12345` |
+| Harbor admin | `<harbor-password>` |
 | kubeconfig 경로 | `/opt/go/src/github.com/HeaInSeo/infra-lab/kubeconfig` |
 
 **배포 제약**: NodeVault는 **seoy 호스트 바이너리**로 실행한다 (K8s Pod 아님).

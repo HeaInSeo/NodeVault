@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -40,6 +41,11 @@ const (
 	defaultWebhookAddr   = ":8082"
 	defaultFastReconcile = 5 * time.Minute
 	defaultSlowReconcile = 30 * time.Minute
+
+	buildBackendInPodBuildah      = "in-pod-buildah"
+	buildBackendDisabled          = "disabled"
+	legacyBuildBackendPodbridge   = "local-podbridge"
+	removedBuildBackendKubernetes = "k8s-job"
 )
 
 // parseDuration reads a duration from an env var, falling back to def on parse error or absence.
@@ -56,14 +62,14 @@ func parseDuration(env string, def time.Duration) time.Duration {
 // runtimeConfig holds resolved startup configuration derived from env vars.
 type runtimeConfig struct {
 	runtimeMode  string // "host" | "incluster"
-	buildBackend string // "local-podbridge" | "disabled"
+	buildBackend string // "in-pod-buildah" | "disabled"
 	grpcAddr     string
 	webhookAddr  string
 	catalogPath  string
 	indexPath    string
 }
 
-func loadRuntimeConfig() runtimeConfig {
+func loadRuntimeConfig() (runtimeConfig, error) {
 	rc := runtimeConfig{
 		runtimeMode:  os.Getenv("NODEVAULT_RUNTIME_MODE"),
 		buildBackend: os.Getenv("NODEVAULT_BUILD_BACKEND"),
@@ -75,9 +81,13 @@ func loadRuntimeConfig() runtimeConfig {
 	if rc.runtimeMode == "" {
 		rc.runtimeMode = "host"
 	}
-	if rc.buildBackend == "" {
-		rc.buildBackend = "local-podbridge"
+
+	backend, err := normalizeBuildBackend(rc.buildBackend)
+	if err != nil {
+		return runtimeConfig{}, err
 	}
+	rc.buildBackend = backend
+
 	if rc.grpcAddr == "" {
 		rc.grpcAddr = defaultGRPCAddr
 	}
@@ -90,14 +100,36 @@ func loadRuntimeConfig() runtimeConfig {
 	if rc.indexPath == "" {
 		rc.indexPath = "assets/index"
 	}
-	return rc
+	return rc, nil
+}
+
+func normalizeBuildBackend(raw string) (string, error) {
+	switch strings.TrimSpace(raw) {
+	case "", buildBackendInPodBuildah:
+		return buildBackendInPodBuildah, nil
+	case legacyBuildBackendPodbridge:
+		// Compatibility for existing host deployments. The implementation is the
+		// same in-process podbridge5/Buildah path and is no longer host-only.
+		return buildBackendInPodBuildah, nil
+	case buildBackendDisabled:
+		return buildBackendDisabled, nil
+	case removedBuildBackendKubernetes:
+		return "", fmt.Errorf(
+			"NODEVAULT_BUILD_BACKEND=%q was removed: NodeVault must build in its own Pod through podbridge5/Buildah, not create a builder Job",
+			removedBuildBackendKubernetes,
+		)
+	default:
+		return "", fmt.Errorf(
+			"unsupported NODEVAULT_BUILD_BACKEND %q (supported: %q, %q)",
+			raw, buildBackendInPodBuildah, buildBackendDisabled,
+		)
+	}
 }
 
 func main() {
-	// podbridge5 reexec is only needed for the local-podbridge build backend.
-	// disabled and k8s-job modes do not initialize podbridge5 in-process.
-	backend := os.Getenv("NODEVAULT_BUILD_BACKEND")
-	if backend != "disabled" && backend != "k8s-job" {
+	// podbridge5/Buildah reexec is part of the in-process image build path.
+	backend, err := normalizeBuildBackend(os.Getenv("NODEVAULT_BUILD_BACKEND"))
+	if err == nil && backend == buildBackendInPodBuildah {
 		if podbridge5.ReexecIfNeeded() {
 			os.Exit(0)
 		}
@@ -109,7 +141,16 @@ func run() int {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	rc := loadRuntimeConfig()
+	rc, configErr := loadRuntimeConfig()
+	if configErr != nil {
+		slog.Error("invalid NodeVault runtime configuration", "err", configErr)
+		return 1
+	}
+	if os.Getenv("NODEVAULT_BUILD_BACKEND") == legacyBuildBackendPodbridge {
+		slog.Warn(
+			"NODEVAULT_BUILD_BACKEND=local-podbridge is deprecated; use in-pod-buildah",
+		)
+	}
 
 	metrics.StartServer(os.Getenv("NODEVAULT_METRICS_ADDR"))
 
@@ -187,7 +228,10 @@ func run() int {
 
 	rec := startBackground(ctx, indexStore, cat, dataCat, certSvc, rc.webhookAddr, fastInterval, slowInterval)
 
-	registerBuildService(srv, &rc, validateSvc, registrySvc, indexStore, rec)
+	if registerErr := registerBuildService(srv, &rc, validateSvc, registrySvc, indexStore, rec); registerErr != nil {
+		slog.Error("failed to register BuildService", "err", registerErr)
+		return 1
+	}
 
 	// ValidationResultService — receives L5-a/L5-b results from NodeSentinel via gRPC.
 	nfv1.RegisterValidationResultServiceServer(srv, validation.New(indexStore, certSvc))
@@ -202,10 +246,10 @@ func run() int {
 	return 0
 }
 
-// registerBuildService selects and registers the BuildService backend based on NODEVAULT_BUILD_BACKEND.
-// disabled: safe for K8s Pods (podbridge5 not initialized).
-// k8s-job: spawns a privileged K8s Job per build request.
-// default (local-podbridge): full podbridge5 in-process build (host mode only).
+// registerBuildService registers the single production image build path.
+// in-pod-buildah: NodeVault calls podbridge5, which uses the Buildah Go API in
+// the same NodeVault process/Pod. No builder Job or worker Pod is created.
+// disabled: keeps non-build APIs available while explicitly rejecting builds.
 func registerBuildService(
 	srv *grpc.Server,
 	rc *runtimeConfig,
@@ -213,26 +257,22 @@ func registerBuildService(
 	registrySvc *catalog.ToolRegistryService,
 	indexStore *index.Store,
 	rec *reconcile.Reconciler,
-) {
+) error {
 	switch rc.buildBackend {
-	case "disabled":
+	case buildBackendDisabled:
 		nfv1.RegisterBuildServiceServer(srv, build.NewDisabledService())
-		slog.Info("BuildService registered with disabled backend (spike mode)")
-	case "k8s-job":
-		buildSvc, buildErr := build.NewK8sJobService(rc.runtimeMode, validateSvc, registrySvc, indexStore, rec)
-		if buildErr != nil {
-			slog.Warn("BuildService unavailable (k8s-job builder init failed)", "err", buildErr)
-		} else {
-			nfv1.RegisterBuildServiceServer(srv, buildSvc)
-			slog.Info("BuildService registered with k8s-job backend (Option A spike)")
-		}
-	default:
+		slog.Info("BuildService registered with disabled backend")
+		return nil
+	case buildBackendInPodBuildah:
 		buildSvc, buildErr := build.NewService(validateSvc, registrySvc, indexStore, rec)
 		if buildErr != nil {
-			slog.Warn("BuildService unavailable (podbridge5 init failed?)", "err", buildErr)
-		} else {
-			nfv1.RegisterBuildServiceServer(srv, buildSvc)
+			return fmt.Errorf("initialize in-pod podbridge5/Buildah builder: %w", buildErr)
 		}
+		nfv1.RegisterBuildServiceServer(srv, buildSvc)
+		slog.Info("BuildService registered", "backend", buildBackendInPodBuildah)
+		return nil
+	default:
+		return fmt.Errorf("internal error: unnormalized build backend %q", rc.buildBackend)
 	}
 }
 

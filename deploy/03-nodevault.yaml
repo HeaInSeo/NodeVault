@@ -1,16 +1,27 @@
 ---
-# NodeVault controlplane Deployment
+# NodeVault Kubernetes data-plane Deployment
 #
-# ⚠ 현재 기본 배포는 seoy 호스트 바이너리 실행이다.
-#   in-cluster 실행 시 NODEVAULT_BUILD_BACKEND=k8s-job으로 Buildah user namespace
-#   builder Job을 제출한다.
+# NodeVault itself runs as a long-lived Pod. Image builds are executed inside
+# this Pod: NodeVault -> podbridge5 wrapper -> Buildah Go API.
+# No builder Job or worker Pod is created.
 #
-# 현재 배포 방법: make deploy-infralab → 00-namespaces.yaml + 02-rbac.yaml만 적용.
+# Required registry credential (not committed to Git):
+#   kubectl create secret docker-registry nodevault-registry-auth \
+#     --docker-server=harbor.lab.local \
+#     --docker-username=<username> \
+#     --docker-password=<password> \
+#     -n nodevault-system
 #
-# NODEVAULT_REGISTRY_ADDR: 빌드 결과를 push할 Harbor 레지스트리 주소.
-# HARBOR_USER / HARBOR_PASS: Harbor 인증 정보 (nodevault-harbor-auth Secret에서 주입).
+# ORAS referrer credentials (temporary compatibility until ORAS reads the
+# mounted auth.json directly):
+#   kubectl create secret generic nodevault-harbor-auth \
+#     --from-literal=username=<username> \
+#     --from-literal=password=<password> \
+#     -n nodevault-system
 #
-# in-cluster 실행 시 KUBECONFIG 불필요 — ServiceAccount token을 자동으로 사용한다.
+# User Namespace support has been validated for the target cluster. The Pod
+# therefore runs with hostUsers:false and container-root mapped to an
+# unprivileged host UID.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -28,17 +39,21 @@ spec:
       labels:
         app: nodevault-controlplane
     spec:
+      hostUsers: false
+
+      # Still required by ValidateService while L3/L4 validation uses
+      # Kubernetes Jobs. The image build path itself does not use this token.
       serviceAccountName: nodevault-controlplane
       imagePullSecrets:
-        - name: harbor-pull-secret
+        - name: nodevault-registry-auth
 
       securityContext:
         runAsUser: 0
+        seccompProfile:
+          type: RuntimeDefault
 
       containers:
         - name: nodevault
-          # harbor.lab.local/nodevault/controlplane:latest
-          # 이미지는 `make push-image` 또는 Skopeo로 Harbor에 push한다.
           image: harbor.lab.local/nodevault/controlplane:latest
           imagePullPolicy: Always
 
@@ -46,36 +61,93 @@ spec:
             - name: grpc
               containerPort: 50051
               protocol: TCP
+            - name: webhook
+              containerPort: 8082
+              protocol: TCP
 
           env:
             - name: NODEVAULT_REGISTRY_ADDR
               value: "harbor.lab.local"
-            # Harbor 인증 정보는 Secret에서 주입 (아래 nodevault-harbor-auth 참조)
+            - name: NODEVAULT_BUILD_BACKEND
+              value: "in-pod-buildah"
+            - name: NODEVAULT_RUNTIME_MODE
+              value: "incluster"
+
+            # UserNS/Buildah values copied from the already validated spike
+            # profile. They now apply to the long-lived NodeVault container.
+            - name: _CONTAINERS_USERNS_CONFIGURED
+              value: "done"
+            - name: _CONTAINERS_ROOTLESS_UID
+              value: "1000"
+            - name: _CONTAINERS_ROOTLESS_GID
+              value: "1000"
+            - name: BUILDAH_ISOLATION
+              value: "chroot"
+            - name: BUILDAH_RUNTIME
+              value: "crun"
+            - name: HOME
+              value: "/tmp/buildhome"
+            - name: XDG_CONFIG_HOME
+              value: "/tmp/buildhome/.config"
+            - name: XDG_DATA_HOME
+              value: "/tmp/buildhome/.local/share"
+
+            # ORAS referrer path still consumes explicit credentials. Buildah
+            # itself reads /run/containers/0/auth.json mounted below.
             - name: HARBOR_USER
               valueFrom:
                 secretKeyRef:
                   name: nodevault-harbor-auth
                   key: username
-                  optional: true
             - name: HARBOR_PASS
               valueFrom:
                 secretKeyRef:
                   name: nodevault-harbor-auth
                   key: password
-                  optional: true
-            - name: NODEVAULT_BUILD_BACKEND
-              value: "k8s-job"
-            - name: NODEVAULT_RUNTIME_MODE
-              value: "incluster"
-            # 현재 lab에서는 overlay가 mount propagation 단계에서 막혀 vfs를 기본 사용한다.
-            - name: NODEVAULT_BUILDER_STORAGE_DRIVER
-              value: "vfs"
-            - name: NODEVAULT_BUILDER_PUSH_ADDR
-              value: "harbor.lab.local"
+
+            # podbridge5 calls containers/storage DefaultStoreOptions(). This
+            # environment variable makes the mounted configuration authoritative.
+            - name: CONTAINERS_STORAGE_CONF
+              value: "/etc/containers/storage.conf"
+
+            - name: CATALOG_DIR
+              value: "/data/catalog"
+            - name: DATA_CATALOG_DIR
+              value: "/data/datacatalog"
+            - name: INDEX_DIR
+              value: "/data/index"
 
           securityContext:
             privileged: false
             allowPrivilegeEscalation: false
+            runAsUser: 0
+            runAsGroup: 0
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - CHOWN
+                - DAC_OVERRIDE
+                - FOWNER
+                - SETFCAP
+                - SYS_CHROOT
+
+          volumeMounts:
+            - name: containers-storage-config
+              mountPath: /etc/containers/storage.conf
+              subPath: storage.conf
+              readOnly: true
+            - name: build-graphroot
+              mountPath: /var/lib/nodevault/containers
+            - name: build-runroot
+              mountPath: /run/nodevault/containers
+            - name: registry-auth
+              mountPath: /run/containers/0
+              readOnly: true
+            - name: nodevault-data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
 
           resources:
             requests:
@@ -97,9 +169,50 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
 
+      volumes:
+        - name: containers-storage-config
+          configMap:
+            name: nodevault-containers-storage
+        - name: build-graphroot
+          emptyDir: {}
+        - name: build-runroot
+          emptyDir: {}
+        - name: registry-auth
+          secret:
+            secretName: nodevault-registry-auth
+            items:
+              - key: .dockerconfigjson
+                path: auth.json
+        - name: nodevault-data
+          # PR-1 intentionally keeps storage ephemeral. Durable build state and
+          # cache PVCs are the next migration step.
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+
+---
+# Explicit containers/storage configuration for the in-Pod builder.
+# vfs is retained for the first migration because the existing lab reported
+# overlay mount-propagation issues. Overlay/fuse-overlayfs optimization is a
+# separate performance change after this execution-model correction.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nodevault-containers-storage
+  namespace: nodevault-system
+data:
+  storage.conf: |
+    [storage]
+    driver = "vfs"
+    runroot = "/run/nodevault/containers"
+    graphroot = "/var/lib/nodevault/containers"
+    rootless_storage_path = "/var/lib/nodevault/containers"
+
+    [storage.options.pull_options]
+    enable_partial_images = "true"
+
 ---
 # NodeVault gRPC Service (ClusterIP)
-# GRPCRoute가 이 Service를 backendRef로 참조한다.
 apiVersion: v1
 kind: Service
 metadata:
@@ -115,25 +228,7 @@ spec:
       port: 50051
       targetPort: 50051
       protocol: TCP
----
-# Harbor 인증 정보 Secret 템플릿 (실제 값은 kubectl create secret으로 생성)
-#
-# 생성 방법:
-#   kubectl create secret generic nodevault-harbor-auth \
-#     --from-literal=username=admin \
-#     --from-literal=password=<harbor-admin-password> \
-#     -n nodevault-system
-#
-# 아래는 참조용 구조만 명시한다 (민감 정보 미포함).
-apiVersion: v1
-kind: Secret
-metadata:
-  name: nodevault-harbor-auth
-  namespace: nodevault-system
-  annotations:
-    # 실제 값은 kubectl create secret으로 생성할 것 — 이 파일을 git에 커밋하지 말 것
-    note: "placeholder — 실제 secret은 kubectl로 생성 필요"
-type: Opaque
-stringData:
-  username: "REPLACE_ME"
-  password: "REPLACE_ME"
+    - name: webhook
+      port: 8082
+      targetPort: 8082
+      protocol: TCP

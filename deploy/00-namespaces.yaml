@@ -7,9 +7,4 @@ metadata:
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: nodevault-builds
----
-apiVersion: v1
-kind: Namespace
-metadata:
   name: nodevault-smoke

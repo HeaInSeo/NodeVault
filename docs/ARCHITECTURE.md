@@ -1,8 +1,9 @@
 # NodeVault/NodeVault 아키텍처 개요
 
-버전: 1.0  
+버전: 1.1  
 작성일: 2026-04-18  
-상태: 현재 구현 기준 (NODEVAULT_DESIGN.md v0.1 + CATALOG_SERVICE_DESIGN.md v0.1 통합/대체)
+갱신일: 2026-06-17  
+상태: Kubernetes data-plane / in-pod-buildah 전환 기준
 
 관련 문서:
 - [NODEVAULT_TRANSITION_PLAN.md](NODEVAULT_TRANSITION_PLAN.md) — TODO 목록 및 구현 계획
@@ -23,46 +24,33 @@ Go 모듈, 바이너리, K8s 리소스, 환경 변수 **모두 NodeVault로 rena
 
 ## 역할 한 줄 정의
 
-플랫폼 아티팩트(툴 이미지, 참조 데이터 이미지)의 생성부터 삭제까지
-생명주기 전체를 통제하는 관리 서비스. Harbor 위의 권위 있는 관리자.
+NodeVault는 Kubernetes에 장기 실행 Pod로 배포되어 Tool Image의 resolve/build/register/certification 경로를 담당하는 데이터플레인 애플리케이션이다.
 
 ---
 
-## 전체 구조 (현재 구현 기준)
+## 전체 구조
 
-```
-[NodeKit]  ─── 관리자 UI (C#/Avalonia)
-    │ BuildRequest (gRPC :50051)
-    │ AdminToolList/AdminDataList (REST :8080 via NodePalette)
+```text
+[NodeKit]
+    │ BuildRequest / 향후 ToolSpecRequest
     ▼
-[NodeVault]  ─── seoy 호스트 바이너리 (100.123.80.48)
-    ├── gRPC :50051
-    │   ├── BuildService          → L2/L3/L4 + CAS 등록 + index 기록
-    │   ├── PolicyService         → DockGuard .wasm 번들 관리
-    │   └── ToolRegistryService   → (레거시 gRPC, NodePalette REST로 전환됨)
+[Kubernetes: NodeVault Pod]
+    ├── NodeVault gRPC/REST process
+    ├── pkg/build
+    │    └── podbridge5 wrapper
+    │         └── Buildah Go API
+    ├── containers/storage (graphroot/runroot)
+    ├── pkg/catalog + pkg/index
+    └── pkg/validate
+         └── L3/L4 validation Job only
     │
-    └── pkg/catalogrest는 NodePalette 바이너리로 분리됨 (TODO-10 완료)
-
-[NodePalette]  ─── seoy 호스트 바이너리 (100.123.80.48)
-    ├── HTTP :8080
-    └── pkg/catalogrest       → GET /v1/catalog/tools, /v1/catalog/data
-    │
-    ├── pkg/build     → podbridge5 in-process 빌드
-    ├── pkg/policy    → DockGuard .wasm 번들
-    ├── pkg/validate  → K8s dry-run / smoke (L3/L4)
-    ├── pkg/catalog   → CAS 파일 저장 (assets/catalog/{casHash})
-    ├── pkg/index     → vault-index.json (이중 축 상태 관리)
-    └── pkg/reconcile → Harbor 현실 대조 (FastRun/SlowRun)
-    │
-    ├── Harbor push
-    │
+    ├── image push / OCI referrer
     ▼
-[Harbor]  ─── harbor.10.113.24.96.nip.io (seoy lab cluster, Cilium LB VIP)
-    └── library/<tool>:latest
-        └── [spec referrer] ← TODO-07 구현 후 첨부됨 (현재 없음)
-
-[DagEdit]  ─── 파이프라인 빌더 (현재 NodePalette와 연결 없음 — P5 이후)
+[Harbor]
 ```
+
+이미지 빌드 경로에는 별도 Kubernetes builder Job, worker Pod, Shipwright 또는 Tekton이 없다.
+`podbridge5`는 독립 서비스가 아니라 NodeVault 프로세스 내부에서 Buildah API를 감싸는 어댑터다.
 
 ---
 
@@ -70,20 +58,17 @@ Go 모듈, 바이너리, K8s 리소스, 환경 변수 **모두 NodeVault로 rena
 
 | 항목 | 값 |
 |------|-----|
-| 실행 환경 | **seoy 호스트 바이너리** (100.123.80.48) — K8s Pod 아님 |
-| 이유 | podbridge5(buildah) rootless 제약 — K8s Pod 안에서 overlay 마운트 불가 |
-| gRPC 포트 | `:50051` (seoy 호스트 직접 노출) |
-| NodePalette REST 포트 | `:8080` (seoy 호스트 직접 노출, `bin/nodepalette` 별도 바이너리) |
-| K8s 접근 | 로컬 kubeconfig (`infra-lab/kubeconfig`) — L3/L4 Job 제출 전용 |
-| K8s RBAC | `deploy/02-rbac.yaml` (apply 됨, 미래 in-cluster 전환용으로 미리 배포) |
-| 인덱스 저장 | `assets/index/vault-index.json` (seoy 호스트 로컬 파일) |
-| Harbor | `harbor.10.113.24.96.nip.io` (Cilium LB VIP 10.113.24.96) |
+| 실행 환경 | Kubernetes Deployment / 장기 실행 NodeVault Pod |
+| 빌드 백엔드 | `in-pod-buildah` 단일 production 경로 |
+| User Namespace | `hostUsers:false` 검증 완료 |
+| Buildah isolation | 검증된 초기값 `chroot` |
+| containers/storage | 초기 전환은 `vfs`; graphroot/runroot는 Pod volume |
+| Kubernetes API 사용 | L3/L4 ValidateService Job에만 사용. 이미지 빌드는 K8s API 미사용 |
+| gRPC 포트 | Service `:50051` |
+| 상태 저장 | 현재 `/data` emptyDir; durable state/PVC는 후속 작업 |
+| Harbor | `harbor.lab.local` 또는 환경별 `NODEVAULT_REGISTRY_ADDR` |
 
-### NodePalette 위치 (현재 → 목표)
-
-**TODO-10 완료**: `cmd/palette/main.go` → `bin/nodepalette` 별도 바이너리.
-NodeVault와 같은 hostvault, assets/ 공유. 요청마다 vault-index.json Reload().
-상세 설계: [NODEPALETTE_DESIGN.md](NODEPALETTE_DESIGN.md)
+NodePalette의 최종 배치 위치와 독립 배포 방식은 별도 결정 사항이다.
 
 ---
 

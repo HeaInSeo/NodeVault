@@ -1,6 +1,7 @@
 ---
-# ServiceAccount for NodeVault controlplane (in-cluster 배포용).
-# Buildah user namespace builder Job과 L3/L4 smoke Job을 제출한다.
+# ServiceAccount used only by ValidateService while L3/L4 validation still
+# creates short-lived Kubernetes Jobs. The NodeVault image build path does not
+# call the Kubernetes API and does not create builder Jobs.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -10,21 +11,17 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: nodevault-controlplane
+  name: nodevault-validation-runner
 rules:
-  # Namespace 생성 (nodevault-smoke 자동 생성)
+  # ValidateService creates the validation namespace when it is absent.
   - apiGroups: [""]
     resources: ["namespaces"]
     verbs: ["get", "list", "create"]
-  # Dockerfile/nan build context ConfigMap 관리
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    verbs: ["get", "create", "delete"]
-  # L2 builder Job + L3 dry-run + L4 smoke run Job 관리
+  # L3 dry-run and L4 smoke validation Jobs.
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "create", "delete", "watch"]
-  # Builder digest marker와 L4 smoke run 로그 수집
+  # Validation result and smoke logs.
   - apiGroups: [""]
     resources: ["pods", "pods/log"]
     verbs: ["get", "list", "watch"]
@@ -32,12 +29,12 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: nodevault-controlplane
+  name: nodevault-validation-runner
 subjects:
   - kind: ServiceAccount
     name: nodevault-controlplane
     namespace: nodevault-system
 roleRef:
   kind: ClusterRole
-  name: nodevault-controlplane
+  name: nodevault-validation-runner
   apiGroup: rbac.authorization.k8s.io

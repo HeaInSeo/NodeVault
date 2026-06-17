@@ -1,15 +1,15 @@
 //go:build integration
 
-// Package build integration tests require Harbor running in the infra-lab K8s cluster
-// (harbor.10.113.24.96.nip.io) and NodeVault running locally as a binary.
+// Package build integration tests require Harbor and the NodeVault Deployment
+// running in the infra-lab Kubernetes cluster.
 //
 // infra-lab VM 클러스터 (multipass 또는 libvirt backend, 멀티노드 + 실제 VM 네트워크):
 //
 //	# Harbor 재개 (suspend 상태인 경우)
 //	scripts/host/harbor-resume.sh
-//	# NodeVault 로컬 실행 후 테스트
-//	NODEVAULT_REGISTRY_ADDR=harbor.10.113.24.96.nip.io go run ./cmd/controlplane &
-//	go test -v -tags=integration ./pkg/build/... -timeout 10m
+//	# NodeVault 배포 후 service port-forward를 통해 테스트
+//	make deploy-infralab
+//	make test-integration-infralab
 //
 // 자세한 내용: docs/INFRALAB_TESTING.md
 package build
@@ -98,7 +98,7 @@ RUN echo "hello nodeforge" > /hello.txt
 // RUN command causes NodeForge to emit BUILD_EVENT_KIND_FAILED and NOT succeed.
 //
 // Regression guard: BUILD_EVENT_KIND_FAILED must be returned (not a silent hang
-// or a spurious SUCCEEDED) when the kaniko Job exits non-zero.
+// or a spurious SUCCEEDED) when the in-Pod Buildah build fails.
 func TestBuildAndRegister_BadDockerfile(t *testing.T) {
 	if os.Getenv("KUBECONFIG") == "" {
 		t.Skip("KUBECONFIG not set — skipping integration test")
@@ -117,7 +117,7 @@ func TestBuildAndRegister_BadDockerfile(t *testing.T) {
 		ToolDefinitionId: "test-tool-bad",
 		ToolName:         "test-bad-dockerfile",
 		ImageUri:         "docker.io/library/alpine:3.19",
-		// Intentionally broken: 'nonexistent_command_xyz' will make kaniko exit non-zero.
+		// Intentionally broken: the command makes the in-Pod Buildah build fail.
 		DockerfileContent: `FROM alpine:3.19 AS builder
 RUN nonexistent_command_xyz --fail
 `,

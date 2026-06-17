@@ -66,6 +66,16 @@ type Service struct {
 func NewService(
 	validator *validate.Service, registry *catalog.ToolRegistryService, store *index.Store, reconciler ReconcileTriggerer,
 ) (*Service, error) {
+	if validator == nil {
+		return nil, fmt.Errorf("build service init: validator must not be nil")
+	}
+	if registry == nil {
+		return nil, fmt.Errorf("build service init: registry must not be nil")
+	}
+	if store == nil {
+		return nil, fmt.Errorf("build service init: index store must not be nil")
+	}
+
 	builder, err := newPodbridge5Builder()
 	if err != nil {
 		return nil, fmt.Errorf("build service init: %w", err)
@@ -82,23 +92,6 @@ func NewService(
 // Used when NODEVAULT_BUILD_BACKEND=disabled (incluster spike mode).
 func NewDisabledService() *Service {
 	return &Service{builder: disabledBuilder{}}
-}
-
-// NewK8sJobService creates a BuildService backed by K8sJobBuilder (Option A spike).
-// runtimeMode controls how the K8s client is initialized ("incluster" vs kubeconfig).
-// Used when NODEVAULT_BUILD_BACKEND=k8s-job.
-func NewK8sJobService(
-	runtimeMode string,
-	validator *validate.Service, registry *catalog.ToolRegistryService, store *index.Store, reconciler ReconcileTriggerer,
-) (*Service, error) {
-	builder, err := newK8sJobBuilder(runtimeMode)
-	if err != nil {
-		return nil, fmt.Errorf("k8s-job service init: %w", err)
-	}
-	return &Service{
-		builder: builder, validator: validator, registry: registry,
-		indexStore: store, reconciler: reconciler,
-	}, nil
 }
 
 // Close releases the underlying image build storage.
@@ -328,12 +321,10 @@ func (s *Service) recordBuildSuccess(buildID string, startedAt time.Time, digest
 // used to populate ToolBuildRecord.Backend.
 func (s *Service) builderBackendName() string {
 	switch s.builder.(type) {
-	case *K8sJobBuilder:
-		return "k8s-job"
 	case disabledBuilder:
 		return "disabled"
 	default:
-		return "podbridge5"
+		return "in-pod-buildah"
 	}
 }
 

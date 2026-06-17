@@ -1,7 +1,8 @@
 # Platform Map
 
-버전: 1.0  
+버전: 1.1  
 작성일: 2026-04-18  
+갱신일: 2026-06-17  
 목적: **개발 세션 시작 시 이 파일 하나로 전체 플랫폼 맥락 파악**
 
 → 전체 일정/작업 큐: [PLATFORM_SCHEDULE.md](PLATFORM_SCHEDULE.md)
@@ -23,11 +24,11 @@
 [NodeKit]  ── C#/Avalonia 데스크톱 클라이언트
     │ BuildRequest (gRPC)          AdminToolList (REST)
     ▼                                     ▲
-[NodeVault]  ── Go 서버                  │
-    ├── BuildService     L2→L3→L4 + 등록 │
-    ├── PolicyService    DockGuard .wasm  │
+[NodeVault Pod]  ── Kubernetes data-plane app │
+    ├── BuildService     L2→L3→L4 + 등록   │
+    ├── podbridge5       Buildah Go API wrapper
     ├── pkg/index        artifact 상태 원장 (이중 축)
-    └── pkg/catalogrest  NodePalette REST (현재 인라인, TODO-10에서 분리)
+    └── pkg/catalogrest  Catalog/Validation REST
     │ 이미지 push / pull
     ▼
 [Harbor]  ── OCI 레지스트리 (harbor.10.113.24.96.nip.io)
@@ -66,9 +67,8 @@
 | K8s 클러스터 | multipass VM 3노드 (lab-master-0, lab-worker-0, lab-worker-1) |
 | CNI | Cilium |
 | Harbor | `harbor.10.113.24.96.nip.io` (Cilium LB VIP 10.113.24.96) |
-| NodeVault gRPC | `100.123.80.48:50051` (seoy 호스트 직접, Cilium GRPCRoute는 미사용) |
-| NodePalette REST (현재 NodeVault 내 인라인) | `http://100.123.80.48:8080` |
-| Harbor admin | `Harbor12345` |
+| NodeVault gRPC | cluster Service `nodevault-controlplane.nodevault-system.svc:50051`; 외부 노출은 Gateway/port-forward 정책으로 결정 |
+| NodeVault webhook/validation REST | cluster Service `:8082` |
 | kubeconfig | `/opt/go/src/github.com/HeaInSeo/infra-lab/kubeconfig` |
 
 seoy 호스트에서 Harbor 접근 시 라우트 필요:
@@ -87,7 +87,7 @@ ip route add 10.113.24.96/32 via 10.113.24.254
    └── DockGuard .wasm 정책 검사 (WasmPolicyChecker)
 
 2. BuildRequest → gRPC → NodeVault BuildService
-   ├── L2: podbridge5 in-process 이미지 빌드 → Harbor push → digest 획득
+   ├── L2: NodeVault Pod 내부 podbridge5/Buildah 빌드 → Harbor push → digest 획득
    ├── L3: K8s Job dry-run
    └── L4: K8s smoke run
 

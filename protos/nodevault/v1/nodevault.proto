@@ -63,7 +63,7 @@ message ListPoliciesResponse {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BuildService — builder Job orchestration
+// BuildService — in-Pod podbridge5/Buildah orchestration
 // ─────────────────────────────────────────────────────────────────────────────
 
 service BuildService {

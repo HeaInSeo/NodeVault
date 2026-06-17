@@ -70,48 +70,51 @@ test:
 
 # ── 통합 테스트 (infra-lab VM 클러스터) ───────────────────────────────
 # 사전 조건:
-#   1. infra-lab 클러스터가 실행 중
-#   2. Harbor가 실행 중  (scripts/host/harbor-resume.sh)
+#   1. infra-lab 클러스터와 Harbor가 실행 중
+#   2. NodeVault image push 완료
 #   3. make deploy-infralab 완료
 #
-# 실행:
-#   make deploy-infralab test-integration-infralab
-test-integration-infralab: build
+# The test connects to the deployed NodeVault Pod through a temporary
+# port-forward, so the in-pod-buildah path is exercised end to end.
+test-integration-infralab:
 	@if [ -z "$(INFRALAB_KUBECONFIG)" ]; then \
 	    echo "ERROR: infra-lab/kubeconfig not found. 클러스터를 먼저 실행하세요." >&2; exit 1; \
 	fi
 	@echo "==> Cluster: $$(KUBECONFIG=$(INFRALAB_KUBECONFIG) kubectl get nodes --no-headers 2>&1 | awk '{print $$1, $$2}' | tr '\n' '  ')"
-	@echo "==> Registry: $(INFRALAB_REGISTRY) (Harbor)"
-	@echo "==> NodeVault 로컬 바이너리 실행 중..."
-	@KUBECONFIG=$(INFRALAB_KUBECONFIG) \
-	    NODEVAULT_REGISTRY_ADDR=$(INFRALAB_REGISTRY) \
-	    ./bin/nodevault &
-	@NF_PID=$$!; \
+	@echo "==> NodeVault service port-forward 시작..."
+	@KUBECONFIG=$(INFRALAB_KUBECONFIG) kubectl -n nodevault-system \
+	    port-forward service/nodevault-controlplane 50051:50051 >/tmp/nodevault-port-forward.log 2>&1 & \
+	PF_PID=$$!; \
+	trap 'kill $$PF_PID 2>/dev/null || true' EXIT INT TERM; \
 	sleep 3; \
-	echo "==> 통합 테스트 실행 (pid=$$NF_PID)..."; \
+	if ! kill -0 $$PF_PID 2>/dev/null; then \
+	    cat /tmp/nodevault-port-forward.log >&2; \
+	    exit 1; \
+	fi; \
+	echo "==> in-pod-buildah 통합 테스트 실행 (port-forward pid=$$PF_PID)..."; \
 	KUBECONFIG=$(INFRALAB_KUBECONFIG) \
-	    NODEVAULT_REGISTRY_ADDR=$(INFRALAB_REGISTRY) \
-	    go test -v -tags "integration $(BUILDTAGS)" ./pkg/build/... -timeout 12m; \
-	TEST_EXIT=$$?; \
-	echo "==> NodeVault 종료 (pid=$$NF_PID)..."; \
-	kill $$NF_PID 2>/dev/null || true; \
-	exit $$TEST_EXIT
+	    go test -v -tags "integration $(BUILDTAGS)" ./pkg/build/... -timeout 12m
 
-# ── 클러스터 리소스 배포 (deploy/ + k8s/) ─────────────────────────────────────
-# NodeVault는 seoy 호스트 바이너리로 실행 (K8s Pod 아님).
-# deploy-infralab는 L3/L4 Job 실행을 위한 최소 K8s 리소스만 적용한다:
-#   - 00-namespaces.yaml : nodevault-smoke (L3/L4 Job 네임스페이스)
-#   - 02-rbac.yaml       : ServiceAccount + ClusterRole (Job 제출 권한)
-# 03-nodevault.yaml (Deployment) + 04-grpcroute.yaml은 현재 미사용 (미래 in-cluster 전환용).
+# ── 클러스터 리소스 배포 ────────────────────────────────────────────────────
+# NodeVault is a Kubernetes data-plane application. The Deployment executes
+# image builds in the NodeVault Pod through podbridge5/Buildah; it does not
+# create a builder Job.
 deploy-infralab:
 	@if [ -z "$(INFRALAB_KUBECONFIG)" ]; then \
 	    echo "ERROR: infra-lab/kubeconfig not found." >&2; exit 1; \
 	fi
-	@echo "==> NodeVault K8s 지원 리소스 배포 (namespace + RBAC)..."
+	@echo "==> NodeVault namespaces + validation RBAC 적용..."
 	KUBECONFIG=$(INFRALAB_KUBECONFIG) kubectl apply -f deploy/00-namespaces.yaml
 	KUBECONFIG=$(INFRALAB_KUBECONFIG) kubectl apply -f deploy/02-rbac.yaml
-	@echo "==> 배포 완료. NodeVault 바이너리를 seoy 호스트에서 실행하세요:"
-	@echo "    NODEVAULT_REGISTRY_ADDR=$(INFRALAB_REGISTRY) ./bin/nodevault"
+	@for secret in nodevault-registry-auth nodevault-harbor-auth; do \
+	    if ! KUBECONFIG=$(INFRALAB_KUBECONFIG) kubectl -n nodevault-system get secret $$secret >/dev/null 2>&1; then \
+	        echo "ERROR: nodevault-system/$$secret is required before deploying NodeVault." >&2; \
+	        exit 1; \
+	    fi; \
+	done
+	@echo "==> NodeVault in-Pod Buildah Deployment 적용..."
+	KUBECONFIG=$(INFRALAB_KUBECONFIG) kubectl apply -f deploy/03-nodevault.yaml
+	KUBECONFIG=$(INFRALAB_KUBECONFIG) kubectl -n nodevault-system rollout status deployment/nodevault-controlplane --timeout=180s
 
 # ── 클러스터 리소스 제거 ──────────────────────────────────────────────────────
 undeploy-infralab:
@@ -120,7 +123,7 @@ undeploy-infralab:
 	fi
 	KUBECONFIG=$(INFRALAB_KUBECONFIG) kubectl delete -f deploy/04-grpcroute.yaml --ignore-not-found=true
 	KUBECONFIG=$(INFRALAB_KUBECONFIG) kubectl delete -f deploy/03-nodevault.yaml --ignore-not-found=true
-	KUBECONFIG=$(INFRALAB_KUBECONFIG) kubectl delete -f deploy/02-rbac.yaml      --ignore-not-found=true
+	KUBECONFIG=$(INFRALAB_KUBECONFIG) kubectl delete -f deploy/02-rbac.yaml --ignore-not-found=true
 
 # ── 로컬 바이너리 빌드 ────────────────────────────────────────────────────────
 build:

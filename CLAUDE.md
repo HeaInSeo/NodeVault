@@ -2,7 +2,7 @@
 
 ## 1. Responsibility boundary (immutable)
 
-**NodeVault owns**: BuildRequest reception (gRPC server), builder Job orchestration,
+**NodeVault owns**: BuildRequest reception (gRPC server), in-Pod image build orchestration,
 DockGuard policy bundle management (`PolicyService`: .rego → opa build → .wasm → gRPC),
 internal registry integration, `RegisteredToolDefinition` creation and CAS storage,
 L3 kind dry-run (`ValidateService`), L4 smoke run (`ValidateService`),
@@ -11,16 +11,15 @@ and `ToolRegistryService`.
 **NodeKit owns**: authoring UX, L1 static validation, `WasmPolicyChecker` execution,
 `BuildRequest` generation, `AdminToolList` display, and all admin-side UI semantics.
 
-**image build (L2)**: `NODEVAULT_BUILD_BACKEND` env var로 백엔드를 선택한다.
+**image build (L2)**: production 경로는 `in-pod-buildah` 하나다.
 
 | 값 | 실행 위치 | 용도 |
 |----|-----------|------|
-| `local-podbridge` (기본) | seoy 호스트, podbridge5 in-process | 호스트 바이너리 배포 |
-| `k8s-job` | K8s Job (buildah, privileged) | incluster 배포 (in-cluster 스파이크 검증 완료) |
+| `in-pod-buildah` (기본) | NodeVault Pod/프로세스 내부 | podbridge5 wrapper가 Buildah Go API 사용 |
 | `disabled` | — | 빌드 없이 gRPC 서버만 기동 |
 
-`local-podbridge`는 K8s Pod 안에서 불가 (podbridge5 rootless overlay 제약).
-`k8s-job`은 `nodevault-builds` 네임스페이스에 Job을 생성하며 ServiceAccount 권한이 필요하다.
+`local-podbridge`는 기존 배포 호환을 위한 deprecated alias다.
+`k8s-job`은 제거되었으며 다시 도입하지 않는다. NodeVault는 빌드를 위해 별도 Job/worker Pod를 만들지 않는다.
 
 Do not implement authoring UI or L1 validation in NodeVault.
 
@@ -30,7 +29,7 @@ Do not implement authoring UI or L1 validation in NodeVault.
 |------|---------|
 | `BuildRequest` | What NodeKit sends over gRPC. Input to NodeVault. |
 | `RegisteredToolDefinition` | Post-L4 confirmed object. CAS-stored by NodeVault. SHA256 hash = filename. |
-| `image build (L2)` | `NODEVAULT_BUILD_BACKEND`으로 선택: `local-podbridge` (호스트, 기본) 또는 `k8s-job` (incluster). |
+| `image build (L2)` | NodeVault Pod 내부에서 podbridge5/Buildah로 수행. 별도 builder Job 없음. |
 | `AdminToolList` | NodeKit's admin view — NodeVault does NOT own or render this. |
 
 Do not create `ToolDefinition` objects in NodeVault — that is NodeKit's draft model.
@@ -39,10 +38,10 @@ Do not create `ToolDefinition` objects in NodeVault — that is NodeKit's draft 
 ## 3. Package structure
 
 ```
-cmd/controlplane   — NodeVault gRPC server (seoy 호스트 또는 K8s Pod)
+cmd/controlplane   — NodeVault Kubernetes data-plane gRPC/REST process
 cmd/palette        — NodePalette REST server (seoy 호스트 바이너리, 별도 프로세스)
 pkg/policy         — PolicyService: .rego management, opa build, GetPolicyBundle() RPC
-pkg/build          — BuildService: L2 빌드 백엔드 (local-podbridge / k8s-job / disabled) + L3/L4 orchestration
+pkg/build          — BuildService: in-Pod podbridge5/Buildah 또는 disabled + L3/L4 orchestration
 pkg/registry       — Harbor digest 획득
 pkg/validate       — ValidateService: K8s dry-run (L3), smoke run (L4)
 pkg/catalog        — ToolRegistryService: RegisteredToolDefinition CAS storage
@@ -56,24 +55,21 @@ Do not cross package boundaries in the wrong direction (e.g., `catalog` importin
 
 ## 4. Orchestration loop — the critical path
 
-L2's core challenge is the orchestration loop reliability, not the builder technology choice:
+L2's core challenge is the in-process build lifecycle reliability:
 
 ```
-Job 생성 → Running → 이미지 빌드 → 내부 레지스트리 push → Succeeded → digest 확보 → 후속 단계
+Build 요청 → workspace/storage 준비 → podbridge5/Buildah build → Harbor push
+→ digest 확보 → record 저장 → 후속 단계
 ```
 
-**Phase 2 gate**: builder Job happy-path must succeed once end-to-end before implementing
-`RegisteredToolDefinition` creation, manifest generation, dry-run, or any UI work.
-Do not proceed to detail work if the loop has not closed.
+No Kubernetes builder Job or worker Pod belongs in this loop.
 
 ## 5. kubeconfig / K8s API access
 
-NodeVault는 **seoy 호스트 바이너리**로 실행한다 — K8s Pod 아님.
-podbridge5(buildah) rootless 제약으로 K8s Pod 안에서 overlay 마운트 불가.
-K8s 접근은 로컬 kubeconfig 경유: L3/L4 Job 제출 전용.
-
-`deploy/02-rbac.yaml`은 배포되어 있음 (미래 in-cluster 전환을 위한 선행 배포).
-`deploy/03-nodevault.yaml` / `deploy/04-grpcroute.yaml`은 현재 미적용.
+NodeVault는 **Kubernetes Pod**로 실행한다.
+User Namespace(`hostUsers:false`) 환경은 대상 클러스터에서 검증 완료되었다.
+이미지 빌드는 Pod 내부 podbridge5/Buildah 경로이며 Kubernetes API를 사용하지 않는다.
+Kubernetes API 권한은 현재 L3/L4 ValidateService Job 실행에만 남아 있다.
 
 ### 테스트 환경
 
@@ -84,15 +80,15 @@ K8s 접근은 로컬 kubeconfig 경유: L3/L4 Job 제출 전용.
 
 **infra-lab 사전 조건** (최초 1회):
 ```bash
-make deploy-infralab    # 네임스페이스 + RBAC 배포
+make deploy-infralab    # NodeVault Deployment + validation RBAC 배포
 ```
 infra-lab은 `multipass` 또는 `libvirt` backend로 VM을 생성합니다. 클러스터 기동/종료는 infra-lab 저장소의 `./scripts/k8s-tool.sh up|down`(필요 시 `BACKEND=libvirt`)을 사용합니다. 자세한 절차는 `docs/INFRALAB_TESTING.md` 참조.
 
-통합 테스트는 NodeVault를 로컬 바이너리로 실행하고(`bin/nodevault`) kubeconfig로 원격 클러스터에 접속합니다.
+통합 테스트는 배포된 NodeVault Service를 port-forward하여 `in-pod-buildah` 경로를 검증합니다.
 
 ## 6. Decision checklist before every change
 
-- Does it add a new build backend? **`local-podbridge` / `k8s-job` / `disabled` 세 가지가 공식 옵션. 새 백엔드 추가는 명시적 결정 필요.**
+- Does it add a builder Job/worker Pod or another build backend? **Block — production build path is `in-pod-buildah` only.**
 - Does it add authoring UI or L1 validation logic? **Block — that is NodeKit.**
 - Does it touch the gRPC proto contract? **Requires coordination with NodeKit.**
 - Does it add `ToolDefinition` (NodeKit draft model) to NodeVault? **Block.**
@@ -114,7 +110,7 @@ Generated `.pb.go` files are excluded from lint (see `.golangci.yml`).
 | Change type | Expected validation |
 |---|---|
 | New gRPC RPC | Unit test for handler + integration test with NodeKit |
-| BuildService change | Orchestration loop test (Job create → status → push → digest) |
+| BuildService change | in-Pod build → push → digest integration test |
 | PolicyService change | .rego load + `opa build` + `GetPolicyBundle()` RPC test |
 | ValidateService change | kind dry-run / smoke run with local kubeconfig |
 | CAS storage change | Hash consistency test (same content → same hash) |
@@ -133,7 +129,7 @@ A task is not complete until the following are stated explicitly:
 
 Before marking a change complete, explicitly check for:
 
-- builder Job created but status watch not started (fire-and-forget without loop closing)
+- in-Pod Buildah subprocess/reexec starts without durable state or cancellation tracking
 - Job Succeeded but digest extraction from registry response fails silently
 - `opa build` subprocess fails without error propagation to gRPC response
 - CAS file written with wrong hash (content mismatch after read-back)

@@ -263,8 +263,8 @@ func TestRecordBuildSuccess_WritesToolBuildRecordAndToolImageRecord(t *testing.T
 	if rec.NanVersion != "v0.1.5" {
 		t.Errorf("NanVersion: got %q, want %q", rec.NanVersion, "v0.1.5")
 	}
-	if rec.Backend != "podbridge5" {
-		t.Errorf("Backend: got %q, want podbridge5 (default mockBuilder type)", rec.Backend)
+	if rec.Backend != "in-pod-buildah" {
+		t.Errorf("Backend: got %q, want in-pod-buildah", rec.Backend)
 	}
 
 	img, ierr := store.GetToolImageRecordByDigest("sha256:imgdigest")

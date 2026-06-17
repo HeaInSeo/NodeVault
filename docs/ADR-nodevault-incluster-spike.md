@@ -1,3 +1,6 @@
+> **상태: SUPERSEDED / REJECTED**  
+> 이 문서의 `k8s-job` builder 방식은 2026-06-17 폐기되었다. 현재 결정은 NodeVault Pod 내부에서 podbridge5/Buildah Go API를 호출하는 `in-pod-buildah` 단일 경로다. 이 문서는 실험 기록으로만 보존한다.
+
 # ADR: NodeVault In-Cluster Spike
 
 날짜: 2026-06-12  
@@ -48,7 +51,7 @@ K8s Pod 안에서 overlay 파일시스템 마운트가 불가능하기 때문에
 | `NODEVAULT_BUILD_BACKEND` | `local-podbridge` \| `disabled` \| `k8s-job` | `local-podbridge` | 이미지 빌드 백엔드 |
 | `NODEVAULT_BUILDER_IMAGE` | e.g. `quay.io/buildah/stable:v1.37.1` | 위 기본값 | k8s-job 백엔드의 builder 컨테이너 이미지 |
 | `HARBOR_USER` | e.g. `admin` | — | k8s-job builder Job에 전달할 Harbor 사용자명 |
-| `HARBOR_PASS` | e.g. `Harbor12345` | — | k8s-job builder Job에 전달할 Harbor 비밀번호 |
+| `HARBOR_PASS` | e.g. `<harbor-password>` | — | k8s-job builder Job에 전달할 Harbor 비밀번호 |
 
 기존 배포(`NODEVAULT_RUNTIME_MODE` 미설정)는 아무런 변경 없이 동작한다.
 

@@ -182,7 +182,7 @@ func (b *K8sJobBuilder) Build(
 	return jobName, digest, b.nanVersion, nil
 }
 
-// injectNanCopyStep appends a COPY step to the final build stage of dockerfileContent
+// injectNanCopyStep appends a COPY+RUN step to the final build stage of dockerfileContent
 // so the nan binary (mounted into the build context at /workspace/nan via ConfigMap
 // BinaryData) ends up at nanImagePath in every built tool image. The step is inserted
 // right after the last "FROM" line, so it always lands in the final stage of a
@@ -196,7 +196,8 @@ func injectNanCopyStep(dockerfileContent string) string {
 		}
 	}
 	nanStep := []string{
-		"COPY --chmod=0755 nan " + nanImagePath,
+		"COPY nan " + nanImagePath,
+		"RUN chmod +x " + nanImagePath,
 	}
 	if lastFrom == -1 {
 		// No FROM found (malformed Dockerfile) — fall back to prepending; buildah
@@ -222,7 +223,6 @@ func (b *K8sJobBuilder) buildJob(jobName, cmName, destination string) *batchv1.J
 	if cacheRef != "" {
 		cacheArgs = ` --cache-from "$CACHE_REF" --cache-to "$CACHE_REF"`
 	}
-	builderDestination := rewriteRegistryHost(destination, os.Getenv("NODEVAULT_BUILDER_PUSH_ADDR"))
 
 	buildScript := strings.Join([]string{
 		"set -e",
@@ -237,16 +237,8 @@ func (b *K8sJobBuilder) buildJob(jobName, cmName, destination string) *batchv1.J
 		`[storage.options.pull_options]`,
 		`enable_partial_images = "true"`,
 		`EOF`,
-		`cat > /tmp/registries.conf <<EOF`,
-		`unqualified-search-registries = ["docker.io"]`,
-		`[[registry]]`,
-		`location = "` + registryHost(builderDestination) + `"`,
-		`insecure = true`,
-		`EOF`,
-		`export CONTAINERS_REGISTRIES_CONF=/tmp/registries.conf`,
-		`export REGISTRIES_CONFIG_PATH=/tmp/registries.conf`,
-		`CONTAINERS_STORAGE_CONF=/tmp/storage.conf buildah --registries-conf /tmp/registries.conf bud --tls-verify=false --isolation chroot --runtime crun --layers` + cacheArgs + ` -t "$DESTINATION" /workspace/`,
-		`CONTAINERS_STORAGE_CONF=/tmp/storage.conf buildah --registries-conf /tmp/registries.conf push --tls-verify=false --creds "$HARBOR_USER:$HARBOR_PASS" --digestfile=/tmp/digest.txt "$DESTINATION"`,
+		`CONTAINERS_STORAGE_CONF=/tmp/storage.conf buildah bud --tls-verify=false --isolation chroot --runtime crun --layers` + cacheArgs + ` -t "$DESTINATION" /workspace/`,
+		`CONTAINERS_STORAGE_CONF=/tmp/storage.conf buildah push --tls-verify=false --creds "$HARBOR_USER:$HARBOR_PASS" --digestfile=/tmp/digest.txt "$DESTINATION"`,
 		`printf 'BUILD_DIGEST=%s\n' "$(cat /tmp/digest.txt)"`,
 	}, "\n")
 	hostUsers := false
@@ -282,7 +274,7 @@ func (b *K8sJobBuilder) buildJob(jobName, cmName, destination string) *batchv1.J
 							Command: []string{"/bin/sh", "-c"},
 							Args:    []string{buildScript},
 							Env: appendUserNamespaceBuildEnvironment([]corev1.EnvVar{
-								{Name: "DESTINATION", Value: builderDestination},
+								{Name: "DESTINATION", Value: destination},
 								{Name: "HARBOR_USER", Value: b.harborUser},
 								{Name: "HARBOR_PASS", Value: b.harborPass},
 								{Name: "CACHE_REF", Value: cacheRef},
@@ -353,26 +345,6 @@ func appendUserNamespaceBuildEnvironment(env []corev1.EnvVar) []corev1.EnvVar {
 // DefaultUserNamespaceBuildCapabilities() — inlined to stay on v0.1.1.
 func userNamespaceBuildCapabilities() []corev1.Capability {
 	return []corev1.Capability{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETFCAP", "SYS_CHROOT"}
-}
-
-func rewriteRegistryHost(imageRef, registryHost string) string {
-	registryHost = strings.TrimSpace(registryHost)
-	if registryHost == "" {
-		return imageRef
-	}
-	_, remainder, ok := strings.Cut(imageRef, "/")
-	if !ok {
-		return imageRef
-	}
-	return strings.TrimRight(registryHost, "/") + "/" + remainder
-}
-
-func registryHost(imageRef string) string {
-	host, _, ok := strings.Cut(imageRef, "/")
-	if !ok {
-		return imageRef
-	}
-	return host
 }
 
 // waitAndCollectDigest watches the Job until Complete or Failed, then reads digest from pod logs.

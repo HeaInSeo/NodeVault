@@ -37,9 +37,9 @@ spec:
 
       containers:
         - name: nodevault
-          # harbor.lab.local/nodevault/controlplane:latest
+          # harbor.10.113.24.96.nip.io/nodevault/controlplane:latest
           # 이미지는 `make push-image` 또는 Skopeo로 Harbor에 push한다.
-          image: harbor.lab.local/nodevault/controlplane:latest
+          image: harbor.10.113.24.96.nip.io/nodevault/controlplane:latest
           imagePullPolicy: Always
 
           ports:
@@ -49,7 +49,7 @@ spec:
 
           env:
             - name: NODEVAULT_REGISTRY_ADDR
-              value: "harbor.lab.local"
+              value: "harbor.10.113.24.96.nip.io"
             # Harbor 인증 정보는 Secret에서 주입 (아래 nodevault-harbor-auth 참조)
             - name: HARBOR_USER
               valueFrom:
@@ -70,8 +70,6 @@ spec:
             # 현재 lab에서는 overlay가 mount propagation 단계에서 막혀 vfs를 기본 사용한다.
             - name: NODEVAULT_BUILDER_STORAGE_DRIVER
               value: "vfs"
-            - name: NODEVAULT_BUILDER_PUSH_ADDR
-              value: "harbor.lab.local"
 
           securityContext:
             privileged: false

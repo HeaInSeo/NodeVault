@@ -227,7 +227,7 @@ func (b *K8sJobBuilder) buildJob(jobName, cmName, destination string) *batchv1.J
 	buildScript := strings.Join([]string{
 		"set -e",
 		`mkdir -p "$HOME/.config" "$XDG_DATA_HOME/containers" /home/build/.config /home/build/.local/share/containers /tmp/run/containers/storage /storage/.local/share/containers/storage`,
-		`chown -R 1000:1000 /home/build`,
+		`chown -R 0:0 /home/build`,
 		`cat > /tmp/storage.conf <<EOF`,
 		`[storage]`,
 		`driver = "` + storageDriver + `"`,

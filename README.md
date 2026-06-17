@@ -2,6 +2,7 @@
 
 NodeKit에서 `BuildRequest`를 받아 tool 이미지를 빌드·검증·인증·등록하는 Kubernetes 데이터플레인 애플리케이션.
 NodeVault는 장기 실행 Pod로 배포되며, 같은 Pod 안에서 podbridge5가 Buildah Go API를 사용해 이미지를 빌드하고 Harbor에 push한다.
+현재 infra-lab 기준 production 배포는 Kubernetes User Namespace(`hostUsers:false`)와 `crun` 기반의 non-privileged Buildah 경로를 사용한다.
 
 → 전체 플랫폼 구성 및 end-to-end 흐름: [docs/PLATFORM_MAP.md](docs/PLATFORM_MAP.md)
 → TrueNAS/iLO/NFS 운영 메모: [docs/TRUENAS_NFS_RUNBOOK.md](docs/TRUENAS_NFS_RUNBOOK.md)
@@ -16,8 +17,9 @@ NodeKit (C# 어드민 UI)
     ▼
 NodeVault (이 프로젝트 — Go gRPC + REST 서버)
     │
-    ├── L2: in-pod-buildah
+    ├── L2: in-pod-buildah (production)
     │       NodeVault process → podbridge5 wrapper → Buildah Go API
+    │       hostUsers:false Pod 안에서 container-root를 host 비특권 UID로 매핑
     │       별도 builder Job/worker Pod를 생성하지 않음
     │       disabled → 빌드 없이 gRPC 서버만 기동
     ├── 등록: CAS 저장 + pkg/index append
@@ -27,7 +29,7 @@ NodeVault (이 프로젝트 — Go gRPC + REST 서버)
     └── /debug/vars: expvar 메트릭 (NODEVAULT_METRICS_ADDR, 기본 :9090)
     │
     ▼
-Harbor (harbor.10.113.24.96.nip.io)
+Harbor (harbor.lab.local)
     └── library/<tool>@sha256:<digest>
 
     ▼ EnqueueValidationWork (gRPC)
@@ -117,6 +119,7 @@ curl http://localhost:9090/debug/vars
 | Go 1.25.11 | 빌드 |
 | CGO 빌드 의존성 | `pkg/build` (podbridge5): gpgme, btrfs-progs-devel 등 |
 | kubectl | L3/L4 K8s 연동 |
+| K8s user namespaces | infra-lab 기준 K8s 1.36.x, Linux 6.8, containerd 2.2, crun 1.28 검증 |
 
 ### 빌드 및 실행
 
@@ -134,6 +137,15 @@ make test-integration-infralab
 
 로컬 바이너리 실행은 디버깅 또는 `disabled` 모드 확인용 compatibility 경로다.
 
+### Buildah / User Namespace 운영 기준
+
+- production backend는 `NODEVAULT_BUILD_BACKEND=in-pod-buildah`다.
+- `NODEVAULT_BUILD_BACKEND=k8s-job`은 제거된 spike 경로이며, 현재 바이너리는 이 값을 거부한다.
+- NodeVault Pod는 `hostUsers:false`, `seccompProfile: RuntimeDefault`, `allowPrivilegeEscalation:false`, `privileged:false` 기준으로 배포한다.
+- Buildah는 `BUILDAH_ISOLATION=chroot`, `BUILDAH_RUNTIME=crun` 조합을 사용한다.
+- 현재 lab에서는 storage driver를 `vfs`로 둔다. overlay/idmap 또는 fuse-overlayfs 전환은 별도 성능/호환성 검증 후 진행한다.
+- Harbor는 Gateway hostname인 `harbor.lab.local`을 기준으로 사용한다. infra-lab CoreDNS가 `harbor.lab.local -> 10.113.24.96`을 제공한다.
+
 ### 환경 변수
 
 | 변수 | 기본값 | 설명 |
@@ -141,11 +153,11 @@ make test-integration-infralab
 | `NODEVAULT_ADDR` | `:50051` | gRPC 서버 바인딩 주소 |
 | `NODEVAULT_WEBHOOK_ADDR` | `:8082` | Catalog/Validation REST + webhook 수신 주소 |
 | `NODEVAULT_METRICS_ADDR` | `:9090` | expvar 메트릭 HTTP 서버 주소 |
-| `NODEVAULT_BUILD_BACKEND` | `in-pod-buildah` | 빌드 모드: `in-pod-buildah` / `disabled` (`local-podbridge`는 deprecated alias) |
+| `NODEVAULT_BUILD_BACKEND` | `in-pod-buildah` | 빌드 모드: `in-pod-buildah` / `disabled` (`local-podbridge`는 deprecated alias, `k8s-job`은 제거됨) |
 | `NODEVAULT_RUNTIME_MODE` | `host` | Kubernetes 배포에서는 `incluster`; 로컬 compatibility 실행은 `host` |
 | `NODEVAULT_FAST_RECONCILE` | `5m` | FastRun 주기 (integrity 존재 확인) |
 | `NODEVAULT_SLOW_RECONCILE` | `30m` | SlowRun 주기 (pull 도달 가능성) |
-| `NODEVAULT_REGISTRY_ADDR` | `harbor.10.113.24.96.nip.io` | 이미지 push 대상 Harbor 주소 |
+| `NODEVAULT_REGISTRY_ADDR` | `harbor.10.113.24.96.nip.io` | 이미지 push 대상 Harbor 주소; infra-lab 배포는 `harbor.lab.local` 사용 |
 | `NODEVAULT_ORAS_INSECURE_TLS` | `false` | ORAS referrer push TLS 검증 비활성화 |
 | `NODESENTINEL_GRPC_ADDR` | `nodesentinel.nodevault-system.svc.cluster.local:50052` | NodeSentinel EnqueueValidationWork 엔드포인트 |
 | `HARBOR_USER` / `HARBOR_PASS` | — | ORAS referrer 호환용 Harbor 인증 정보; Buildah push는 mounted auth.json 사용 |

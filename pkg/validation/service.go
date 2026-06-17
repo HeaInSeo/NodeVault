@@ -4,27 +4,36 @@ package validation
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/HeaInSeo/NodeVault/pkg/certification"
 	"github.com/HeaInSeo/NodeVault/pkg/index"
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
+
+// certificationService is the minimal interface for triggering certification
+// after a validation record is stored. Implemented by *certification.Service.
+type certificationService interface {
+	EvaluateAfterCheck(check index.ToolCheckRecord) error
+	EvaluateAfterScan(scan index.ToolScanRecord) error
+}
+
+// checkedAtMaxMs is the maximum valid checked_at / scanned_at value in milliseconds
+// (9999-12-31T23:59:59.999Z expressed as Unix milliseconds).
+const checkedAtMaxMs = int64(253402300799999)
 
 // Service implements ValidationResultServiceServer.
 type Service struct {
 	nfv1.UnimplementedValidationResultServiceServer
 	store   *index.Store
-	certSvc *certification.Service
+	certSvc certificationService
 }
 
 // New creates a ValidationResultService backed by the given index store.
-func New(store *index.Store, certSvc *certification.Service) *Service {
+func New(store *index.Store, certSvc certificationService) *Service {
 	return &Service{store: store, certSvc: certSvc}
 }
 
@@ -38,6 +47,13 @@ func (s *Service) SubmitToolCheckRecord(
 	}
 	if s.store == nil {
 		return nil, status.Error(codes.Unavailable, "index store not initialized")
+	}
+
+	// checked_at is Unix milliseconds; 0 means "use server time".
+	// Values outside [0, 253402300799999] are rejected to prevent silent timestamp corruption.
+	if req.CheckedAt < 0 || req.CheckedAt > checkedAtMaxMs {
+		return nil, status.Errorf(codes.InvalidArgument,
+			"checked_at out of range: must be 0 or a Unix millisecond timestamp in [0, %d]", checkedAtMaxMs)
 	}
 
 	checkedAt := time.Now().UTC()
@@ -99,10 +115,11 @@ func (s *Service) SubmitToolCheckRecord(
 
 	certStatus := "pending"
 	if s.certSvc != nil {
-		s.certSvc.EvaluateAfterCheck(rec)
-		certStatus = "certified"
-		if rec.ValidationStatus != "succeeded" {
-			certStatus = "pending"
+		if err := s.certSvc.EvaluateAfterCheck(rec); err != nil {
+			slog.Error("certification failed after check", "check_id", req.CheckId, "err", err)
+			certStatus = "failed"
+		} else if rec.ValidationStatus == "succeeded" {
+			certStatus = "certified"
 		}
 	}
 
@@ -122,6 +139,13 @@ func (s *Service) SubmitToolScanRecord(
 	}
 	if s.store == nil {
 		return nil, status.Error(codes.Unavailable, "index store not initialized")
+	}
+
+	// scanned_at is Unix milliseconds; 0 means "use server time".
+	// Values outside [0, 253402300799999] are rejected to prevent silent timestamp corruption.
+	if req.ScannedAt < 0 || req.ScannedAt > checkedAtMaxMs {
+		return nil, status.Errorf(codes.InvalidArgument,
+			"scanned_at out of range: must be 0 or a Unix millisecond timestamp in [0, %d]", checkedAtMaxMs)
 	}
 
 	scannedAt := time.Now().UTC()
@@ -152,7 +176,9 @@ func (s *Service) SubmitToolScanRecord(
 	slog.Info("ToolScanRecord stored", "scan_id", req.ScanId, "image_digest", req.ImageDigest)
 
 	if s.certSvc != nil {
-		s.certSvc.EvaluateAfterScan(rec)
+		if err := s.certSvc.EvaluateAfterScan(rec); err != nil {
+			slog.Error("certification failed after scan", "scan_id", req.ScanId, "err", err)
+		}
 	}
 
 	return &nfv1.SubmitRecordResponse{
@@ -171,7 +197,14 @@ func (s *Service) ListCertifiedTools(
 
 	filterStatus := index.PromotionActive
 	if req.PromotionStatus != "" {
-		filterStatus = index.PromotionStatus(req.PromotionStatus)
+		switch req.PromotionStatus {
+		case string(index.PromotionActive), string(index.PromotionSuperseded), string(index.PromotionRetracted):
+			filterStatus = index.PromotionStatus(req.PromotionStatus)
+		default:
+			return nil, status.Errorf(codes.InvalidArgument,
+				"promotion_status %q is not valid; allowed values: active, superseded, retracted",
+				req.PromotionStatus)
+		}
 	}
 
 	entries, err := s.store.ListToolFunctionCatalogEntries(filterStatus)
@@ -180,7 +213,8 @@ func (s *Service) ListCertifiedTools(
 	}
 
 	resp := &nfv1.ListCertifiedToolsResponse{}
-	for _, e := range entries {
+	for i := range entries {
+		e := &entries[i]
 		resp.Tools = append(resp.Tools, &nfv1.CertifiedToolEntry{
 			CasHash:         e.CasHash,
 			ToolName:        e.ToolName,
@@ -190,7 +224,7 @@ func (s *Service) ListCertifiedTools(
 			ImageRef:        e.ImageRef,
 			DisplayLabel:    e.DisplayLabel,
 			DisplayCategory: e.DisplayCategory,
-			PromotionStatus: fmt.Sprintf("%s", e.PromotionStatus),
+			PromotionStatus: string(e.PromotionStatus),
 			CertifiedAt:     e.CertifiedAt.UnixMilli(),
 			ValidationHash:  e.ValidationHash,
 		})

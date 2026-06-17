@@ -28,8 +28,8 @@ import (
 // trigger certification evaluation after a ToolCheckRecord or ToolScanRecord
 // is stored. Implemented by *certification.Service in production.
 type certService interface {
-	EvaluateAfterCheck(check index.ToolCheckRecord)
-	EvaluateAfterScan(scan index.ToolScanRecord)
+	EvaluateAfterCheck(check index.ToolCheckRecord) error
+	EvaluateAfterScan(scan index.ToolScanRecord) error
 }
 
 // ToolItem is the JSON wire format for a single registered tool.
@@ -93,7 +93,9 @@ func NewMux(store *index.Store, cat *catalog.Catalog, dataCat *catalog.DataCatal
 // NewMuxWithCert is like NewMux but wires in a certification.Service so that
 // POST /v1/validation/check-records and POST /v1/validation/scan-records can
 // trigger automatic certification evaluation after NodeSentinel submits records.
-func NewMuxWithCert(store *index.Store, cat *catalog.Catalog, dataCat *catalog.DataCatalog, certSvc certService) *http.ServeMux {
+func NewMuxWithCert(
+	store *index.Store, cat *catalog.Catalog, dataCat *catalog.DataCatalog, certSvc certService,
+) *http.ServeMux {
 	s := &Server{store: store, catalog: cat, dataCatalog: dataCat, certSvc: certSvc}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/catalog/tools", s.handleListTools)
@@ -306,11 +308,18 @@ type ListCertifiedToolsResponse struct {
 }
 
 // handleListCertifiedTools serves GET /v1/catalog/certified-tools.
-// Query parameter: promotion_status (default "active")
+// Query parameter: promotion_status (default "active"; allowed: "active", "superseded", "retracted")
 func (s *Server) handleListCertifiedTools(w http.ResponseWriter, r *http.Request) {
 	ps := r.URL.Query().Get("promotion_status")
 	if ps == "" {
 		ps = "active"
+	}
+	switch ps {
+	case string(index.PromotionActive), string(index.PromotionSuperseded), string(index.PromotionRetracted):
+		// valid
+	default:
+		http.Error(w, "promotion_status must be one of: active, superseded, retracted", http.StatusBadRequest)
+		return
 	}
 	entries, err := s.store.ListToolFunctionCatalogEntries(index.PromotionStatus(ps))
 	if err != nil {
@@ -318,8 +327,8 @@ func (s *Server) handleListCertifiedTools(w http.ResponseWriter, r *http.Request
 		return
 	}
 	items := make([]CertifiedToolItem, 0, len(entries))
-	for _, e := range entries {
-		items = append(items, toCertifiedToolItem(e))
+	for i := range entries {
+		items = append(items, toCertifiedToolItem(entries[i]))
 	}
 	writeJSON(w, ListCertifiedToolsResponse{Tools: items})
 }
@@ -327,20 +336,25 @@ func (s *Server) handleListCertifiedTools(w http.ResponseWriter, r *http.Request
 // handleGetCertifiedTool serves GET /v1/catalog/certified-tools/{cas_hash}.
 func (s *Server) handleGetCertifiedTool(w http.ResponseWriter, r *http.Request) {
 	casHash := r.PathValue("cas_hash")
+	if casHash == "" {
+		http.Error(w, "cas_hash required", http.StatusBadRequest)
+		return
+	}
 	entries, err := s.store.ListToolFunctionCatalogEntries("")
 	if err != nil {
 		http.Error(w, "index error", http.StatusInternalServerError)
 		return
 	}
-	for _, e := range entries {
-		if e.CasHash == casHash {
-			writeJSON(w, toCertifiedToolItem(e))
+	for i := range entries {
+		if entries[i].CasHash == casHash {
+			writeJSON(w, toCertifiedToolItem(entries[i]))
 			return
 		}
 	}
 	http.Error(w, "not found", http.StatusNotFound)
 }
 
+//nolint:gocritic // hugeParam: ToolFunctionCatalogEntry by value is intentional — callers own their copy.
 func toCertifiedToolItem(e index.ToolFunctionCatalogEntry) CertifiedToolItem {
 	return CertifiedToolItem{
 		CasHash:            e.CasHash,
@@ -414,6 +428,7 @@ type SubmitRecordResponse struct {
 
 // handleSubmitCheckRecord serves POST /v1/validation/check-records.
 func (s *Server) handleSubmitCheckRecord(w http.ResponseWriter, r *http.Request) {
+	defer func() { _ = r.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		http.Error(w, "read body", http.StatusBadRequest)
@@ -476,8 +491,12 @@ func (s *Server) handleSubmitCheckRecord(w http.ResponseWriter, r *http.Request)
 
 	certStatus := "pending"
 	if s.certSvc != nil && req.ValidationStatus == "succeeded" {
-		s.certSvc.EvaluateAfterCheck(rec)
-		certStatus = "certified"
+		if err := s.certSvc.EvaluateAfterCheck(rec); err != nil {
+			slog.Error("certification failed after check", "check_id", req.CheckID, "err", err)
+			certStatus = "failed"
+		} else {
+			certStatus = "certified"
+		}
 	}
 
 	writeJSON(w, SubmitRecordResponse{RecordID: req.CheckID, CertificationStatus: certStatus})
@@ -485,6 +504,7 @@ func (s *Server) handleSubmitCheckRecord(w http.ResponseWriter, r *http.Request)
 
 // handleSubmitScanRecord serves POST /v1/validation/scan-records.
 func (s *Server) handleSubmitScanRecord(w http.ResponseWriter, r *http.Request) {
+	defer func() { _ = r.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		http.Error(w, "read body", http.StatusBadRequest)
@@ -524,7 +544,9 @@ func (s *Server) handleSubmitScanRecord(w http.ResponseWriter, r *http.Request) 
 	slog.Info("ToolScanRecord stored via REST", "scan_id", req.ScanID, "image_digest", req.ImageDigest)
 
 	if s.certSvc != nil {
-		s.certSvc.EvaluateAfterScan(rec)
+		if err := s.certSvc.EvaluateAfterScan(rec); err != nil {
+			slog.Error("certification failed after scan", "scan_id", req.ScanID, "err", err)
+		}
 	}
 
 	writeJSON(w, SubmitRecordResponse{RecordID: req.ScanID, CertificationStatus: "pending"})
@@ -533,5 +555,7 @@ func (s *Server) handleSubmitScanRecord(w http.ResponseWriter, r *http.Request) 
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		slog.Error("writeJSON encode", "err", err)
+	}
 }

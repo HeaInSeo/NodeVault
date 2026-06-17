@@ -8,6 +8,8 @@ import (
 	"github.com/HeaInSeo/NodeVault/pkg/index"
 )
 
+const stableRefBWA1 = "bwa@1"
+
 func newStore(t *testing.T) *index.Store {
 	t.Helper()
 	s, err := index.NewAt(t.TempDir())
@@ -46,7 +48,7 @@ func TestAppend_Success(t *testing.T) {
 
 func TestAppend_EmptyCasHash_Rejected(t *testing.T) {
 	s := newStore(t)
-	err := s.Append(index.Entry{StableRef: "bwa@1"})
+	err := s.Append(index.Entry{StableRef: stableRefBWA1})
 	if err == nil {
 		t.Fatal("expected error for empty CasHash")
 	}
@@ -54,7 +56,7 @@ func TestAppend_EmptyCasHash_Rejected(t *testing.T) {
 
 func TestAppend_DuplicateCasHash_Rejected(t *testing.T) {
 	s := newStore(t)
-	e := toolEntry("hash-dup", "bwa@1")
+	e := toolEntry("hash-dup", stableRefBWA1)
 	if err := s.Append(e); err != nil {
 		t.Fatalf("first Append: %v", err)
 	}
@@ -67,7 +69,7 @@ func TestAppend_DuplicateCasHash_Rejected(t *testing.T) {
 
 func TestGetByCasHash_Found(t *testing.T) {
 	s := newStore(t)
-	e := toolEntry("hash-get", "bwa@1")
+	e := toolEntry("hash-get", stableRefBWA1)
 	if err := s.Append(e); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
@@ -78,8 +80,8 @@ func TestGetByCasHash_Found(t *testing.T) {
 	if got.CasHash != "hash-get" {
 		t.Errorf("CasHash: got %q want hash-get", got.CasHash)
 	}
-	if got.StableRef != "bwa@1" {
-		t.Errorf("StableRef: got %q want bwa@1", got.StableRef)
+	if got.StableRef != stableRefBWA1 {
+		t.Errorf("StableRef: got %q want %s", got.StableRef, stableRefBWA1)
 	}
 }
 
@@ -132,7 +134,7 @@ func TestListActive_LifecyclePhaseOnly(t *testing.T) {
 	s := newStore(t)
 
 	// Active + Healthy — should appear
-	e1 := toolEntry("hash-a1", "bwa@1")
+	e1 := toolEntry("hash-a1", stableRefBWA1)
 	e1.LifecyclePhase = index.PhaseActive
 	e1.IntegrityHealth = index.HealthHealthy
 	_ = s.Append(e1)
@@ -177,7 +179,7 @@ func TestListActive_LifecyclePhaseOnly(t *testing.T) {
 
 func TestSetLifecyclePhase_Transition(t *testing.T) {
 	s := newStore(t)
-	e := toolEntry("hash-lc", "bwa@1")
+	e := toolEntry("hash-lc", stableRefBWA1)
 	e.LifecyclePhase = index.PhasePending
 	if err := s.Append(e); err != nil {
 		t.Fatalf("Append: %v", err)
@@ -211,7 +213,7 @@ func TestSetLifecyclePhase_NotFound(t *testing.T) {
 
 func TestSetIntegrityHealth_Transition(t *testing.T) {
 	s := newStore(t)
-	e := toolEntry("hash-ih", "bwa@1")
+	e := toolEntry("hash-ih", stableRefBWA1)
 	e.IntegrityHealth = index.HealthHealthy
 	if err := s.Append(e); err != nil {
 		t.Fatalf("Append: %v", err)
@@ -247,7 +249,7 @@ func TestSetIntegrityHealth_NotFound(t *testing.T) {
 // SetIntegrityHealth each change only their own axis, never the other.
 func TestTwoAxesAreIndependent(t *testing.T) {
 	s := newStore(t)
-	e := toolEntry("hash-2ax", "bwa@1")
+	e := toolEntry("hash-2ax", stableRefBWA1)
 	e.LifecyclePhase = index.PhasePending
 	e.IntegrityHealth = index.HealthHealthy
 	if err := s.Append(e); err != nil {
@@ -279,7 +281,7 @@ func TestPersistence_ReloadFromDisk(t *testing.T) {
 	dir := t.TempDir()
 
 	s1, _ := index.NewAt(dir)
-	e := toolEntry("hash-persist", "bwa@1")
+	e := toolEntry("hash-persist", stableRefBWA1)
 	if err := s1.Append(e); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
@@ -293,8 +295,8 @@ func TestPersistence_ReloadFromDisk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetByCasHash after reload: %v", err)
 	}
-	if got.StableRef != "bwa@1" {
-		t.Errorf("StableRef after reload: got %q want bwa@1", got.StableRef)
+	if got.StableRef != stableRefBWA1 {
+		t.Errorf("StableRef after reload: got %q want %s", got.StableRef, stableRefBWA1)
 	}
 }
 
@@ -407,8 +409,8 @@ func TestLoad_SchemaV1File_NoNewSections_LoadsEmptySlices(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetByCasHash: %v", err)
 	}
-	if got.StableRef != "bwa@1" {
-		t.Errorf("StableRef: got %q want bwa@1", got.StableRef)
+	if got.StableRef != stableRefBWA1 {
+		t.Errorf("StableRef: got %q want %s", got.StableRef, stableRefBWA1)
 	}
 
 	// New section is empty, not erroring.

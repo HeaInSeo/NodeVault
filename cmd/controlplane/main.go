@@ -115,7 +115,8 @@ func normalizeBuildBackend(raw string) (string, error) {
 		return buildBackendDisabled, nil
 	case removedBuildBackendKubernetes:
 		return "", fmt.Errorf(
-			"NODEVAULT_BUILD_BACKEND=%q was removed: NodeVault must build in its own Pod through podbridge5/Buildah, not create a builder Job",
+			"NODEVAULT_BUILD_BACKEND=%q was removed: "+
+				"NodeVault must build in its own Pod through podbridge5/Buildah, not create a builder Job",
 			removedBuildBackendKubernetes,
 		)
 	default:
@@ -153,20 +154,7 @@ func run() int {
 	}
 
 	metrics.StartServer(os.Getenv("NODEVAULT_METRICS_ADDR"))
-
-	// Log startup configuration for observability.
-	kubeConfigMode := "kubeconfig_file"
-	if rc.runtimeMode == "incluster" {
-		kubeConfigMode = "incluster_serviceaccount"
-	}
-	slog.Info("NodeVault starting",
-		"runtime_mode", rc.runtimeMode,
-		"build_backend", rc.buildBackend,
-		"catalog_path", rc.catalogPath,
-		"index_path", rc.indexPath,
-		"grpc_listen_address", rc.grpcAddr,
-		"kube_config_mode", kubeConfigMode,
-	)
+	logStartupConfig(rc)
 
 	// Shared storage
 	cat := catalog.NewCatalog()
@@ -244,6 +232,24 @@ func run() int {
 		return 1
 	}
 	return 0
+}
+
+// logStartupConfig emits a structured log line with the active runtime configuration.
+//
+//nolint:gocritic // hugeParam: runtimeConfig by value is intentional — read-only helper.
+func logStartupConfig(rc runtimeConfig) {
+	kubeConfigMode := "kubeconfig_file"
+	if rc.runtimeMode == "incluster" {
+		kubeConfigMode = "incluster_serviceaccount"
+	}
+	slog.Info("NodeVault starting",
+		"runtime_mode", rc.runtimeMode,
+		"build_backend", rc.buildBackend,
+		"catalog_path", rc.catalogPath,
+		"index_path", rc.indexPath,
+		"grpc_listen_address", rc.grpcAddr,
+		"kube_config_mode", kubeConfigMode,
+	)
 }
 
 // registerBuildService registers the single production image build path.

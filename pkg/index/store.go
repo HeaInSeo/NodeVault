@@ -216,6 +216,8 @@ func (s *Store) All() ([]Entry, error) {
 
 // AppendResolvedToolSpec adds a new resolved tool spec to the index.
 // Returns an error if an entry with the same ToolSpecDigest already exists.
+//
+//nolint:dupl,gocritic // dupl: same guard+append pattern, distinct types. gocritic: by value is intentional.
 func (s *Store) AppendResolvedToolSpec(r ResolvedToolSpec) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -263,6 +265,8 @@ func (s *Store) ListResolvedToolSpecs() ([]ResolvedToolSpec, error) {
 
 // AppendToolBuildRecord adds a new build record to the index.
 // Returns an error if a record with the same BuildID already exists.
+//
+//nolint:gocritic // hugeParam: ToolBuildRecord by value is intentional — callers own their copy.
 func (s *Store) AppendToolBuildRecord(r ToolBuildRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -312,6 +316,8 @@ func (s *Store) ListToolBuildRecordsByToolSpecDigest(toolSpecDigest string) ([]T
 
 // AppendToolImageRecord adds a new image record to the index.
 // Returns an error if a record with the same ImageDigest already exists.
+//
+//nolint:dupl,gocritic // dupl: same guard+append pattern, distinct types. gocritic: by value is intentional.
 func (s *Store) AppendToolImageRecord(r ToolImageRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -364,6 +370,8 @@ func (s *Store) ListToolImageRecordsByBuildID(buildID string) ([]ToolImageRecord
 
 // AppendToolCheckRecord stores a new L5-a functional validation result.
 // Returns an error if a record with the same CheckID already exists.
+//
+//nolint:dupl,gocritic // dupl: same guard+append pattern, distinct types. gocritic: by value is intentional.
 func (s *Store) AppendToolCheckRecord(r ToolCheckRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -414,6 +422,8 @@ func (s *Store) ListToolCheckRecordsByImageDigest(imageDigest string) ([]ToolChe
 
 // AppendToolScanRecord stores a new L5-b security scan result.
 // Returns an error if a record with the same ScanID already exists.
+//
+//nolint:dupl,gocritic // dupl: same guard+append pattern, distinct types. gocritic: by value is intentional.
 func (s *Store) AppendToolScanRecord(r ToolScanRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -464,6 +474,8 @@ func (s *Store) ListToolScanRecordsByImageDigest(imageDigest string) ([]ToolScan
 
 // UpsertCertifiedToolImageRecord creates or replaces the certification record
 // for the given ImageDigest. Replaces on conflict to allow re-certification.
+//
+//nolint:dupl,gocritic // dupl: same guard+upsert pattern, distinct types. gocritic: by value is intentional.
 func (s *Store) UpsertCertifiedToolImageRecord(r CertifiedToolImageRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -516,6 +528,8 @@ func (s *Store) ListCertifiedToolImageRecords(status PromotionStatus) ([]Certifi
 
 // UpsertToolFunctionCatalogEntry creates or replaces the catalog entry for the
 // given CasHash. Replaces on conflict to allow re-certification updates.
+//
+//nolint:dupl,gocritic // dupl: same guard+upsert pattern, distinct types. gocritic: by value is intentional.
 func (s *Store) UpsertToolFunctionCatalogEntry(e ToolFunctionCatalogEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

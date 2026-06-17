@@ -247,7 +247,7 @@ func TestRecordBuildSuccess_WritesToolBuildRecordAndToolImageRecord(t *testing.T
 	}
 	svc := &Service{builder: &mockBuilder{}, indexStore: store}
 
-	startedAt := mustParseTime(t, "2026-06-15T00:00:00Z")
+	startedAt := mustParseTime(t)
 	svc.recordBuildSuccess("build-xyz", startedAt, "sha256:imgdigest", "harbor.example.com/library/tool:latest", "v0.1.5")
 
 	rec, gerr := store.GetToolBuildRecordByBuildID("build-xyz")
@@ -288,7 +288,7 @@ func TestRecordBuildFailure_WritesFailedToolBuildRecord(t *testing.T) {
 	}
 	svc := &Service{builder: &mockBuilder{}, indexStore: store}
 
-	startedAt := mustParseTime(t, "2026-06-15T00:00:00Z")
+	startedAt := mustParseTime(t)
 	svc.recordBuildFailure("build-failed-1", startedAt, errors.New("kaniko exited 1"))
 
 	rec, gerr := store.GetToolBuildRecordByBuildID("build-failed-1")
@@ -308,15 +308,15 @@ func TestRecordBuildFailure_WritesFailedToolBuildRecord(t *testing.T) {
 func TestRecordBuildSuccess_NilIndexStore_NoOp(t *testing.T) {
 	svc := &Service{builder: &mockBuilder{}}
 	// Must not panic.
-	svc.recordBuildSuccess("build-noop", mustParseTime(t, "2026-06-15T00:00:00Z"), "sha256:x", "ref", "v0.1.5")
-	svc.recordBuildFailure("build-noop-2", mustParseTime(t, "2026-06-15T00:00:00Z"), errors.New("err"))
+	svc.recordBuildSuccess("build-noop", mustParseTime(t), "sha256:x", "ref", "v0.1.5")
+	svc.recordBuildFailure("build-noop-2", mustParseTime(t), errors.New("err"))
 }
 
-func mustParseTime(t *testing.T, s string) time.Time {
+func mustParseTime(t *testing.T) time.Time {
 	t.Helper()
-	parsed, err := time.Parse(time.RFC3339, s)
+	parsed, err := time.Parse(time.RFC3339, "2026-06-15T00:00:00Z")
 	if err != nil {
-		t.Fatalf("time.Parse(%q): %v", s, err)
+		t.Fatalf("time.Parse: %v", err)
 	}
 	return parsed
 }

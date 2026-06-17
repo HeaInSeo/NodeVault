@@ -19,7 +19,9 @@ import (
 // re-marshaling) and records a ResolvedToolSpec in the index. Repeated requests
 // carrying byte-identical raw_spec are idempotent: the existing record is
 // returned instead of erroring.
-func (s *Service) ResolveToolSpec(_ context.Context, req *nfv1.ToolSpecRequest) (*nfv1.ResolvedToolSpecResponse, error) {
+func (s *Service) ResolveToolSpec(
+	_ context.Context, req *nfv1.ToolSpecRequest,
+) (*nfv1.ResolvedToolSpecResponse, error) {
 	if req.GetRawSpec() == "" || req.GetToolName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tool_name and raw_spec are required")
 	}

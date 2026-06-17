@@ -27,14 +27,21 @@ func New(store *index.Store) *Service {
 // EvaluateAfterCheck is called after a ToolCheckRecord is stored.
 // If the check succeeded, it immediately attempts certification using any
 // existing scan record (or proceeds without one if scan is optional).
-func (s *Service) EvaluateAfterCheck(check index.ToolCheckRecord) {
+//
+//nolint:gocritic // hugeParam: ToolCheckRecord by value matches the certService interface contract.
+func (s *Service) EvaluateAfterCheck(check index.ToolCheckRecord) error {
 	if check.ValidationStatus != "succeeded" {
 		slog.Info("certification skipped: check not succeeded",
 			"check_id", check.CheckID, "status", check.ValidationStatus)
-		return
+		return nil
 	}
 
-	scans, _ := s.store.ListToolScanRecordsByImageDigest(check.ImageDigest)
+	scans, err := s.store.ListToolScanRecordsByImageDigest(check.ImageDigest)
+	if err != nil {
+		slog.Error("certification aborted: failed to list scan records",
+			"check_id", check.CheckID, "err", err)
+		return fmt.Errorf("list scan records: %w", err)
+	}
 	var latestScan *index.ToolScanRecord
 	for i := range scans {
 		if latestScan == nil || scans[i].ScannedAt.After(latestScan.ScannedAt) {
@@ -42,25 +49,40 @@ func (s *Service) EvaluateAfterCheck(check index.ToolCheckRecord) {
 		}
 	}
 
-	s.certify(check, latestScan)
+	return s.certify(check, latestScan)
 }
 
 // EvaluateAfterScan is called after a ToolScanRecord is stored.
 // Looks for an existing successful check and re-evaluates certification.
-func (s *Service) EvaluateAfterScan(scan index.ToolScanRecord) {
-	checks, _ := s.store.ListToolCheckRecordsByImageDigest(scan.ImageDigest)
-	for _, check := range checks {
-		if check.ValidationStatus == "succeeded" {
-			s.certify(check, &scan)
-			return
+//
+//nolint:gocritic // hugeParam: ToolScanRecord by value matches the certService interface contract.
+func (s *Service) EvaluateAfterScan(scan index.ToolScanRecord) error {
+	checks, err := s.store.ListToolCheckRecordsByImageDigest(scan.ImageDigest)
+	if err != nil {
+		slog.Error("certification aborted: failed to list check records",
+			"scan_id", scan.ScanID, "err", err)
+		return fmt.Errorf("list check records: %w", err)
+	}
+	for i := range checks {
+		if checks[i].ValidationStatus == "succeeded" {
+			return s.certify(checks[i], &scan)
 		}
 	}
 	slog.Info("certification deferred: no successful check record yet",
 		"scan_id", scan.ScanID, "image_digest", scan.ImageDigest)
+	return nil
 }
 
 // certify creates or updates CertifiedToolImageRecord and ToolFunctionCatalogEntry.
-func (s *Service) certify(check index.ToolCheckRecord, scan *index.ToolScanRecord) {
+//
+//nolint:gocritic // hugeParam: ToolCheckRecord by value is intentional — callers own their copy.
+func (s *Service) certify(check index.ToolCheckRecord, scan *index.ToolScanRecord) error {
+	if check.ToolName == "" || check.Version == "" {
+		slog.Error("certification aborted: ToolName or Version is empty",
+			"check_id", check.CheckID, "tool_name", check.ToolName, "version", check.Version)
+		return fmt.Errorf("certify: ToolName and Version must not be empty (check_id=%q)", check.CheckID)
+	}
+
 	policyBlocked := false
 	var scanID string
 	if scan != nil {
@@ -89,20 +111,21 @@ func (s *Service) certify(check index.ToolCheckRecord, scan *index.ToolScanRecor
 	}
 
 	// Lookup CasHash from index Entry if available (best-effort).
-	if entries, err := s.store.ListByStableRef(fmt.Sprintf("%s@%s", check.ToolName, check.Version)); err == nil && len(entries) > 0 {
+	stableRef := fmt.Sprintf("%s@%s", check.ToolName, check.Version)
+	if entries, err := s.store.ListByStableRef(stableRef); err == nil && len(entries) > 0 {
 		cert.CasHash = entries[0].CasHash
 	}
 
 	if err := s.store.UpsertCertifiedToolImageRecord(cert); err != nil {
 		slog.Error("failed to store CertifiedToolImageRecord", "err", err)
-		return
+		return fmt.Errorf("upsert certified tool image record: %w", err)
 	}
 	slog.Info("tool certified", "image_digest", cert.ImageDigest, "status", cert.PromotionStatus)
 
 	if cert.CasHash == "" {
 		slog.Warn("no CasHash found for certified tool — catalog entry skipped",
 			"tool_name", check.ToolName, "version", check.Version)
-		return
+		return nil
 	}
 
 	// Look up display metadata from existing catalog entry.
@@ -130,7 +153,8 @@ func (s *Service) certify(check index.ToolCheckRecord, scan *index.ToolScanRecor
 	}
 	if err := s.store.UpsertToolFunctionCatalogEntry(catalogEntry); err != nil {
 		slog.Error("failed to store ToolFunctionCatalogEntry", "err", err)
-		return
+		return fmt.Errorf("upsert tool function catalog entry: %w", err)
 	}
 	slog.Info("catalog entry upserted", "cas_hash", cert.CasHash, "status", promotionStatus)
+	return nil
 }

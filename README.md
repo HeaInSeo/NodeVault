@@ -1,4 +1,4 @@
-# NodeVault
+# NodeVault <!-- v0.3.1 -->
 
 NodeKit에서 `BuildRequest`를 받아 tool 이미지를 빌드·검증·인증·등록하는 Kubernetes 데이터플레인 애플리케이션.
 NodeVault는 장기 실행 Pod로 배포되며, 같은 Pod 안에서 podbridge5가 Buildah Go API를 사용해 이미지를 빌드하고 Harbor에 push한다.

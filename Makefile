@@ -1,10 +1,14 @@
-.PHONY: fmt lint lint-fix lint-config golangci-lint test test-integration test-integration-infralab \
+.PHONY: fmt lint lint-fix lint-config golangci-lint kube-linter kube-lint test test-integration test-integration-infralab \
         deploy-infralab undeploy-infralab build push-image vendor \
         proto coverage vuln slint clean all deploy-seoy
 
 LOCALBIN      ?= $(CURDIR)/bin
 GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
 GOLANGCI_LINT_VERSION ?= v2.11.3
+KUBE_LINTER   ?= $(LOCALBIN)/kube-linter
+KUBE_LINTER_VERSION ?= v0.8.3
+KUBE_LINTER_SHA256_LINUX_AMD64 ?= 618d299a3e2839c8ca9d86fce0db617be0fba41f0fecbbbfb7fbf1c04299fae1
+KUBE_LINTER_SHA256_LINUX_ARM64 ?= 9c39d35252e0dcafb16b26197b9e93ba578e44eb402c3c6660fc94e08f94094f
 PROTOC        ?= protoc
 PROTO_OUT     ?= ./gen/go
 PROTO_SRC     ?= ./protos
@@ -63,6 +67,28 @@ lint-fix: golangci-lint
 
 lint-config: golangci-lint
 	$(GOLANGCI_LINT) config verify --config=.golangci.yml
+
+# ── kube-linter (K8s 매니페스트 가드레일) ──────────────────────────────────────
+# stackrox/kube-linter는 checksums.txt를 게시하지 않으므로, golangci-lint와
+# 동일한 검증 방식을 적용하기 위해 고정 버전의 SHA256을 직접 핀한다.
+kube-linter:
+	@mkdir -p "$(LOCALBIN)"
+	@test -x "$(KUBE_LINTER)" || bash -c '\
+		set -euo pipefail; \
+		ARCH="$$(uname -m)"; \
+		case "$$ARCH" in \
+			x86_64) SUFFIX=""; EXPECTED="$(KUBE_LINTER_SHA256_LINUX_AMD64)" ;; \
+			aarch64|arm64) SUFFIX="_arm64"; EXPECTED="$(KUBE_LINTER_SHA256_LINUX_ARM64)" ;; \
+			*) echo "unsupported arch: $$ARCH"; exit 1 ;; \
+		esac; \
+		URL="https://github.com/stackrox/kube-linter/releases/download/$(KUBE_LINTER_VERSION)/kube-linter-linux$$SUFFIX"; \
+		curl -fsSL "$$URL" -o "$(KUBE_LINTER)"; \
+		ACTUAL="$$(sha256sum "$(KUBE_LINTER)" | awk "{print \$$1}")"; \
+		if [ "$$EXPECTED" != "$$ACTUAL" ]; then echo "checksum mismatch for kube-linter"; rm -f "$(KUBE_LINTER)"; exit 1; fi; \
+		chmod +x "$(KUBE_LINTER)"'
+
+kube-lint: kube-linter
+	$(KUBE_LINTER) lint deploy/ --config .kube-linter.yaml
 
 # ── 단위 테스트 ───────────────────────────────────────────────────────────────
 test:

@@ -1,0 +1,7 @@
+checks:
+  exclude:
+    # NodeVault Pod runs as uid 0 by design, remapped through hostUsers:false
+    # (Kubernetes User Namespaces) into an unprivileged host UID range — see
+    # deploy/03-nodevault.yaml and CLAUDE.md §5. run-as-non-root only checks
+    # the in-container UID, so it cannot see the remap and always flags this.
+    - "run-as-non-root"

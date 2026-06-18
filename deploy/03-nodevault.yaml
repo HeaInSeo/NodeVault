@@ -192,11 +192,34 @@ spec:
 
 ---
 # Explicit containers/storage configuration for the in-Pod builder.
-# 2026-06-18: re-testing overlay now that the cluster's userNS test VM was
-# rebuilt to support it (previously forced to vfs by a mount-propagation
-# failure under hostUsers:false). If overlay still fails here, that failure
-# must be reported as-is and driver reverted to "vfs" explicitly with a
-# comment restating the failure mode — do not swap drivers silently.
+#
+# 2026-06-18: re-tested overlay on test-wizard-env (libvirt, rebuilt for userNS
+# support). Result: still blocked, for two distinct, confirmed reasons — not
+# silently worked around, driver reverted to "vfs" as a temporary fallback only:
+#
+#   1. native overlay without CAP_SYS_ADMIN: EPERM on
+#      `mount(MS_PRIVATE)` for the graphroot ("failed to make mount private").
+#      The Pod's capability set (CHOWN, DAC_OVERRIDE, FOWNER, SETFCAP,
+#      SYS_CHROOT) does not include SYS_ADMIN.
+#   2. native overlay WITH CAP_SYS_ADMIN added (one-off experiment, not kept):
+#      same call now fails EACCES instead of EPERM — adding the capability
+#      alone is not sufficient. The emptyDir-backed graphroot mount is not
+#      recognized as owned by the Pod's own user namespace, so the kernel
+#      still refuses to let it become private under hostUsers:false.
+#   3. fuse-overlayfs (no CAP_SYS_ADMIN needed) was also probed: the image
+#      already bundles fuse-overlayfs, and /dev/fuse exists on the node, but
+#      mounting /dev/fuse into a hostUsers:false Pod via hostPath fails at
+#      container-create time: `mount_setattr /dev/fuse ... Invalid argument
+#      (maybe the file system used doesn't support idmap mounts on this
+#      kernel?)`. storage.conf mount_program=fuse-overlayfs was therefore not
+#      even deployed — it would hit the same /dev/fuse access failure.
+#
+# Conclusion: as long as hostUsers:false is required, neither overlay path
+# works on this cluster's kernel (Ubuntu 24.04, 6.8.0-117-generic). Enabling
+# overlay needs one of: dropping hostUsers:false, a kernel/runtime idmap fix,
+# or node-side overlay setup handed to the Pod via bind mount instead of a
+# Pod-owned mount_setattr call. Do not re-flip this to "overlay" without
+# addressing one of those.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -205,7 +228,7 @@ metadata:
 data:
   storage.conf: |
     [storage]
-    driver = "overlay"
+    driver = "vfs"
     runroot = "/run/nodevault/containers"
     graphroot = "/var/lib/nodevault/containers"
     rootless_storage_path = "/var/lib/nodevault/containers"

@@ -482,8 +482,8 @@ expected: /out/result.txt exists=true, count=1, totalBytes>0
 | 문서 | 위치 | 내용 |
 |------|------|------|
 | ARCHITECTURE.md | `docs/` | NodeVault 컴포넌트 구조, 실제 구현 기준 |
-| NODEVAULT_TRANSITION_PLAN.md | `docs/` | **전체 TODO 목록 + 완료 현황** |
-| PLATFORM_SCHEDULE.md | `docs/` | Sprint별 상세 일정 + 완료 기준 테스트 목록 |
+| PLATFORM_SCHEDULE.md | `docs/` | **현재 진행 계획** — Sprint별 상세 일정 + 완료 기준 테스트 목록 |
+| obsolete/NODEVAULT_TRANSITION_PLAN.md | `docs/obsolete/` | (구) TODO 목록 — 대부분 완료로 종료, 역사적 참고용 |
 | TOOL_CONTRACT_V0_2.md | `docs/` | RegisteredTool v0.2 확정 계약 (변경 금지) |
 | TOOL_CONTRACT_V0_3_DRAFT.md | `docs/` | RegisteredTool v0.3 additive field 계약 (Sprint 0 산출물) |
 | INDEX_SCHEMA.md | `docs/` | index 스키마 + 이중 축 상태 모델 |

@@ -190,7 +190,8 @@ Deleted       혼합     Unreachable
 | 문서 | 위치 | 내용 |
 |------|------|------|
 | ARCHITECTURE.md | `NodeVault/docs/` | NodeVault 컴포넌트 구조, 실제 구현 기준 |
-| NODEVAULT_TRANSITION_PLAN.md | `NodeVault/docs/` | **전체 TODO 목록 + 완료 현황** |
+| PLATFORM_SCHEDULE.md | `NodeVault/docs/` | **현재 진행 계획 + Phase별 완료 기준** |
+| obsolete/NODEVAULT_TRANSITION_PLAN.md | `NodeVault/docs/obsolete/` | (구) TODO 목록 — 대부분 완료로 종료, 역사적 참고용 |
 | TOOL_CONTRACT_V0_2.md | `NodeVault/docs/` | RegisteredTool v0.2 확정 계약 |
 | INDEX_SCHEMA.md | `NodeVault/docs/` | index 스키마 + 이중 축 상태 모델 |
 | AUTHORITY_MAP.md | `NodeVault/docs/` | write authority 분리 설계 |

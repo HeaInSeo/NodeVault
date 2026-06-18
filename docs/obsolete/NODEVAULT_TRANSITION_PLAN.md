@@ -1,7 +1,12 @@
 # NodeVault 아키텍처 전환 계획
 
 버전: 1.2  
-작성일: 2026-04-14 / 갱신: 2026-04-19
+작성일: 2026-04-14 / 갱신: 2026-04-19  
+**상태: obsolete — 2026-06-17부로 [`../PLATFORM_SCHEDULE.md`](../PLATFORM_SCHEDULE.md)가 현재 진행 추적 문서.**
+TODO-01~TODO-17은 대부분 완료(✓) 상태로 종료됨. 미완료였던 TODO-13(sori 패키징 통합 경계),
+TODO-16b(stableRef UI 정책)는 PLATFORM_SCHEDULE.md에 아직 반영되지 않은 이월 항목이므로 별도 확인 필요.
+v0.6.1 Sprint 1/2(authoring_hash 등 referrer 기반 additive field)는 구현되지 않았고,
+이후 ValidationResultService/certification.Service(91837e7)라는 다른 설계로 대체되었다.
 
 관련 문서:
 - 아키텍처 개요: [ARCHITECTURE.md](ARCHITECTURE.md)

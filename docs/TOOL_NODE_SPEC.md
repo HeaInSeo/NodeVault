@@ -257,7 +257,7 @@ GET /api/v1/tools?stableRef=bwa@0.7.17  (NodePalette REST)
 
 ### 비고
 
-DagEdit 연동은 NODEVAULT_TRANSITION_PLAN.md에서 P5 단계다.
+DagEdit 연동은 PLATFORM_SCHEDULE.md의 "DagEdit ↔ NodePalette 연결" (병렬 트랙 C, P4) 단계다.
 NodeKit의 AdminToolList(관리자 전용)와 달리, DagEdit의 palette는 파이프라인 빌더 사용자 대상이며 별도 설계가 필요하다.
 
 ---

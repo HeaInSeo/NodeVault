@@ -149,8 +149,9 @@ seoy 배포 운영 중 발생하는 warning으로, 현재는 무해하나 빌드
 
 ## 14. NodeVault 전환 계획 (진행 중)
 
-전체 전환 계획은 **`docs/NODEVAULT_TRANSITION_PLAN.md`** 참조.
+전체 전환 계획은 **`docs/PLATFORM_SCHEDULE.md`** 참조 (v0.1.0 아키텍처 Phase 1~6).
 새 기능 구현 전 반드시 해당 문서의 우선순위와 선행 조건을 확인할 것.
+구 계획(`docs/obsolete/NODEVAULT_TRANSITION_PLAN.md`)은 TODO-01~17 대부분 완료로 종료됨 — 역사적 참고용.
 
 ### 새 아키텍처 불변 제약
 

@@ -6,7 +6,7 @@
 상태: Kubernetes data-plane / in-pod-buildah 전환 기준
 
 관련 문서:
-- [NODEVAULT_TRANSITION_PLAN.md](NODEVAULT_TRANSITION_PLAN.md) — TODO 목록 및 구현 계획
+- [PLATFORM_SCHEDULE.md](PLATFORM_SCHEDULE.md) — 현재 진행 계획 및 Phase별 완료 기준
 - [TOOL_CONTRACT_V0_2.md](TOOL_CONTRACT_V0_2.md) — RegisteredTool v0.2 확정 계약
 - [INDEX_SCHEMA.md](INDEX_SCHEMA.md) — index 스키마 및 이중 축 상태 모델
 - [AUTHORITY_MAP.md](AUTHORITY_MAP.md) — write authority 분리 설계

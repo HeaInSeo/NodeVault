@@ -7,15 +7,15 @@ import (
 	"strings"
 
 	"github.com/HeaInSeo/utils"
-	"github.com/containers/buildah"
-	"github.com/containers/buildah/define"
-	"github.com/containers/common/pkg/config"
-	imageTypes "github.com/containers/image/v5/types"
-	"github.com/containers/podman/v5/pkg/bindings/images"
-	"github.com/containers/podman/v5/pkg/domain/entities/types"
-	"github.com/containers/storage"
-	"github.com/containers/storage/pkg/unshare"
 	"github.com/opencontainers/go-digest"
+	"go.podman.io/buildah"
+	"go.podman.io/buildah/define"
+	"go.podman.io/common/pkg/config"
+	imageTypes "go.podman.io/image/v5/types"
+	"go.podman.io/podman/v6/pkg/bindings/images"
+	"go.podman.io/podman/v6/pkg/domain/entities/types"
+	"go.podman.io/storage"
+	"go.podman.io/storage/pkg/unshare"
 )
 
 var (
@@ -182,6 +182,40 @@ func NewStore() (storage.Store, error) {
 	return buildStore, nil
 }
 
+func NewStoreWithOptions(opts ...StoreOption) (storage.Store, error) {
+	buildStoreOptions, err := storage.DefaultStoreOptions()
+	if err != nil {
+		Log.Errorf("failed to get default store options: %v", err)
+		return nil, err
+	}
+	for _, applyOpt := range opts {
+		if err := applyOpt(&buildStoreOptions); err != nil {
+			return nil, err
+		}
+	}
+	buildStore, err := storage.GetStore(buildStoreOptions)
+	if err != nil {
+		Log.Errorf("failed to get store: %v", err)
+		return nil, err
+	}
+	return buildStore, nil
+}
+
+func NewUserNamespaceStore(opts ...StoreOption) (storage.Store, error) {
+	buildStoreOptions := DefaultUserNamespaceStoreOptions()
+	for _, applyOpt := range opts {
+		if err := applyOpt(&buildStoreOptions); err != nil {
+			return nil, err
+		}
+	}
+	buildStore, err := storage.GetStore(buildStoreOptions)
+	if err != nil {
+		Log.Errorf("failed to get user namespace store: %v", err)
+		return nil, err
+	}
+	return buildStore, nil
+}
+
 // shutdown force 를 true 로 잡아주면 다른 컨테이너에게도 영향을 줄 수 있음.
 // 기본적으로 false 를 유지하도록 하고, 모든 컨테이너가 종료되어 다른 레이어를 사용하지 않는다면 true 로 해줄 수 있음.
 func shutdown(store storage.Store, force bool) error {
@@ -336,6 +370,24 @@ func BuildDockerfileContent(ctx context.Context, store storage.Store, dockerfile
 		return "", "", fmt.Errorf("store must not be nil")
 	}
 	return buildDockerfileContentWithRuntime(ctx, realImageBuildRuntime{}, store, dockerfileContent, outputRef)
+}
+
+func BuildDockerfileContentWithOptions(ctx context.Context, store storage.Store, dockerfileContent string, buildOpts define.BuildOptions) (imageID, digestStr string, err error) {
+	if store == nil {
+		return "", "", fmt.Errorf("store must not be nil")
+	}
+	return buildDockerfileContentWithOptionsRuntime(ctx, realImageBuildRuntime{}, store, dockerfileContent, buildOpts)
+}
+
+func BuildDockerfileContentUserNamespace(ctx context.Context, store storage.Store, dockerfileContent string, config UserNamespaceBuildConfig) (imageID, digestStr string, err error) {
+	if store == nil {
+		return "", "", fmt.Errorf("store must not be nil")
+	}
+	buildOpts, err := UserNamespaceImageBuildOptions(config)
+	if err != nil {
+		return "", "", err
+	}
+	return buildDockerfileContentWithOptionsRuntime(ctx, realImageBuildRuntime{}, store, dockerfileContent, buildOpts)
 }
 
 // PushImage pushes a locally built image from the provided storage store to the

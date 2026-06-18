@@ -37,12 +37,27 @@ Kubernetes 위에서 사용하는 상위 프로젝트가 있을 수는 있지만
 
 ## Go 기준선
 
-이 저장소는 `go.mod` 기준으로 `Go 1.25.5`를 사용합니다.
+이 저장소는 `go.mod` 기준으로 `Go 1.25.6`을 사용합니다.
 다른 관련 프로젝트들과 동일한 `Go 1.25.x` 기준선을 유지하는 것이 정책입니다.
 
 - 로컬 테스트와 개발 진입점은 `make test-unit`, `make test-runtime`, `make test-runtime-integration`입니다.
-- 이 타깃들은 실행 전에 현재 `go` 바이너리가 `go1.25.5`인지 확인합니다.
+- 이 타깃들은 실행 전에 현재 `go` 바이너리가 `go1.25.6`인지 확인합니다.
 - 낮은 버전과의 호환성을 목표로 하지 않습니다. 버전을 낮추는 대신 개발 환경과 CI/VM을 `1.25.x`에 맞춥니다.
+
+## Kubernetes user namespace 빌드 준비
+
+NodeVault의 rootless builder 전환을 위해 `podbridge5`는 Buildah user namespace용 기본 옵션을 제공합니다.
+`DefaultUserNamespaceStoreOptions()`는 별도 `storage.conf` 파일 없이도 `/storage` 아래의 `runroot`, `graphroot`, overlay driver, partial image pull 기본값을 코드에서 구성합니다.
+필요하면 `WithStoreRoots`, `WithStoreDriver`, `WithFuseOverlayfsMountProgram`, `WithPartialImagePulls`로 런타임 환경에 맞게 조정합니다.
+
+빌드 옵션은 `UserNamespaceImageBuildOptions()`와 `BuildDockerfileContentUserNamespace()`를 사용합니다.
+기본값은 Kubernetes `hostUsers: false` Pod에서 쓰기 좋은 `chroot` isolation, `crun` runtime, `--layers` 활성화이며, Harbor 캐시 저장소는 `CacheRef`로 `cache-from/cache-to`에 동시에 연결합니다.
+worker manifest에는 `DefaultUserNamespaceBuildEnvironment()`의 환경 변수와 `DefaultUserNamespaceBuildCapabilities()`의 capability 세트를 반영합니다.
+현재 랩에서는 overlay driver가 mount propagation 단계에서 막혀서, non-privileged smoke는 `WithStoreDriver("vfs")`와 동일한 설정으로 검증했습니다.
+overlay는 목표 기본값으로 유지하되, NodeVault 전환 시 node filesystem/idmap 또는 fuse-overlayfs 경로를 별도 검증해야 합니다.
+
+이 경로는 Kubernetes 1.36 계열 user namespace, Linux 6.3 이상 수준의 idmapped mount 지원, containerd 2.x, crun 1.9+ 조합을 전제로 합니다.
+호환되지 않는 Dockerfile은 이후 NodeVault의 privileged isolated fallback 전략으로 분리합니다.
 
 ## 문서
 

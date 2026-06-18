@@ -7,9 +7,9 @@ import (
 	"path"
 	"syscall"
 
-	"github.com/containers/podman/v5/pkg/specgen"
-	"github.com/containers/storage/pkg/unshare"
 	specgo "github.com/opencontainers/runtime-spec/specs-go"
+	"go.podman.io/podman/v6/pkg/specgen"
+	"go.podman.io/storage/pkg/unshare"
 	"golang.org/x/sys/unix"
 )
 

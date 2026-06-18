@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/containers/podman/v5/pkg/bindings/containers"
-	"github.com/containers/podman/v5/pkg/specgen"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"go.podman.io/podman/v6/pkg/bindings/containers"
+	"go.podman.io/podman/v6/pkg/specgen"
 )
 
 // LogContainerStatsToCSV 지정한 컨테이너의 리소스 사용량(CPU, Memory 등)을 일정 간격으로 CSV 파일에 기록

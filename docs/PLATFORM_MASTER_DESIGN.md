@@ -41,14 +41,14 @@
     │ BuildRequest (gRPC :50051)    AdminToolList (REST :8080 GET)
     │ AdminDataList  (REST :8080 GET)
     ▼                                     ▲
-[NodeVault]  ── Go, seoy 호스트 바이너리   │
+[NodeVault]  ── Go, Kubernetes Pod (in-pod-buildah) │
     ├── BuildService     L2→L3→L4 + CAS 등록 + index 기록
     ├── PolicyService    DockGuard .wasm 번들 관리
     ├── pkg/index        artifact 상태 원장 (이중 축 상태 모델)
     ├── pkg/oras         OCI referrer push (sori 래핑)
     └── pkg/reconcile    Harbor 현실 대조 (FastRun/SlowRun)
     │
-    ├── [NodePalette]  ── cmd/palette/, seoy 호스트 바이너리 (별도 프로세스)
+    ├── [NodePalette]  ── cmd/palette/, seoy 호스트 바이너리 (별도 프로세스, K8s Pod 미이전 — `deploy/05-nodepalette.yaml` 참조)
     │       ├── HTTP :8080
     │       └── pkg/catalogrest → GET /v1/catalog/tools, /v1/catalog/data
     │
@@ -86,7 +86,7 @@
 
 | 저장소 | 로컬 경로 | 언어 | 상태 |
 |--------|-----------|------|------|
-| NodeVault | `/opt/go/src/github.com/HeaInSeo/NodeVault` | Go | 운영 중 (seoy 호스트 바이너리) |
+| NodeVault | `/opt/go/src/github.com/HeaInSeo/NodeVault` | Go | 운영 중 (Kubernetes Pod, in-pod-buildah) |
 | NodeKit | `/opt/dotnet/src/github.com/HeaInSeo/NodeKit` | C# / Avalonia | 운영 중 |
 | DockGuard | `/opt/dotnet/src/github.com/HeaInSeo/DockGuard` | OPA/Rego | 9개 규칙, .wasm 완성 |
 | DagEdit | `/opt/dotnet/src/github.com/HeaInSeo/DagEdit` | C# / Avalonia | Stage 1 완성, NodePalette 미연결 |
@@ -109,9 +109,12 @@
 | Harbor admin | `<harbor-password>` |
 | kubeconfig 경로 | `/opt/go/src/github.com/HeaInSeo/infra-lab/kubeconfig` |
 
-**배포 제약**: NodeVault는 **seoy 호스트 바이너리**로 실행한다 (K8s Pod 아님).
-이유: podbridge5(buildah) rootless 제약 — K8s Pod 안에서 overlay 마운트 불가.
-K8s 접근은 로컬 kubeconfig 경유로 L3/L4 Job 제출에만 사용한다.
+**배포 제약 (PR-1, in-pod-buildah 전환 이후)**: NodeVault는 **Kubernetes Pod**로 실행한다 (`hostUsers:false`,
+non-privileged `crun` runtime — `deploy/03-nodevault.yaml`). 이미지 빌드는 K8s Job/worker Pod로 위임하지 않고
+NodeVault Pod 내부에서 podbridge5(buildah)를 in-process로 직접 실행한다 — User Namespace 빌드 경로를
+대상 클러스터에서 검증 완료했기 때문에 가능해졌다 (이전에는 K8s Pod 안에서 overlay 마운트가 불가능해
+seoy 호스트 바이너리로만 실행했으나, 이 제약은 더 이상 유효하지 않다).
+K8s API 권한은 현재 L3/L4 ValidateService Job 실행에만 남아 있다 (CLAUDE.md §5 참조).
 
 Harbor 접근 시 라우트 (필요시):
 ```bash

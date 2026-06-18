@@ -2,12 +2,14 @@ package imagebuilder
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -210,7 +212,7 @@ var (
 type Stages []Stage
 
 func (stages Stages) ByName(name string) (Stage, bool) {
-	for _, stage := range stages {
+	for _, stage := range slices.Backward(stages) {
 		if stage.Name == name {
 			return stage, true
 		}
@@ -238,7 +240,7 @@ func (stages Stages) ByTarget(target string) (Stages, bool) {
 	if len(target) == 0 {
 		return stages, true
 	}
-	for i, stage := range stages {
+	for i, stage := range slices.Backward(stages) {
 		if stage.Name == target {
 			return stages[i : i+1], true
 		}
@@ -261,7 +263,7 @@ func (stages Stages) ThroughTarget(target string) (Stages, bool) {
 	if len(target) == 0 {
 		return stages, true
 	}
-	for i, stage := range stages {
+	for i, stage := range slices.Backward(stages) {
 		if stage.Name == target {
 			return stages[0 : i+1], true
 		}
@@ -281,12 +283,78 @@ func (stages Stages) ThroughTarget(target string) (Stages, bool) {
 
 type Stage struct {
 	Position int
-	Name     string
+	Name     string // may just be strconv.Itoa(Position), be sure to search from back to front
 	Builder  *Builder
 	Node     *parser.Node
 }
 
 func NewStages(node *parser.Node, b *Builder) (Stages, error) {
+	getStageFrom := func(stageIndex int, root *parser.Node) (from string, as string, err error) {
+		for _, child := range root.Children {
+			if !strings.EqualFold(child.Value, command.From) {
+				continue
+			}
+			if child.Next == nil {
+				return "", "", errors.New("FROM requires an argument")
+			}
+			if child.Next.Value == "" {
+				return "", "", errors.New("FROM requires a non-empty argument")
+			}
+			from = child.Next.Value
+			if name, ok := extractNameFromNode(child); ok {
+				as = name
+			}
+			return from, as, nil
+		}
+		return "", "", fmt.Errorf("stage %d requires a FROM instruction (%q)", stageIndex+1, root.Original)
+	}
+	argInstructionsInStages := make(map[string][]string)
+	setStageInheritedArgs := func(s *Stage) error {
+		from, as, err := getStageFrom(s.Position, s.Node)
+		if err != nil {
+			return err
+		}
+		inheritedArgs := argInstructionsInStages[from]
+		thisStageArgs := slices.Clone(inheritedArgs)
+		filteredUserArgs := make(map[string]string)
+		for k, v := range b.UserArgs {
+			for _, a := range b.GlobalAllowedArgs {
+				if a == k {
+					filteredUserArgs[k] = v
+				}
+			}
+		}
+		userArgs := envMapAsSlice(filteredUserArgs)
+		userArgs = mergeEnv(envMapAsSlice(b.BuiltinArgDefaults), userArgs)
+		userArgs = mergeEnv(envMapAsSlice(builtinArgDefaults), userArgs)
+		userArgs = mergeEnv(envMapAsSlice(b.HeadingArgs), userArgs)
+		for _, child := range s.Node.Children {
+			if !strings.EqualFold(child.Value, command.Arg) {
+				continue
+			}
+			if child.Next == nil {
+				return errors.New("ARG requires an argument")
+			}
+			if child.Next.Value == "" {
+				return errors.New("ARG requires a non-empty argument")
+			}
+			next := child.Next
+			for next != nil {
+				processedValue, err := ProcessWord(next.Value, userArgs)
+				if err != nil {
+					return fmt.Errorf("processing ARG %q", next.Value)
+				}
+				thisStageArgs = append(thisStageArgs, processedValue)
+				userArgs = mergeEnv(userArgs, []string{processedValue})
+				next = next.Next
+			}
+		}
+		if as != "" {
+			argInstructionsInStages[as] = thisStageArgs
+		}
+		argInstructionsInStages[strconv.Itoa(s.Position)] = thisStageArgs
+		return arg(s.Builder, inheritedArgs, nil, nil, "", nil)
+	}
 	var stages Stages
 	var headingArgs []string
 	if err := b.extractHeadingArgsFromNode(node); err != nil {
@@ -296,8 +364,8 @@ func NewStages(node *parser.Node, b *Builder) (Stages, error) {
 		headingArgs = append(headingArgs, k)
 	}
 	for i, root := range SplitBy(node, command.From) {
-		name, _ := extractNameFromNode(root.Children[0])
-		if len(name) == 0 {
+		name, hasName := extractNameFromNode(root.Children[0])
+		if !hasName {
 			name = strconv.Itoa(i)
 		}
 		filteredUserArgs := make(map[string]string)
@@ -316,12 +384,16 @@ func NewStages(node *parser.Node, b *Builder) (Stages, error) {
 		if err != nil {
 			return nil, err
 		}
-		stages = append(stages, Stage{
+		stage := Stage{
 			Position: i,
 			Name:     processedName,
 			Builder:  b.builderForStage(headingArgs),
 			Node:     root,
-		})
+		}
+		if err := setStageInheritedArgs(&stage); err != nil {
+			return nil, err
+		}
+		stages = append(stages, stage)
 	}
 	return stages, nil
 }
@@ -346,6 +418,14 @@ func (b *Builder) extractHeadingArgsFromNode(node *parser.Node) error {
 
 	// Use a separate builder to evaluate the heading args
 	tempBuilder := NewBuilder(b.UserArgs)
+
+	// Built-in ARGs are declared implicitly in the heading and should be resolvable in its scope
+	for k, v := range tempBuilder.BuiltinArgDefaults {
+		tempBuilder.AllowedArgs[k] = true
+		if _, ok := tempBuilder.Args[k]; !ok {
+			tempBuilder.Args[k] = v
+		}
+	}
 
 	// Evaluate all the heading arg commands
 	for _, c := range args {
@@ -428,6 +508,10 @@ type Builder struct {
 	// Raw platform string specified with `FROM --platform` of the stage
 	// It's up to the implementation or client to parse and use this field
 	Platform string
+	// After contains the stage name specified with `FROM --after=<stage>`. This
+	// declares a dependency on another stage. It's up to the implementation or
+	// client to handle this field.
+	After string
 
 	// Overrides for TARGET... and BUILD... values. TARGET... values are
 	// typically only necessary if the builder's target platform is not the
@@ -716,14 +800,14 @@ var builtinAllowedBuildArgs = map[string]bool{
 	"no_proxy":    true,
 }
 
-// ParseIgnore returns a list of the excludes in the specified path
-// path should be a file with the .dockerignore format
+// ParseIgnoreReader returns a list of the excludes in the provided file
+// which uses the .dockerignore format
 // extracted from fsouza/go-dockerclient and modified to drop comments and
 // empty lines.
-func ParseIgnore(path string) ([]string, error) {
+func ParseIgnoreReader(r io.Reader) ([]string, error) {
 	var excludes []string
 
-	ignores, err := ioutil.ReadFile(path)
+	ignores, err := io.ReadAll(r)
 	if err != nil {
 		return excludes, err
 	}
@@ -737,6 +821,18 @@ func ParseIgnore(path string) ([]string, error) {
 		}
 	}
 	return excludes, nil
+}
+
+// ParseIgnore returns a list returned by having ParseIgnoreReader() read the
+// specified path
+func ParseIgnore(path string) ([]string, error) {
+	var excludes []string
+
+	ignores, err := os.ReadFile(path)
+	if err != nil {
+		return excludes, err
+	}
+	return ParseIgnoreReader(bytes.NewReader(ignores))
 }
 
 // ParseDockerIgnore returns a list of the excludes in the .containerignore or .dockerignore file.

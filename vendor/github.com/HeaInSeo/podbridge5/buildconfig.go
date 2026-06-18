@@ -7,8 +7,8 @@ import (
 	"os"
 
 	"github.com/HeaInSeo/utils"
-	"github.com/containers/buildah"
-	"github.com/containers/storage"
+	"go.podman.io/buildah"
+	"go.podman.io/storage"
 )
 
 // BuildConfig holds basic configuration for building an image,

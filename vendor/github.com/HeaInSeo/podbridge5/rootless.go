@@ -5,9 +5,9 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/containers/buildah"
-	"github.com/containers/storage"
-	"github.com/containers/storage/pkg/unshare"
+	"go.podman.io/buildah"
+	"go.podman.io/storage"
+	"go.podman.io/storage/pkg/unshare"
 )
 
 var (

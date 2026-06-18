@@ -17,7 +17,7 @@
 - Host: `100.123.80.48`
 - User: `seoy`
 - Default VM name: `podbridge5-dev`
-- Go baseline: `1.25.5`
+- Go baseline: `1.25.6`
 
 ## Authentication
 

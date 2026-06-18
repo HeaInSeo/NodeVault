@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/containers/buildah"
-	is "github.com/containers/image/v5/storage"
-	imageTypes "github.com/containers/image/v5/types"
-	"github.com/containers/storage"
+	"go.podman.io/buildah"
+	is "go.podman.io/image/v5/storage"
+	imageTypes "go.podman.io/image/v5/types"
+	"go.podman.io/storage"
 )
 
 type configuredBuilder interface {

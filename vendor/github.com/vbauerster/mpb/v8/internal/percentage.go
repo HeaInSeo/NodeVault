@@ -3,7 +3,7 @@ package internal
 import "math"
 
 // Percentage is a helper function, to calculate percentage.
-func Percentage(total, current, width uint) float64 {
+func Percentage(total, current, width int64) float64 {
 	if total == 0 {
 		return 0
 	}
@@ -15,8 +15,8 @@ func Percentage(total, current, width uint) float64 {
 
 // PercentageRound same as Percentage but with math.Round.
 func PercentageRound(total, current, width int64) float64 {
-	if total < 0 || current < 0 || width < 0 {
+	if total < 0 || current < 0 {
 		return 0
 	}
-	return math.Round(Percentage(uint(total), uint(current), uint(width)))
+	return math.Round(Percentage(total, current, width))
 }

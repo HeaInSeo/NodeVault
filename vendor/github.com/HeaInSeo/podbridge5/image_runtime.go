@@ -6,12 +6,12 @@ import (
 	"os"
 	"strings"
 
-	"github.com/containers/buildah"
-	"github.com/containers/buildah/define"
-	"github.com/containers/buildah/imagebuildah"
-	"github.com/containers/image/v5/transports/alltransports"
-	imageTypes "github.com/containers/image/v5/types"
-	"github.com/containers/storage"
+	"go.podman.io/buildah"
+	"go.podman.io/buildah/define"
+	"go.podman.io/buildah/imagebuildah"
+	"go.podman.io/image/v5/transports/alltransports"
+	imageTypes "go.podman.io/image/v5/types"
+	"go.podman.io/storage"
 )
 
 type imageBuildRuntime interface {
@@ -71,6 +71,11 @@ func writeDockerfileTempFile(dockerfileContent string) (filePath string, cleanup
 }
 
 func buildDockerfileContentWithRuntime(ctx context.Context, runtime imageBuildRuntime, store storage.Store, dockerfileContent, outputRef string) (imageID, digestStr string, err error) {
+	buildOpts := DefaultImageBuildOptions(outputRef)
+	return buildDockerfileContentWithOptionsRuntime(ctx, runtime, store, dockerfileContent, buildOpts)
+}
+
+func buildDockerfileContentWithOptionsRuntime(ctx context.Context, runtime imageBuildRuntime, store storage.Store, dockerfileContent string, buildOpts define.BuildOptions) (imageID, digestStr string, err error) {
 	if ctx == nil {
 		return "", "", fmt.Errorf("ctx must not be nil")
 	}
@@ -84,7 +89,6 @@ func buildDockerfileContentWithRuntime(ctx context.Context, runtime imageBuildRu
 	}
 	defer cleanup()
 
-	buildOpts := DefaultImageBuildOptions(outputRef)
 	id, digestStr, err := runtime.BuildDockerfiles(ctx, store, buildOpts, dockerfilePath)
 	if err != nil {
 		return "", "", fmt.Errorf("imagebuildah.BuildDockerfiles: %w", err)

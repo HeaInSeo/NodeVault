@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/HeaInSeo/podbridge5"
-	"github.com/containers/storage"
+	"go.podman.io/storage"
 )
 
 // Builder builds and pushes a container image from Dockerfile content.
@@ -41,10 +41,18 @@ type podbridge5Builder struct {
 }
 
 // newPodbridge5Builder creates the in-Pod Builder backed by podbridge5/Buildah.
+// Storage driver/runroot/graphroot stay sourced from the mounted
+// /etc/containers/storage.conf (CONTAINERS_STORAGE_CONF, see
+// deploy/03-nodevault.yaml's nodevault-containers-storage ConfigMap) via
+// NewStoreWithOptions, so switching storage driver (e.g. vfs <-> overlay
+// while userns mount-propagation support is being verified on the cluster)
+// remains a ConfigMap/redeploy change, not a code change. The build options
+// themselves use podbridge5's user-namespace defaults (chroot isolation,
+// crun runtime, --layers) regardless of storage driver.
 func newPodbridge5Builder() (Builder, error) {
-	store, err := podbridge5.NewStore()
+	store, err := podbridge5.NewStoreWithOptions()
 	if err != nil {
-		return nil, fmt.Errorf("podbridge5 NewStore: %w", err)
+		return nil, fmt.Errorf("podbridge5 NewStoreWithOptions: %w", err)
 	}
 	return &podbridge5Builder{store: store}, nil
 }
@@ -54,9 +62,14 @@ func newPodbridge5Builder() (Builder, error) {
 func (b *podbridge5Builder) Build(
 	ctx context.Context, dockerfileContent, outputRef string,
 ) (imageID, remoteDigest, nanVersion string, err error) {
-	imageID, remoteDigest, err = podbridge5.BuildAndPushDockerfileContent(ctx, b.store, dockerfileContent, outputRef)
+	cfg := podbridge5.UserNamespaceBuildConfig{OutputRef: outputRef}
+	imageID, _, err = podbridge5.BuildDockerfileContentUserNamespace(ctx, b.store, dockerfileContent, cfg)
 	if err != nil {
-		return "", "", "", fmt.Errorf("build and push image: %w", err)
+		return "", "", "", fmt.Errorf("build image: %w", err)
+	}
+	remoteDigest, err = podbridge5.PushImage(ctx, b.store, outputRef, outputRef)
+	if err != nil {
+		return "", "", "", fmt.Errorf("push image: %w", err)
 	}
 	return imageID, remoteDigest, "", nil
 }

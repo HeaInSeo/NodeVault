@@ -10,8 +10,8 @@ import (
 	"os"
 
 	"github.com/HeaInSeo/utils"
-	"github.com/containers/podman/v5/pkg/bindings"
-	"github.com/containers/storage/pkg/unshare"
+	"go.podman.io/podman/v6/pkg/bindings"
+	"go.podman.io/storage/pkg/unshare"
 )
 
 func NewConnection5(ctx context.Context, ipcName string) (context.Context, error) {

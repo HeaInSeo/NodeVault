@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/containers/buildah"
-	"github.com/containers/storage"
+	"go.podman.io/buildah"
+	"go.podman.io/storage"
 )
 
 type imageBuilder interface {

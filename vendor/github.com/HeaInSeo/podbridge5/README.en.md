@@ -36,12 +36,27 @@ When something fails, it should be easier to tell whether the problem comes from
 
 ## Go baseline
 
-This repository uses `Go 1.25.5` as declared in `go.mod`.
+This repository uses `Go 1.25.6` as declared in `go.mod`.
 The policy is to stay aligned with the same `Go 1.25.x` baseline used by sibling projects.
 
 - The main entry points are `make test-unit`, `make test-runtime`, and `make test-runtime-integration`.
-- Those targets validate that the active `go` binary is `go1.25.5` before running tests.
+- Those targets validate that the active `go` binary is `go1.25.6` before running tests.
 - The goal is not backward compatibility with older Go releases. The environment, CI, and VM path should match `1.25.x`.
+
+## Kubernetes user namespace build path
+
+For NodeVault's rootless builder migration, `podbridge5` now exposes Buildah defaults for Kubernetes user namespace Pods.
+`DefaultUserNamespaceStoreOptions()` builds the equivalent of the required `storage.conf` in code: `/storage` based `runroot`, `graphroot`, overlay storage, and partial image pulls.
+Use `WithStoreRoots`, `WithStoreDriver`, `WithFuseOverlayfsMountProgram`, and `WithPartialImagePulls` when a cluster needs different storage behavior.
+
+Build options are available through `UserNamespaceImageBuildOptions()` and `BuildDockerfileContentUserNamespace()`.
+The defaults target `hostUsers: false` Pods with `chroot` isolation, the `crun` runtime, enabled layers, and optional Harbor cache refs wired to both cache-from and cache-to.
+Worker manifests should also apply the environment variables from `DefaultUserNamespaceBuildEnvironment()` and the capability set from `DefaultUserNamespaceBuildCapabilities()`.
+In the current lab, overlay storage is blocked at the mount propagation step, so the non-privileged smoke was validated with the equivalent of `WithStoreDriver("vfs")`.
+Overlay remains the target default, but NodeVault migration still needs separate validation for node filesystem/idmap behavior or the fuse-overlayfs path.
+
+This path assumes Kubernetes 1.36 user namespaces, a Linux kernel/filesystem combination with idmapped mount support, containerd 2.x, and crun 1.9+.
+Incompatible Dockerfiles should later be routed by NodeVault to an isolated privileged fallback strategy.
 
 ## Documentation
 

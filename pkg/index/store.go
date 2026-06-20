@@ -528,7 +528,7 @@ func (s *Store) UpsertCertifiedToolImageRecord(r CertifiedToolImageRecord) error
 		r.CertifiedAt = time.Now().UTC()
 	}
 	for i := range s.idx.CertifiedToolImageRecords {
-		if sameCertifiedToolKey(s.idx.CertifiedToolImageRecords[i], r) {
+		if sameCertifiedToolKey(&s.idx.CertifiedToolImageRecords[i], &r) {
 			s.idx.CertifiedToolImageRecords[i] = r
 			return s.save()
 		}
@@ -537,7 +537,7 @@ func (s *Store) UpsertCertifiedToolImageRecord(r CertifiedToolImageRecord) error
 	return s.save()
 }
 
-func sameCertifiedToolKey(a, b CertifiedToolImageRecord) bool {
+func sameCertifiedToolKey(a, b *CertifiedToolImageRecord) bool {
 	if a.ToolSpecDigest != "" && a.Platform != "" && b.ToolSpecDigest != "" && b.Platform != "" {
 		return a.ToolSpecDigest == b.ToolSpecDigest && a.Platform == b.Platform
 	}
@@ -546,7 +546,9 @@ func sameCertifiedToolKey(a, b CertifiedToolImageRecord) bool {
 
 // GetCertifiedToolImageRecordByToolSpecDigestAndPlatform returns the current
 // certification decision for an explicitly resolved target platform.
-func (s *Store) GetCertifiedToolImageRecordByToolSpecDigestAndPlatform(toolSpecDigest, platform string) (CertifiedToolImageRecord, error) {
+func (s *Store) GetCertifiedToolImageRecordByToolSpecDigestAndPlatform(
+	toolSpecDigest, platform string,
+) (CertifiedToolImageRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for i := range s.idx.CertifiedToolImageRecords {
@@ -555,7 +557,8 @@ func (s *Store) GetCertifiedToolImageRecordByToolSpecDigestAndPlatform(toolSpecD
 			return rec, nil
 		}
 	}
-	return CertifiedToolImageRecord{}, fmt.Errorf("%w: tool_spec_digest=%q platform=%q", ErrNotFound, toolSpecDigest, platform)
+	return CertifiedToolImageRecord{}, fmt.Errorf(
+		"%w: tool_spec_digest=%q platform=%q", ErrNotFound, toolSpecDigest, platform)
 }
 
 // GetCertifiedToolImageRecord returns the certification record for the given image digest.

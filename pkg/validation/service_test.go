@@ -184,8 +184,8 @@ func TestSubmitToolCheckRecord_StoreError(t *testing.T) {
 
 // ── SubmitToolScanRecord tests ────────────────────────────────────────────────
 
-// TestSubmitToolScanRecord_HappyPath verifies a successful scan submission.
-func TestSubmitToolScanRecord_HappyPath(t *testing.T) {
+// TestToolScanRecord_WithDbDigest verifies scanner database provenance survives ingestion.
+func TestToolScanRecord_WithDbDigest(t *testing.T) {
 	store := newStore(t)
 	certSvc := &fakeCertSvc{}
 	svc := validation.New(store, certSvc)

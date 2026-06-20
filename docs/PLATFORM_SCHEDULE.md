@@ -185,15 +185,15 @@ v0.1.0 이후에는 `SubmitToolBuild`로 build를 제출하고 `WatchToolBuild`�
 |-----------|-------------|------|
 | `ToolBuildRecord.Backend` | `execution.mode` / `execution.hostUsers` 등 분리 필요 | 부분 구현 |
 | `ToolBuildRecord.NanVersion` | v0.1.0에 nan 미정의 — 필드 용도 재검토 | 미결 |
-| `CertifiedToolImageRecord` 키 | `toolSpecDigest + platform` | 현재 casHash 기반 — Phase 1 이후 재정렬 필요 |
-| `ToolScanRecord.DbDigest` | scanner + scannerVersion + dbDigest | 현재 partial |
+| `CertifiedToolImageRecord` 키 | `toolSpecDigest + platform` | 구현 완료. platform 없는 과거 record는 imageDigest compatibility lookup 유지 |
+| `ToolScanRecord.DbDigest` | scanner + scannerVersion + dbDigest | 구현 완료 (gRPC + REST ingestion) |
 | Harbor OCI referrer | spec referrer / toolprofile referrer | 미구현 |
 
 **완료 판정**
 
 - [ ] `ToolBuildRecord`에 `execution.*` 필드 추가 (backward-compatible optional)
-- [ ] `CertifiedToolImageRecord` 키를 `toolSpecDigest + platform`으로 재정렬 (Phase 1 이후)
-- [ ] `TestToolScanRecord_WithDbDigest` 통과
+- [x] `CertifiedToolImageRecord` 키를 `toolSpecDigest + platform`으로 재정렬 (Phase 1 이후)
+- [x] `TestToolScanRecord_WithDbDigest` 통과
 
 ---
 

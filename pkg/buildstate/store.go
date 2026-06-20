@@ -116,6 +116,23 @@ VALUES (?, ?, ?, '', ?, ?)`,
 	return rec, nil
 }
 
+// CreateOrGet creates a submitted build or returns the existing record for an
+// idempotent retry. The caller must reject a retry that changes the digest.
+func (s *Store) CreateOrGet(buildID, toolSpecDigest string, now time.Time) (Record, bool, error) {
+	rec, err := s.Create(buildID, toolSpecDigest, now)
+	if err == nil {
+		return rec, true, nil
+	}
+	existing, getErr := s.Get(buildID)
+	if getErr != nil {
+		return Record{}, false, err
+	}
+	if existing.ToolSpecDigest != toolSpecDigest {
+		return Record{}, false, fmt.Errorf("buildstate: build %q already belongs to a different tool spec", buildID)
+	}
+	return existing, false, nil
+}
+
 // Transition atomically moves one build to the next status.
 func (s *Store) Transition(buildID string, next Status, failureReason string, now time.Time) (Record, error) {
 	if buildID == "" {
@@ -226,9 +243,12 @@ func scanRecord(row rowScanner) (Record, error) {
 	return rec, nil
 }
 
-func terminal(status Status) bool {
+// Terminal reports whether no further lifecycle transition is allowed.
+func Terminal(status Status) bool {
 	return status == StatusSucceeded || status == StatusFailed || status == StatusInterrupted
 }
+
+func terminal(status Status) bool { return Terminal(status) }
 
 func validStatus(status Status) bool {
 	switch status {

@@ -106,7 +106,7 @@ v0.1.0 이후에는 `SubmitToolBuild`로 build를 제출하고 `WatchToolBuild`�
 |------|------|
 | `pkg/buildstate/` (신규) | SQLite 기반 durable build state: `Requested → Resolving → Building → Pushing → Succeeded/Failed/Interrupted` |
 | `pkg/buildstate/store.go` | WAL, atomic transition, `RecoverInterrupted()` |
-| `pkg/build/manager.go` | `SubmitToolBuild`, `WatchToolBuild`, `CancelToolBuild` |
+| `pkg/build/submit_tool_build.go` | `SubmitToolBuild`, `WatchToolBuild`, `CancelToolBuild` background execution |
 | `pkg/build/builder.go` | podbridge5 cancel 신호 전달, subprocess cleanup |
 | `deploy/03-nodevault.yaml` | graphroot/runroot PVC 전환 (emptyDir → PersistentVolumeClaim) |
 
@@ -115,6 +115,9 @@ v0.1.0 이후에는 `SubmitToolBuild`로 build를 제출하고 `WatchToolBuild`�
 - [x] `TestBuildState_RecoverInterrupted` — Pod 재시작 시 Running → Interrupted
 - [x] `TestBuildState_NeverAutoSucceedInterrupted` — Interrupted를 Succeeded로 오판하지 않음
 - [x] `TestBuildState_RecoverInterrupted_LeavesTerminalRecords` 통과
+- [x] `SubmitToolBuild`가 buildable `raw_spec`을 decode하여 background podbridge5 build를 실행
+- [x] `WatchToolBuild`가 durable status 변화를 stream하고 terminal state에서 종료
+- [x] `CancelToolBuild`가 active build context와 durable state를 함께 Interrupted로 전환
 - [ ] `TestBuildCancel_CleansUpSubprocess` 통과
 - [ ] graphroot가 PVC에 유지됨 (Pod restart 후 layer cache hit 확인)
 - [ ] `go test ./...` 전체 통과

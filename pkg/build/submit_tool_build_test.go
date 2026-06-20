@@ -33,11 +33,16 @@ func newSubmitTestService(t *testing.T) *Service {
 		ToolSpecDigest: "spec-123",
 		ToolName:       "bwa-mem2",
 		Version:        "2.2.1",
+		RawSpec:        `{"tool_name":"bwa-mem2","version":"2.2.1","dockerfile_content":"FROM alpine:3.20@sha256:abc123\nRUN true"}`,
 		ResolvedAt:     time.Unix(100, 0).UTC(),
 	}); err != nil {
 		t.Fatalf("AppendResolvedToolSpec: %v", err)
 	}
-	return &Service{indexStore: idx, buildState: state}
+	return &Service{
+		builder:    &mockBuilder{digest: "sha256:built"},
+		indexStore: idx,
+		buildState: state,
+	}
 }
 
 func TestSubmitToolBuild_CreatesRequestedBuildState(t *testing.T) {
@@ -61,8 +66,8 @@ func TestSubmitToolBuild_CreatesRequestedBuildState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildState.Get: %v", err)
 	}
-	if got.Status != buildstate.StatusRequested {
-		t.Fatalf("stored status got %q want Requested", got.Status)
+	if got.Status != buildstate.StatusRequested && got.Status != buildstate.StatusResolving && got.Status != buildstate.StatusBuilding && !buildstate.Terminal(got.Status) {
+		t.Fatalf("stored status got %q, want a valid submitted lifecycle state", got.Status)
 	}
 }
 
@@ -94,21 +99,41 @@ func TestWatchToolBuild_SendsCurrentState(t *testing.T) {
 	if err := svc.WatchToolBuild(&nfv1.WatchToolBuildRequest{BuildId: "build-watch"}, stream); err != nil {
 		t.Fatalf("WatchToolBuild: %v", err)
 	}
-	if len(stream.events) != 1 {
-		t.Fatalf("events got %d want 1", len(stream.events))
+	if len(stream.events) == 0 {
+		t.Fatal("expected at least one state event")
 	}
-	if stream.events[0].GetBuildId() != "build-watch" || stream.events[0].GetStatus() != string(buildstate.StatusRequested) {
-		t.Fatalf("unexpected event: %+v", stream.events[0])
+	last := stream.events[len(stream.events)-1]
+	if last.GetBuildId() != "build-watch" || last.GetStatus() != string(buildstate.StatusSucceeded) {
+		t.Fatalf("unexpected final event: %+v", last)
 	}
 }
 
+type cancelableBuilder struct {
+	started chan struct{}
+}
+
+func (b *cancelableBuilder) Build(ctx context.Context, _, _ string) (string, string, string, error) {
+	close(b.started)
+	<-ctx.Done()
+	return "", "", "", ctx.Err()
+}
+
+func (*cancelableBuilder) Close() error { return nil }
+
 func TestCancelToolBuild_MarksInterrupted(t *testing.T) {
 	svc := newSubmitTestService(t)
+	blocking := &cancelableBuilder{started: make(chan struct{})}
+	svc.builder = blocking
 	if _, err := svc.SubmitToolBuild(context.Background(), &nfv1.SubmitToolBuildRequest{
 		RequestId:      "build-cancel",
 		ToolSpecDigest: "spec-123",
 	}); err != nil {
 		t.Fatalf("SubmitToolBuild: %v", err)
+	}
+	select {
+	case <-blocking.started:
+	case <-time.After(time.Second):
+		t.Fatal("submitted build did not reach builder")
 	}
 
 	resp, err := svc.CancelToolBuild(context.Background(), &nfv1.CancelToolBuildRequest{
@@ -127,5 +152,20 @@ func TestCancelToolBuild_MarksInterrupted(t *testing.T) {
 	}
 	if got.Status != buildstate.StatusInterrupted {
 		t.Fatalf("stored status got %q want Interrupted", got.Status)
+	}
+}
+
+func TestSubmitToolBuild_IdempotentRetry(t *testing.T) {
+	svc := newSubmitTestService(t)
+	first, err := svc.SubmitToolBuild(context.Background(), &nfv1.SubmitToolBuildRequest{RequestId: "build-retry", ToolSpecDigest: "spec-123"})
+	if err != nil {
+		t.Fatalf("first SubmitToolBuild: %v", err)
+	}
+	second, err := svc.SubmitToolBuild(context.Background(), &nfv1.SubmitToolBuildRequest{RequestId: "build-retry", ToolSpecDigest: "spec-123"})
+	if err != nil {
+		t.Fatalf("second SubmitToolBuild: %v", err)
+	}
+	if first.GetBuildId() != second.GetBuildId() {
+		t.Fatalf("build ids differ: %q vs %q", first.GetBuildId(), second.GetBuildId())
 	}
 }

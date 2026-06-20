@@ -2,6 +2,7 @@ package build
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -11,8 +12,11 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/HeaInSeo/NodeVault/pkg/buildstate"
+	"github.com/HeaInSeo/NodeVault/pkg/index"
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
+
+const watchPollInterval = 100 * time.Millisecond
 
 // SubmitToolBuild records an asynchronous build request for a resolved tool spec.
 func (s *Service) SubmitToolBuild(
@@ -24,14 +28,22 @@ func (s *Service) SubmitToolBuild(
 	if s.indexStore == nil || s.buildState == nil {
 		return nil, status.Error(codes.Unavailable, "build state unavailable")
 	}
-	if _, err := s.indexStore.GetResolvedToolSpecByDigest(req.GetToolSpecDigest()); err != nil {
+	spec, err := s.indexStore.GetResolvedToolSpecByDigest(req.GetToolSpecDigest())
+	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "resolved tool spec not found: %v", err)
+	}
+	buildReq, err := buildRequestFromResolved(req.GetRequestId(), spec)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "resolved tool spec is not buildable: %v", err)
 	}
 
 	now := time.Now().UTC()
-	rec, err := s.buildState.Create(req.GetRequestId(), req.GetToolSpecDigest(), now)
+	rec, created, err := s.buildState.CreateOrGet(req.GetRequestId(), req.GetToolSpecDigest(), now)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "create build state: %v", err)
+		return nil, status.Errorf(codes.AlreadyExists, "create build state: %v", err)
+	}
+	if created {
+		s.startSubmittedBuild(rec, buildReq)
 	}
 	return &nfv1.SubmitToolBuildResponse{
 		BuildId:        rec.BuildID,
@@ -59,7 +71,34 @@ func (s *Service) WatchToolBuild(
 		}
 		return status.Errorf(codes.Internal, "get build state: %v", err)
 	}
-	return stream.Send(buildStateEvent(rec))
+	if err := stream.Send(buildStateEvent(rec)); err != nil || buildstate.Terminal(rec.Status) {
+		return err
+	}
+
+	ticker := time.NewTicker(watchPollInterval)
+	defer ticker.Stop()
+	lastUpdated := rec.UpdatedAt
+	for {
+		select {
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		case <-ticker.C:
+			rec, err = s.buildState.Get(req.GetBuildId())
+			if err != nil {
+				return status.Errorf(codes.Internal, "get build state: %v", err)
+			}
+			if rec.UpdatedAt.Equal(lastUpdated) {
+				continue
+			}
+			if err := stream.Send(buildStateEvent(rec)); err != nil {
+				return err
+			}
+			lastUpdated = rec.UpdatedAt
+			if buildstate.Terminal(rec.Status) {
+				return nil
+			}
+		}
+	}
 }
 
 // CancelToolBuild marks a non-terminal submitted build as Interrupted.
@@ -76,6 +115,7 @@ func (s *Service) CancelToolBuild(
 	if reason == "" {
 		reason = "cancelled by client"
 	}
+	s.cancelSubmittedBuild(req.GetBuildId())
 	rec, err := s.buildState.Transition(
 		req.GetBuildId(),
 		buildstate.StatusInterrupted,
@@ -83,6 +123,13 @@ func (s *Service) CancelToolBuild(
 		time.Now().UTC(),
 	)
 	if err != nil {
+		if current, getErr := s.buildState.Get(req.GetBuildId()); getErr == nil && current.Status == buildstate.StatusInterrupted {
+			return &nfv1.CancelToolBuildResponse{
+				BuildId:     current.BuildID,
+				Status:      string(current.Status),
+				CancelledAt: current.UpdatedAt.UnixMilli(),
+			}, nil
+		}
 		if errors.Is(err, buildstate.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "build not found: %s", req.GetBuildId())
 		}
@@ -93,6 +140,85 @@ func (s *Service) CancelToolBuild(
 		Status:      string(rec.Status),
 		CancelledAt: rec.UpdatedAt.UnixMilli(),
 	}, nil
+}
+
+func buildRequestFromResolved(buildID string, spec index.ResolvedToolSpec) (*nfv1.BuildRequest, error) {
+	var req nfv1.BuildRequest
+	if err := json.Unmarshal([]byte(spec.RawSpec), &req); err != nil {
+		return nil, fmt.Errorf("decode raw_spec JSON: %w", err)
+	}
+	if req.GetDockerfileContent() == "" {
+		return nil, errors.New("dockerfile_content is required")
+	}
+	if req.GetToolName() == "" {
+		req.ToolName = spec.ToolName
+	}
+	if req.GetVersion() == "" {
+		req.Version = spec.Version
+	}
+	if req.GetToolName() == "" {
+		return nil, errors.New("tool_name is required")
+	}
+	req.RequestId = buildID
+	return &req, nil
+}
+
+func (s *Service) startSubmittedBuild(rec buildstate.Record, req *nfv1.BuildRequest) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s.activeMu.Lock()
+	if s.active == nil {
+		s.active = make(map[string]context.CancelFunc)
+	}
+	s.active[rec.BuildID] = cancel
+	s.activeMu.Unlock()
+	go s.runSubmittedBuild(ctx, rec, req)
+}
+
+func (s *Service) cancelSubmittedBuild(buildID string) {
+	s.activeMu.Lock()
+	cancel := s.active[buildID]
+	s.activeMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (s *Service) runSubmittedBuild(ctx context.Context, rec buildstate.Record, req *nfv1.BuildRequest) {
+	defer func() {
+		s.activeMu.Lock()
+		delete(s.active, rec.BuildID)
+		s.activeMu.Unlock()
+	}()
+	if _, err := s.buildState.Transition(rec.BuildID, buildstate.StatusResolving, "", time.Now().UTC()); err != nil {
+		return
+	}
+	if _, err := s.buildState.Transition(rec.BuildID, buildstate.StatusBuilding, "", time.Now().UTC()); err != nil {
+		return
+	}
+	if s.builder == nil {
+		s.failSubmittedBuild(rec, errors.New("build backend unavailable"))
+		return
+	}
+	destination := fmt.Sprintf("%s/library/%s:latest", registryAddr(), sanitizeName(req.GetToolName()))
+	_, digest, nanVersion, err := s.builder.Build(ctx, req.GetDockerfileContent(), destination)
+	if err != nil {
+		s.failSubmittedBuild(rec, err)
+		return
+	}
+	if _, err := s.buildState.Transition(rec.BuildID, buildstate.StatusPushing, "", time.Now().UTC()); err != nil {
+		return
+	}
+	s.recordBuildSuccess(rec.BuildID, rec.RequestedAt, digest, destination, nanVersion)
+	_, _ = s.buildState.Transition(rec.BuildID, buildstate.StatusSucceeded, "", time.Now().UTC())
+}
+
+func (s *Service) failSubmittedBuild(rec buildstate.Record, buildErr error) {
+	if errors.Is(buildErr, context.Canceled) {
+		_, _ = s.buildState.Transition(rec.BuildID, buildstate.StatusInterrupted, "cancelled", time.Now().UTC())
+		return
+	}
+	s.recordBuildFailure(rec.BuildID, rec.RequestedAt, buildErr)
+	_, _ = s.buildState.Transition(rec.BuildID, buildstate.StatusFailed, buildErr.Error(), time.Now().UTC())
 }
 
 func buildStateEvent(rec buildstate.Record) *nfv1.BuildEvent {

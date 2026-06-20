@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc"
@@ -58,6 +59,8 @@ type Service struct {
 	registry   *catalog.ToolRegistryService
 	indexStore *index.Store
 	buildState *buildstate.Store
+	activeMu   sync.Mutex
+	active     map[string]context.CancelFunc
 	reconciler ReconcileTriggerer // nil = no eager reconcile
 	sentinel   SentinelEnqueuer   // nil = no L3/L4 enqueue
 }
@@ -91,7 +94,7 @@ func NewService(
 	}
 	return &Service{
 		builder: builder, validator: validator, registry: registry,
-		indexStore: store, buildState: stateStore, reconciler: reconciler,
+		indexStore: store, buildState: stateStore, active: make(map[string]context.CancelFunc), reconciler: reconciler,
 	}, nil
 }
 
@@ -105,6 +108,14 @@ func NewDisabledService() *Service {
 
 // Close releases the underlying image build storage.
 func (s *Service) Close() error {
+	s.activeMu.Lock()
+	for _, cancel := range s.active {
+		cancel()
+	}
+	s.activeMu.Unlock()
+	if s.builder == nil {
+		return nil
+	}
 	return s.builder.Close()
 }
 

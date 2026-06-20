@@ -293,6 +293,7 @@ func (s *Service) recordBuildFailure(buildID string, startedAt time.Time, buildE
 	rec := index.ToolBuildRecord{
 		BuildID:       buildID,
 		Backend:       s.builderBackendName(),
+		Execution:     s.buildExecution(),
 		StartedAt:     startedAt,
 		CompletedAt:   time.Now().UTC(),
 		Success:       false,
@@ -318,6 +319,7 @@ func (s *Service) recordBuildSuccess(buildID string, startedAt time.Time, digest
 		ImageDigest: digest,
 		NanVersion:  nanVersion,
 		Backend:     s.builderBackendName(),
+		Execution:   s.buildExecution(),
 		StartedAt:   startedAt,
 		CompletedAt: completedAt,
 		Success:     true,
@@ -334,6 +336,17 @@ func (s *Service) recordBuildSuccess(buildID string, startedAt time.Time, digest
 	}
 	if err := s.indexStore.AppendToolImageRecord(img); err != nil {
 		slog.Warn("index: failed to record ToolImageRecord", "build_id", buildID, "image_digest", digest, "err", err)
+	}
+}
+
+func (s *Service) buildExecution() *index.BuildExecution {
+	if s.builderBackendName() != "in-pod-buildah" {
+		return nil
+	}
+	hostUsers := false
+	return &index.BuildExecution{
+		Mode: "in-pod-buildah", HostUsers: &hostUsers,
+		StorageDriver: "overlay", Isolation: "chroot",
 	}
 }
 

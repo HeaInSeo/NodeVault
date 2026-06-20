@@ -104,6 +104,16 @@ type ResolvedToolSpec struct {
 	ResolvedAt time.Time `json:"resolved_at"`
 }
 
+// BuildExecution records the runtime properties that affected one image build.
+// Pointer fields preserve backward compatibility with records written before
+// execution provenance was captured.
+type BuildExecution struct {
+	Mode          string `json:"mode,omitempty"`
+	HostUsers     *bool  `json:"host_users,omitempty"`
+	StorageDriver string `json:"storage_driver,omitempty"`
+	Isolation     string `json:"isolation,omitempty"`
+}
+
 // ToolBuildRecord captures the outcome of a single build execution.
 // Primary key: BuildID. Foreign key: ToolSpecDigest references ResolvedToolSpec.
 type ToolBuildRecord struct {
@@ -120,7 +130,8 @@ type ToolBuildRecord struct {
 	NanVersion string `json:"nan_version,omitempty"`
 
 	// Backend identifies the build executor, e.g. "in-pod-buildah".
-	Backend string `json:"backend,omitempty"`
+	Backend   string          `json:"backend,omitempty"`
+	Execution *BuildExecution `json:"execution,omitempty"`
 
 	StartedAt   time.Time `json:"started_at"`
 	CompletedAt time.Time `json:"completed_at"`

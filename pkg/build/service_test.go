@@ -260,6 +260,9 @@ func TestRecordBuildSuccess_WritesToolBuildRecordAndToolImageRecord(t *testing.T
 	if rec.ImageDigest != "sha256:imgdigest" {
 		t.Errorf("ImageDigest: got %q", rec.ImageDigest)
 	}
+	if rec.Execution == nil || rec.Execution.Mode != "in-pod-buildah" || rec.Execution.HostUsers == nil || *rec.Execution.HostUsers {
+		t.Fatalf("Execution: got %+v, want in-pod-buildah with host_users=false", rec.Execution)
+	}
 	if rec.NanVersion != "v0.1.5" {
 		t.Errorf("NanVersion: got %q, want %q", rec.NanVersion, "v0.1.5")
 	}

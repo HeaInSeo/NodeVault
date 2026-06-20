@@ -183,7 +183,7 @@ v0.1.0 이후에는 `SubmitToolBuild`로 build를 제출하고 `WatchToolBuild`�
 
 | 현재 구현 | v0.1.0 요구 | 상태 |
 |-----------|-------------|------|
-| `ToolBuildRecord.Backend` | `execution.mode` / `execution.hostUsers` 등 분리 필요 | 부분 구현 |
+| `ToolBuildRecord.Backend` | `execution.mode` / `execution.hostUsers` 등 분리 필요 | 구현 완료 (`mode`, `host_users`, `storage_driver`, `isolation`) |
 | `ToolBuildRecord.NanVersion` | v0.1.0에 nan 미정의 — 필드 용도 재검토 | 미결 |
 | `CertifiedToolImageRecord` 키 | `toolSpecDigest + platform` | 구현 완료. platform 없는 과거 record는 imageDigest compatibility lookup 유지 |
 | `ToolScanRecord.DbDigest` | scanner + scannerVersion + dbDigest | 구현 완료 (gRPC + REST ingestion) |
@@ -191,7 +191,7 @@ v0.1.0 이후에는 `SubmitToolBuild`로 build를 제출하고 `WatchToolBuild`�
 
 **완료 판정**
 
-- [ ] `ToolBuildRecord`에 `execution.*` 필드 추가 (backward-compatible optional)
+- [x] `ToolBuildRecord`에 `execution.*` 필드 추가 (backward-compatible optional)
 - [x] `CertifiedToolImageRecord` 키를 `toolSpecDigest + platform`으로 재정렬 (Phase 1 이후)
 - [x] `TestToolScanRecord_WithDbDigest` 통과
 

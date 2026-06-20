@@ -218,7 +218,9 @@ type ToolScanRecord struct {
 
 	Scanner        string `json:"scanner,omitempty"`         // "trivy"
 	ScannerVersion string `json:"scanner_version,omitempty"` // "0.50.0"
-	Source         string `json:"source,omitempty"`          // "trivy-operator" | "not-available"
+	// DbDigest identifies the vulnerability database snapshot used by the scanner.
+	DbDigest string `json:"db_digest,omitempty"`
+	Source   string `json:"source,omitempty"` // "trivy-operator" | "not-available"
 
 	CriticalCount int `json:"critical_count"`
 	HighCount     int `json:"high_count"`

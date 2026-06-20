@@ -411,6 +411,7 @@ type SubmitScanRecordRequest struct {
 	ToolName       string `json:"tool_name,omitempty"`
 	Scanner        string `json:"scanner,omitempty"`
 	ScannerVersion string `json:"scanner_version,omitempty"`
+	DbDigest       string `json:"db_digest,omitempty"`
 	Source         string `json:"source,omitempty"`
 	CriticalCount  int    `json:"critical_count"`
 	HighCount      int    `json:"high_count"`
@@ -526,6 +527,7 @@ func (s *Server) handleSubmitScanRecord(w http.ResponseWriter, r *http.Request) 
 		ToolName:       req.ToolName,
 		Scanner:        req.Scanner,
 		ScannerVersion: req.ScannerVersion,
+		DbDigest:       req.DbDigest,
 		Source:         req.Source,
 		CriticalCount:  req.CriticalCount,
 		HighCount:      req.HighCount,

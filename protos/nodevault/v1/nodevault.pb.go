@@ -2965,6 +2965,7 @@ type ToolScanRecordRequest struct {
 	PolicyMode     string                 `protobuf:"bytes,11,opt,name=policy_mode,json=policyMode,proto3" json:"policy_mode,omitempty"`
 	PolicyResult   string                 `protobuf:"bytes,12,opt,name=policy_result,json=policyResult,proto3" json:"policy_result,omitempty"`
 	ScannedAt      int64                  `protobuf:"varint,13,opt,name=scanned_at,json=scannedAt,proto3" json:"scanned_at,omitempty"`
+	DbDigest       string                 `protobuf:"bytes,14,opt,name=db_digest,json=dbDigest,proto3" json:"db_digest,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -3088,6 +3089,13 @@ func (x *ToolScanRecordRequest) GetScannedAt() int64 {
 		return x.ScannedAt
 	}
 	return 0
+}
+
+func (x *ToolScanRecordRequest) GetDbDigest() string {
+	if x != nil {
+		return x.DbDigest
+	}
+	return ""
 }
 
 type SubmitRecordResponse struct {
@@ -3699,7 +3707,7 @@ const file_nodevault_v1_nodevault_proto_rawDesc = "" +
 	"\x0econtract_check\x18\f \x01(\v2\x1b.nodevault.v1.ContractCheckR\rcontractCheck\x12%\n" +
 	"\x0efailure_reason\x18\r \x01(\tR\rfailureReason\x12\x1d\n" +
 	"\n" +
-	"checked_at\x18\x0e \x01(\x03R\tcheckedAt\"\xb6\x03\n" +
+	"checked_at\x18\x0e \x01(\x03R\tcheckedAt\"\xd3\x03\n" +
 	"\x15ToolScanRecordRequest\x12\x17\n" +
 	"\ascan_id\x18\x01 \x01(\tR\x06scanId\x12!\n" +
 	"\fimage_digest\x18\x02 \x01(\tR\vimageDigest\x12\x1b\n" +
@@ -3717,7 +3725,8 @@ const file_nodevault_v1_nodevault_proto_rawDesc = "" +
 	"policyMode\x12#\n" +
 	"\rpolicy_result\x18\f \x01(\tR\fpolicyResult\x12\x1d\n" +
 	"\n" +
-	"scanned_at\x18\r \x01(\x03R\tscannedAt\"f\n" +
+	"scanned_at\x18\r \x01(\x03R\tscannedAt\x12\x1b\n" +
+	"\tdb_digest\x18\x0e \x01(\tR\bdbDigest\"f\n" +
 	"\x14SubmitRecordResponse\x12\x1b\n" +
 	"\trecord_id\x18\x01 \x01(\tR\brecordId\x121\n" +
 	"\x14certification_status\x18\x02 \x01(\tR\x13certificationStatus\"F\n" +

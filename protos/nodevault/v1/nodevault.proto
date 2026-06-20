@@ -401,6 +401,7 @@ message ToolScanRecordRequest {
   string policy_mode      = 11;
   string policy_result    = 12;
   int64  scanned_at       = 13;
+  string db_digest        = 14;
 }
 
 message SubmitRecordResponse {

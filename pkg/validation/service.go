@@ -159,6 +159,7 @@ func (s *Service) SubmitToolScanRecord(
 		ToolName:       req.ToolName,
 		Scanner:        req.Scanner,
 		ScannerVersion: req.ScannerVersion,
+		DbDigest:       req.DbDigest,
 		Source:         req.Source,
 		CriticalCount:  int(req.CriticalCount),
 		HighCount:      int(req.HighCount),

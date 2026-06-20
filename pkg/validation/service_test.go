@@ -194,6 +194,7 @@ func TestSubmitToolScanRecord_HappyPath(t *testing.T) {
 		ScanId:      "scan-1",
 		ImageDigest: "sha256:aaa",
 		Scanner:     "trivy",
+		DbDigest:    "sha256:trivy-db-20260620",
 		PolicyMode:  "gate_critical",
 	}
 	resp, err := svc.SubmitToolScanRecord(context.Background(), req)
@@ -205,6 +206,13 @@ func TestSubmitToolScanRecord_HappyPath(t *testing.T) {
 	}
 	if !certSvc.called {
 		t.Error("expected certSvc.EvaluateAfterScan to be called")
+	}
+	stored, err := store.GetToolScanRecordByID("scan-1")
+	if err != nil {
+		t.Fatalf("GetToolScanRecordByID: %v", err)
+	}
+	if stored.DbDigest != "sha256:trivy-db-20260620" {
+		t.Errorf("DbDigest: got %q", stored.DbDigest)
 	}
 }
 

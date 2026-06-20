@@ -185,6 +185,20 @@ func (s *Store) SetSpecReferrerDigest(casHash, referrerDigest string) error {
 	return s.save()
 }
 
+// SetObservedProfileDigest records the OCI referrer digest after a successful
+// toolprofile push. Called by pkg/validation after PushToolProfileReferrer succeeds.
+func (s *Store) SetObservedProfileDigest(casHash, referrerDigest string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	idx, err := s.findIndex(casHash)
+	if err != nil {
+		return err
+	}
+	s.idx.Entries[idx].ObservedProfileDigest = referrerDigest
+	return s.save()
+}
+
 // SetIntegrityHealth updates the integrity_health of the entry identified by casHash.
 //
 // IMPORTANT: This method MUST be called only by the reconcile loop.

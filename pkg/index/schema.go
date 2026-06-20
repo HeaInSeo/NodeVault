@@ -68,6 +68,13 @@ type Entry struct {
 	// Empty until pkg/oras pushes the referrer (TODO-07).
 	SpecReferrerDigest string `json:"spec_referrer_digest,omitempty"`
 
+	// ObservedProfileDigest is the OCI digest of the latest attached toolprofile
+	// referrer (observed L5-a validation profile). Empty until a successful
+	// ToolCheckRecord triggers pkg/oras.PushToolProfileReferrer. Caches only the
+	// latest digest; the registry itself retains the latest 3 (see
+	// docs/OBSERVED_PROFILE_SPEC.md §5).
+	ObservedProfileDigest string `json:"observed_profile_digest,omitempty"`
+
 	// ── State axis 1: operator intent ────────────────────────────────────────
 	// Changed only by NodeVault explicit operations (Register, Retract, Delete).
 	LifecyclePhase LifecyclePhase `json:"lifecycle_phase"`

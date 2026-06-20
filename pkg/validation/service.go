@@ -5,12 +5,14 @@ package validation
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/HeaInSeo/NodeVault/pkg/index"
+	"github.com/HeaInSeo/NodeVault/pkg/oras"
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
@@ -40,7 +42,7 @@ func New(store *index.Store, certSvc certificationService) *Service {
 // SubmitToolCheckRecord stores an L5-a functional validation result and
 // triggers certification evaluation.
 func (s *Service) SubmitToolCheckRecord(
-	_ context.Context, req *nfv1.ToolCheckRecordRequest,
+	ctx context.Context, req *nfv1.ToolCheckRecordRequest,
 ) (*nfv1.SubmitRecordResponse, error) {
 	if req.CheckId == "" || req.ImageDigest == "" {
 		return nil, status.Error(codes.InvalidArgument, "check_id and image_digest are required")
@@ -124,10 +126,48 @@ func (s *Service) SubmitToolCheckRecord(
 		}
 	}
 
+	s.pushProfileReferrer(ctx, rec)
+
 	return &nfv1.SubmitRecordResponse{
 		RecordId:            req.CheckId,
 		CertificationStatus: certStatus,
 	}, nil
+}
+
+// pushProfileReferrer attaches an observed validation profile as a Harbor OCI
+// referrer for a successful check record. Non-fatal: if the push fails or the
+// index.Entry isn't found yet, ObservedProfileDigest simply stays unset until
+// a future validation run retries.
+//
+//nolint:gocritic // hugeParam: ToolCheckRecord by value matches AppendToolCheckRecord's existing convention.
+func (s *Service) pushProfileReferrer(ctx context.Context, rec index.ToolCheckRecord) {
+	if rec.ValidationStatus != "succeeded" || rec.ValidationHash == "" {
+		return
+	}
+	entry, err := s.store.GetByImageDigest(rec.ImageDigest)
+	if err != nil {
+		return
+	}
+	imageRepo := imageRepoFromRef(entry.ImageRef)
+	referrerDigest, err := oras.PushToolProfileReferrer(ctx, imageRepo, rec.ImageDigest, entry.CasHash, &rec)
+	if err != nil {
+		slog.Warn("toolprofile referrer push failed", "check_id", rec.CheckID, "err", err)
+		return
+	}
+	if err := s.store.SetObservedProfileDigest(entry.CasHash, referrerDigest); err != nil {
+		slog.Warn("index observed profile digest update failed", "err", err)
+		return
+	}
+	slog.Info("toolprofile referrer attached", "check_id", rec.CheckID, "referrer", referrerDigest)
+}
+
+// imageRepoFromRef strips the tag from a full "host[:port]/project/repo:tag"
+// reference (index.Entry.ImageRef), returning the bare repository reference.
+func imageRepoFromRef(ref string) string {
+	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
+		return ref[:i]
+	}
+	return ref
 }
 
 // SubmitToolScanRecord stores an L5-b security scan result and triggers

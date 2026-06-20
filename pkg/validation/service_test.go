@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -100,6 +101,55 @@ func TestSubmitToolCheckRecord_CertFailed(t *testing.T) {
 	}
 	if resp.CertificationStatus != "failed" {
 		t.Errorf("CertificationStatus: got %q want failed", resp.CertificationStatus)
+	}
+}
+
+// TestSubmitToolCheckRecord_ProfileReferrerPushNonFatal verifies that a failed
+// toolprofile referrer push (registry unreachable) does not fail the overall
+// RPC, and ObservedProfileDigest stays unset.
+func TestSubmitToolCheckRecord_ProfileReferrerPushNonFatal(t *testing.T) {
+	store := newStore(t)
+	if err := store.Append(index.Entry{
+		CasHash:        "cas-1",
+		ArtifactKind:   index.KindTool,
+		StableRef:      "bwa@1.0",
+		ToolName:       "bwa",
+		Version:        "1.0",
+		ImageRef:       "127.0.0.1:1/library/bwa:latest", // closed port: push fails fast
+		ImageDigest:    "sha256:profile-push",
+		LifecyclePhase: index.PhaseActive,
+	}); err != nil {
+		t.Fatalf("store.Append: %v", err)
+	}
+
+	certSvc := &fakeCertSvc{}
+	svc := validation.New(store, certSvc)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req := &nfv1.ToolCheckRecordRequest{
+		CheckId:          "chk-profile-1",
+		ImageDigest:      "sha256:profile-push",
+		ToolName:         "bwa",
+		Version:          "1.0",
+		ValidationStatus: "succeeded",
+		ValidationHash:   "sha256:validation-hash",
+	}
+	resp, err := svc.SubmitToolCheckRecord(ctx, req)
+	if err != nil {
+		t.Fatalf("SubmitToolCheckRecord: %v", err)
+	}
+	if resp.RecordId != "chk-profile-1" {
+		t.Errorf("RecordId: got %q want chk-profile-1", resp.RecordId)
+	}
+
+	entry, err := store.GetByCasHash("cas-1")
+	if err != nil {
+		t.Fatalf("GetByCasHash: %v", err)
+	}
+	if entry.ObservedProfileDigest != "" {
+		t.Errorf("ObservedProfileDigest: got %q, want empty (push should have failed)", entry.ObservedProfileDigest)
 	}
 }
 

@@ -20,7 +20,7 @@ BUILDTAGS ?= exclude_graphdriver_btrfs containers_image_openpgp exclude_graphdri
 
 # ── infra-lab / Harbor 설정 ──────────────────────────────────────────
 INFRALAB_KUBECONFIG ?= $(shell realpath ../infra-lab/kubeconfig 2>/dev/null || echo "")
-INFRALAB_REGISTRY   ?= harbor.10.113.24.96.nip.io
+INFRALAB_REGISTRY   ?= harbor.lab.local
 IMAGE                ?= $(INFRALAB_REGISTRY)/nodevault/controlplane:latest
 
 # ── 포맷 ──────────────────────────────────────────────────────────────────────
@@ -172,11 +172,11 @@ vendor:
 
 # ── NodeVault 이미지 빌드 + Harbor push ───────────────────────────────────────
 # 사전 조건:
-#   podman login harbor.10.113.24.96.nip.io   (최초 1회)
+#   podman login harbor.lab.local   (최초 1회)
 #
 # 실행:
 #   make push-image
-#   make push-image IMAGE=harbor.10.113.24.96.nip.io/nodevault/controlplane:v1.0.0
+#   make push-image IMAGE=harbor.lab.local/nodevault/controlplane:v1.0.0
 push-image: vendor
 	podman build \
 	    -t $(IMAGE) \

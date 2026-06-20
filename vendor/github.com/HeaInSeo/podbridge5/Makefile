@@ -17,17 +17,22 @@ ARTIFACTS_DIR ?= $(CURDIR)/artifacts
 VM_TEST_RUNTIME_LOG ?= $(ARTIFACTS_DIR)/vm-test-runtime.log
 VM_TEST_RUNTIME_INTEGRATION_LOG ?= $(ARTIFACTS_DIR)/vm-test-runtime-integration.log
 
+COVERAGE_UNIT_OUT ?= $(ARTIFACTS_DIR)/coverage-unit.out
+COVERAGE_RUNTIME_OUT ?= $(ARTIFACTS_DIR)/coverage-runtime.out
+COVERAGE_RUNTIME_INTEGRATION_OUT ?= $(ARTIFACTS_DIR)/coverage-runtime-integration.out
+COVERAGE_MERGED_OUT ?= $(ARTIFACTS_DIR)/coverage-merged.out
+
 REMOTE_VM_RUN = \
 	REMOTE_HOST='$(REMOTE_HOST)' REMOTE_USER='$(REMOTE_USER)' REMOTE_PORT='$(REMOTE_PORT)' REMOTE_PASS='$(REMOTE_PASS)' \
 	PODBRIDGE5_VM_NAME='$(PODBRIDGE5_VM_NAME)' PODBRIDGE5_VM_CPUS='$(PODBRIDGE5_VM_CPUS)' PODBRIDGE5_VM_MEMORY='$(PODBRIDGE5_VM_MEMORY)' PODBRIDGE5_VM_DISK='$(PODBRIDGE5_VM_DISK)' \
 	PODBRIDGE5_VM_REPO='$(PODBRIDGE5_VM_REPO)' PODBRIDGE5_LOCAL_REPO='$(PODBRIDGE5_LOCAL_REPO)' PODBRIDGE5_GO_VERSION='$(GO_REQUIRED_VERSION)' \
 	cd /opt/go/src/github.com/HeaInSeo/podbridge5/hack/remotevm && $(GO) run .
 
-.PHONY: test test-unit test-runtime test-runtime-integration go-version-check runtime-env-check \
-	runtime-host-check runtime-integration-host-check check-remote-auth \
+.PHONY: test test-unit test-runtime test-runtime-integration check-runtime-build go-version-check \
+	runtime-env-check runtime-host-check runtime-integration-host-check check-remote-auth \
 	vm-create-runtime vm-prepare-runtime vm-sync-runtime vm-run-runtime \
 	vm-run-runtime-integration vm-delete-runtime vm-test-runtime \
-	vm-test-runtime-integration lint lint-fix
+	vm-test-runtime-integration coverage-merge lint lint-fix
 
 TEST_TAGS_BASE ?= exclude_graphdriver_btrfs containers_image_openpgp exclude_graphdriver_devicemapper
 TEST_TAGS_RUNTIME ?= $(TEST_TAGS_BASE) runtime
@@ -43,7 +48,40 @@ lint-fix: go-version-check
 test: test-unit
 
 test-unit: go-version-check
-	$(GO) test -v -race -cover -tags "$(TEST_TAGS_BASE)" ./...
+	@mkdir -p '$(ARTIFACTS_DIR)'
+	$(GO) test -v -race -cover -coverprofile='$(COVERAGE_UNIT_OUT)' -tags "$(TEST_TAGS_BASE)" ./...
+
+# Concatenates the unit profile with whichever runtime/integration profiles
+# vm-run-runtime / vm-run-runtime-integration fetched from the VM into
+# artifacts/, then reports the combined statement coverage. go tool cover
+# sums per-block counts across repeated "file:line.col,line.col numStmts"
+# entries, so naive concatenation under one mode header is a valid merge as
+# long as each tagged test suite covers mostly disjoint code paths (true
+# here: unit tests exercise the *WithRuntime logic via fakes, runtime tests
+# exercise the real podman/buildah adapters that unit tests can't reach).
+coverage-merge:
+	@mkdir -p '$(ARTIFACTS_DIR)'
+	@profiles=""; \
+	for f in '$(COVERAGE_UNIT_OUT)' '$(COVERAGE_RUNTIME_OUT)' '$(COVERAGE_RUNTIME_INTEGRATION_OUT)'; do \
+		if [ -f "$$f" ]; then profiles="$$profiles $$f"; fi; \
+	done; \
+	if [ -z "$$profiles" ]; then \
+		echo "[coverage-merge] no coverage profiles found in $(ARTIFACTS_DIR)" >&2; \
+		echo "[coverage-merge] run 'make test-unit' and/or 'make vm-run-runtime' first" >&2; \
+		exit 1; \
+	fi; \
+	echo "[coverage-merge] merging:$$profiles"; \
+	echo "mode: atomic" > '$(COVERAGE_MERGED_OUT)'; \
+	for f in $$profiles; do tail -n +2 "$$f" >> '$(COVERAGE_MERGED_OUT)'; done; \
+	$(GO) tool cover -func='$(COVERAGE_MERGED_OUT)' | tail -1
+
+# Compiles every runtime/integration-tagged test file without needing a live
+# Podman socket or remote VM. Catches build breaks (e.g. references to
+# functions removed from production code) that go-version-check/test-unit
+# can't see because they never compile those files.
+check-runtime-build: go-version-check
+	@echo "[check-runtime-build] tags: $(TEST_TAGS_RUNTIME_INTEGRATION)"
+	$(GO) vet -tags "$(TEST_TAGS_RUNTIME_INTEGRATION)" ./...
 
 test-runtime: go-version-check runtime-env-check runtime-host-check
 	@echo "[test-runtime] tags: $(TEST_TAGS_RUNTIME)"
@@ -51,10 +89,20 @@ test-runtime: go-version-check runtime-env-check runtime-host-check
 	$(GO) test -v -tags "$(TEST_TAGS_RUNTIME)" ./...
 
 # Runtime-sensitive integration tests.
+#
+# Plain `unshare -r` only maps the calling uid to 0 inside a fresh user
+# namespace - it doesn't grant the full subuid/subgid range, so extracting a
+# layer that chowns into a wider GID (e.g. /etc/shadow at gid 42) fails with
+# "potentially insufficient UIDs or GIDs available in user namespace".
+# `podman unshare` builds the namespace via newuidmap/newgidmap using the
+# host's configured subuid/subgid ranges (see /etc/subuid, /etc/subgid) and
+# also exports _CONTAINERS_USERNS_CONFIGURED/_CONTAINERS_ROOTLESS_UID/
+# _CONTAINERS_ROOTLESS_GID itself, so go.podman.io/storage correctly resolves
+# rootless ($HOME-based) storage paths inside the namespace.
 test-runtime-integration: go-version-check runtime-env-check runtime-host-check runtime-integration-host-check
 	@echo "[test-runtime-integration] tags: $(TEST_TAGS_RUNTIME_INTEGRATION)"
-	@echo "[test-runtime-integration] running integration tests with unshare"
-	@unshare -r -m $(GO) test -v -tags "$(TEST_TAGS_RUNTIME_INTEGRATION)" ./...
+	@echo "[test-runtime-integration] running integration tests with podman unshare"
+	@podman unshare $(GO) test -v -tags "$(TEST_TAGS_RUNTIME_INTEGRATION)" ./...
 
 go-version-check:
 	@command -v $(GO) >/dev/null 2>&1 || { echo "missing: $(GO)" >&2; exit 1; }
@@ -119,8 +167,8 @@ runtime-host-check:
 	fi
 
 runtime-integration-host-check:
-	@command -v unshare >/dev/null 2>&1 || { echo "missing: unshare" >&2; exit 1; }
-	@echo "[runtime-integration-host-check] unshare is available"
+	@command -v podman >/dev/null 2>&1 || { echo "missing: podman" >&2; exit 1; }
+	@echo "[runtime-integration-host-check] podman unshare is available"
 
 check-remote-auth:
 	@if [ -n "$(REMOTE_PASS)" ]; then \

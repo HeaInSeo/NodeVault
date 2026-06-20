@@ -11,3 +11,4 @@ backup/*
 !backup/Readme.legacy.md
 scripts/
 cli/
+hack/remotevm/remotevm

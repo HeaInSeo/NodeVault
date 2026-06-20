@@ -16,10 +16,14 @@ import (
 
 type imageBuildRuntime interface {
 	BuildDockerfiles(ctx context.Context, store storage.Store, options define.BuildOptions, dockerfilePath string) (string, string, error)
-	PushImage(ctx context.Context, store storage.Store, imageRef, normalizedDestination string) (string, error)
+	PushImage(ctx context.Context, store storage.Store, imageRef, normalizedDestination string, sysCtx *imageTypes.SystemContext) (string, error)
 }
 
 type realImageBuildRuntime struct{}
+
+type userNamespaceStoreFactory func(UserNamespaceBuildConfig) (storage.Store, error)
+
+type storeShutdownFunc func(storage.Store, bool) error
 
 func (realImageBuildRuntime) BuildDockerfiles(ctx context.Context, store storage.Store, options define.BuildOptions, dockerfilePath string) (buildID, buildRef string, buildErr error) {
 	id, ref, err := imagebuildah.BuildDockerfiles(ctx, store, options, dockerfilePath)
@@ -32,17 +36,18 @@ func (realImageBuildRuntime) BuildDockerfiles(ctx context.Context, store storage
 	return id, ref.Digest().String(), nil
 }
 
-func (realImageBuildRuntime) PushImage(ctx context.Context, store storage.Store, imageRef, normalizedDestination string) (string, error) {
+func (realImageBuildRuntime) PushImage(ctx context.Context, store storage.Store, imageRef, normalizedDestination string, sysCtx *imageTypes.SystemContext) (string, error) {
 	destRef, err := alltransports.ParseImageName(normalizedDestination)
 	if err != nil {
 		return "", fmt.Errorf("parse destination %q: %w", normalizedDestination, err)
 	}
+	if sysCtx == nil {
+		sysCtx = &imageTypes.SystemContext{}
+	}
 
 	_, manifestDigest, err := buildah.Push(ctx, imageRef, destRef, buildah.PushOptions{
-		Store: store,
-		SystemContext: &imageTypes.SystemContext{
-			DockerInsecureSkipTLSVerify: imageTypes.OptionalBoolFalse,
-		},
+		Store:         store,
+		SystemContext: sysCtx,
 	})
 	if err != nil {
 		return "", fmt.Errorf("buildah.Push: %w", err)
@@ -91,12 +96,33 @@ func buildDockerfileContentWithOptionsRuntime(ctx context.Context, runtime image
 
 	id, digestStr, err := runtime.BuildDockerfiles(ctx, store, buildOpts, dockerfilePath)
 	if err != nil {
-		return "", "", fmt.Errorf("imagebuildah.BuildDockerfiles: %w", err)
+		return "", "", fmt.Errorf("imagebuildah.BuildDockerfiles: %w", annotateBuildahExecutionError(err))
 	}
 	return id, digestStr, nil
 }
 
+func annotateBuildahExecutionError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "unshare") || strings.Contains(msg, "clone_newuser"):
+		return fmt.Errorf("%w; hint: Buildah failed while creating a user namespace. In Kubernetes hostUsers:false pods, prefer explicit OCI isolation when nested user namespaces are unnecessary; otherwise verify AppArmor allows unprivileged user namespaces and the pod has the required capabilities", err)
+	case strings.Contains(msg, "setgroups"):
+		return fmt.Errorf("%w; hint: Buildah failed while configuring supplementary groups. Check user namespace gid mappings, /proc/self/setgroups policy, and whether the pod runtime blocks nested user namespace setup", err)
+	case strings.Contains(msg, "setcap") || strings.Contains(msg, "set file capabilities"):
+		return fmt.Errorf("%w; hint: Buildah failed while setting file capabilities. Verify CAP_SETFCAP is present, the filesystem supports file capabilities, and the active security profile is not denying setcap", err)
+	default:
+		return err
+	}
+}
+
 func pushImageWithRuntime(ctx context.Context, runtime imageBuildRuntime, store storage.Store, imageRef, destination string) (string, error) {
+	return pushImageWithSystemContextRuntime(ctx, runtime, store, imageRef, destination, nil)
+}
+
+func pushImageWithSystemContextRuntime(ctx context.Context, runtime imageBuildRuntime, store storage.Store, imageRef, destination string, sysCtx *imageTypes.SystemContext) (string, error) {
 	if ctx == nil {
 		return "", fmt.Errorf("ctx must not be nil")
 	}
@@ -112,7 +138,7 @@ func pushImageWithRuntime(ctx context.Context, runtime imageBuildRuntime, store 
 		return "", err
 	}
 
-	digestStr, err := runtime.PushImage(ctx, store, imageRef, normalizedDestination)
+	digestStr, err := runtime.PushImage(ctx, store, imageRef, normalizedDestination, sysCtx)
 	if err != nil {
 		return "", fmt.Errorf("push image %q to %q: %w", imageRef, destination, err)
 	}
@@ -126,6 +152,38 @@ func buildAndPushDockerfileContentWithRuntime(ctx context.Context, runtime image
 	}
 
 	digestStr, err = pushImageWithRuntime(ctx, runtime, store, outputRef, outputRef)
+	if err != nil {
+		return "", "", err
+	}
+	return imageID, digestStr, nil
+}
+
+func buildAndPushUserNamespaceWithRuntime(ctx context.Context, runtime imageBuildRuntime, storeFactory userNamespaceStoreFactory, shutdownFn storeShutdownFunc, config UserNamespaceBuildConfig, dockerfileContent string) (imageID, digestStr string, err error) {
+	if strings.TrimSpace(config.OutputRef) == "" {
+		return "", "", fmt.Errorf("output ref must not be empty")
+	}
+
+	store, err := storeFactory(config)
+	if err != nil {
+		return "", "", err
+	}
+	defer func() {
+		shutdownErr := shutdownFn(store, false)
+		if err == nil && shutdownErr != nil {
+			err = shutdownErr
+		}
+	}()
+
+	buildOpts, err := UserNamespaceImageBuildOptions(config)
+	if err != nil {
+		return "", "", err
+	}
+	imageID, _, err = buildDockerfileContentWithOptionsRuntime(ctx, runtime, store, dockerfileContent, buildOpts)
+	if err != nil {
+		return "", "", err
+	}
+
+	digestStr, err = pushImageWithSystemContextRuntime(ctx, runtime, store, config.OutputRef, config.OutputRef, UserNamespaceSystemContext(config))
 	if err != nil {
 		return "", "", err
 	}

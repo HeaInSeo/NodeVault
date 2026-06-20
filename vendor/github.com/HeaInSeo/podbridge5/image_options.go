@@ -3,6 +3,8 @@ package podbridge5
 import (
 	"fmt"
 	"io"
+	"os"
+	"strconv"
 	"strings"
 
 	"go.podman.io/buildah"
@@ -33,11 +35,52 @@ type StoreOption func(*storage.StoreOptions) error
 
 type ImageBuildOption func(*define.BuildOptions) error
 
+type StorageMode string
+
+const (
+	StorageVFS           StorageMode = "vfs"
+	StorageNativeOverlay StorageMode = "native-overlay"
+	StorageFuseOverlay   StorageMode = "fuse-overlay"
+)
+
+type BuildIsolation string
+
+const (
+	BuildIsolationChroot      BuildIsolation = "chroot"
+	BuildIsolationOCI         BuildIsolation = "oci"
+	BuildIsolationOCIRootless BuildIsolation = "rootless"
+)
+
 type UserNamespaceBuildConfig struct {
-	OutputRef        string
-	ContextDirectory string
-	Runtime          string
-	CacheRef         string
+	OutputRef                 string
+	ContextDirectory          string
+	Runtime                   string
+	CacheRef                  string
+	Isolation                 BuildIsolation
+	StorageMode               StorageMode
+	RunRoot                   string
+	GraphRoot                 string
+	FuseOverlayfsMountProgram string
+	RegistryCertDirPath       string
+	// InsecureSkipTLSVerify disables TLS verification when pushing/pulling
+	// against the configured registry (e.g. a plain-HTTP in-cluster cache).
+	// Defaults to false (verify TLS), matching prior behavior.
+	InsecureSkipTLSVerify bool
+}
+
+type UserNamespaceExecutionProfile struct {
+	ActualEUID          int
+	ActualEGID          int
+	UserNamespace       bool
+	StorageMode         StorageMode
+	StorageDriver       string
+	GraphRoot           string
+	RunRoot             string
+	MountProgram        string
+	Isolation           string
+	Runtime             string
+	BuildahVersion      string
+	RegistryCertDirPath string
 }
 
 func DefaultImageBuildOptions(outputRef string) define.BuildOptions {
@@ -60,6 +103,34 @@ func DefaultUserNamespaceStoreOptions() storage.StoreOptions {
 			"enable_partial_images": "true",
 		},
 	}
+}
+
+func UserNamespaceStoreOptions(config UserNamespaceBuildConfig) (storage.StoreOptions, error) {
+	opts := DefaultUserNamespaceStoreOptions()
+	if err := WithStoreRoots(config.RunRoot, config.GraphRoot)(&opts); err != nil {
+		return storage.StoreOptions{}, err
+	}
+
+	switch config.StorageMode {
+	case StorageVFS:
+		opts.GraphDriverName = "vfs"
+		opts.GraphDriverOptions = nil
+	case StorageNativeOverlay:
+		opts.GraphDriverName = "overlay"
+		opts.GraphDriverOptions = nil
+	case StorageFuseOverlay:
+		opts.GraphDriverName = "overlay"
+		opts.GraphDriverOptions = nil
+		if err := WithFuseOverlayfsMountProgram(config.FuseOverlayfsMountProgram)(&opts); err != nil {
+			return storage.StoreOptions{}, err
+		}
+	case "":
+		return storage.StoreOptions{}, fmt.Errorf("storage mode must be explicit")
+	default:
+		return storage.StoreOptions{}, fmt.Errorf("unsupported storage mode %q", config.StorageMode)
+	}
+
+	return opts, nil
 }
 
 func WithStoreRoots(runRoot, graphRoot string) StoreOption {
@@ -157,6 +228,10 @@ func NewImageBuildOptions(outputRef string, opts ...ImageBuildOption) (define.Bu
 }
 
 func UserNamespaceImageBuildOptions(config UserNamespaceBuildConfig) (define.BuildOptions, error) {
+	isolation, err := resolveBuildIsolation(config.Isolation)
+	if err != nil {
+		return define.BuildOptions{}, err
+	}
 	buildOpts, err := NewImageBuildOptions(
 		config.OutputRef,
 		WithImageBuildContextDirectory(config.ContextDirectory),
@@ -166,22 +241,88 @@ func UserNamespaceImageBuildOptions(config UserNamespaceBuildConfig) (define.Bui
 	if err != nil {
 		return define.BuildOptions{}, err
 	}
-	buildOpts.Isolation = define.IsolationChroot
+	buildOpts.Isolation = isolation
+	buildOpts.SystemContext = UserNamespaceSystemContext(config)
 	buildOpts.Layers = true
+	buildOpts.RemoveIntermediateCtrs = true
 	return buildOpts, nil
 }
 
+func UserNamespaceSystemContext(config UserNamespaceBuildConfig) *imageTypes.SystemContext {
+	sysCtx := &imageTypes.SystemContext{}
+	if certDir := strings.TrimSpace(config.RegistryCertDirPath); certDir != "" {
+		sysCtx.DockerPerHostCertDirPath = certDir
+	}
+	if config.InsecureSkipTLSVerify {
+		sysCtx.DockerInsecureSkipTLSVerify = imageTypes.OptionalBoolTrue
+	}
+	return sysCtx
+}
+
+func resolveBuildIsolation(isolation BuildIsolation) (define.Isolation, error) {
+	switch isolation {
+	case "", BuildIsolationChroot:
+		return define.IsolationChroot, nil
+	case BuildIsolationOCI:
+		return define.IsolationOCI, nil
+	case BuildIsolationOCIRootless:
+		return define.IsolationOCIRootless, nil
+	default:
+		return define.IsolationDefault, fmt.Errorf("unsupported build isolation %q", isolation)
+	}
+}
+
 func DefaultUserNamespaceBuildEnvironment() map[string]string {
+	env, err := UserNamespaceBuildEnvironment(UserNamespaceBuildConfig{Isolation: BuildIsolationChroot})
+	if err != nil {
+		return map[string]string{}
+	}
+	return env
+}
+
+func UserNamespaceBuildEnvironment(config UserNamespaceBuildConfig) (map[string]string, error) {
+	isolation, err := resolveBuildIsolation(config.Isolation)
+	if err != nil {
+		return nil, err
+	}
+	euid := os.Geteuid()
+	egid := os.Getegid()
 	return map[string]string{
 		ContainersUserNamespaceConfiguredEnv: "done",
-		ContainersRootlessUIDEnv:             "1000",
-		ContainersRootlessGIDEnv:             "1000",
-		BuildahIsolationEnv:                  "chroot",
+		ContainersRootlessUIDEnv:             strconv.Itoa(euid),
+		ContainersRootlessGIDEnv:             strconv.Itoa(egid),
+		BuildahIsolationEnv:                  isolation.String(),
 		BuildahRuntimeEnv:                    DefaultUserNamespaceRuntime,
 		HomeEnv:                              DefaultUserNamespaceHome,
 		XDGConfigHomeEnv:                     DefaultUserNamespaceHome + "/.config",
 		XDGDataHomeEnv:                       DefaultUserNamespaceHome + "/.local/share",
+	}, nil
+}
+
+func UserNamespaceBuildExecutionProfile(config UserNamespaceBuildConfig) (UserNamespaceExecutionProfile, error) {
+	storeOpts, err := UserNamespaceStoreOptions(config)
+	if err != nil {
+		return UserNamespaceExecutionProfile{}, err
 	}
+	isolation, err := resolveBuildIsolation(config.Isolation)
+	if err != nil {
+		return UserNamespaceExecutionProfile{}, err
+	}
+
+	return UserNamespaceExecutionProfile{
+		ActualEUID:          os.Geteuid(),
+		ActualEGID:          os.Getegid(),
+		UserNamespace:       true,
+		StorageMode:         config.StorageMode,
+		StorageDriver:       storeOpts.GraphDriverName,
+		GraphRoot:           storeOpts.GraphRoot,
+		RunRoot:             storeOpts.RunRoot,
+		MountProgram:        overlayMountProgram(storeOpts.GraphDriverOptions),
+		Isolation:           isolation.String(),
+		Runtime:             firstNonEmpty(config.Runtime, DefaultUserNamespaceRuntime),
+		BuildahVersion:      buildah.Version,
+		RegistryCertDirPath: strings.TrimSpace(config.RegistryCertDirPath),
+	}, nil
 }
 
 func DefaultUserNamespaceBuildCapabilities() []string {
@@ -221,7 +362,7 @@ func newDefaultAddAndCopyOptions(hasher io.Writer) buildah.AddAndCopyOptions {
 
 func newDefaultAddAndCopyOptionsWithDryRun(hasher io.Writer, dryRun bool) buildah.AddAndCopyOptions {
 	return NewAddAndCopyOptions(
-		WithChmod("0o755"),
+		WithChmod("755"),
 		WithChown("0:0"),
 		WithHasher(hasher),
 		WithContextDir("."),
@@ -245,4 +386,14 @@ func utilsContainsString(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func overlayMountProgram(options []string) string {
+	const prefix = "overlay.mount_program="
+	for _, option := range options {
+		if strings.HasPrefix(option, prefix) {
+			return strings.TrimPrefix(option, prefix)
+		}
+	}
+	return ""
 }

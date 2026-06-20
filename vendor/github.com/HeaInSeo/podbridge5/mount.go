@@ -1,11 +1,9 @@
 package podbridge5
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path"
-	"syscall"
 
 	specgo "github.com/opencontainers/runtime-spec/specs-go"
 	"go.podman.io/podman/v6/pkg/specgen"
@@ -39,8 +37,8 @@ func WithMount(source, destination, mountType string) ContainerOptions {
 
 // MountOverlay mounts an OverlayFS at mergedDir, using lowerDir as read-only data
 // and upperDir for writable data, with workDir for internal overlay operations.
-// It handles both root and rootless environments, attempting native overlay in rootless
-// and falling back to fuse-overlayfs if needed.
+// It only performs a native kernel overlay mount. fuse-overlayfs must be wired
+// through containers/storage or managed as a separate process.
 func MountOverlay(lowerDir, upperDir, workDir, mergedDir string) error {
 	// 1. Ensure all necessary directories exist
 	for _, dir := range []string{lowerDir, upperDir, workDir, mergedDir} {
@@ -69,20 +67,7 @@ func MountOverlay(lowerDir, upperDir, workDir, mergedDir string) error {
 		Log.Infoln("Successfully mounted with native rootless 'overlay'.")
 		return nil
 	}
-
-	// 4. Fallback on expected errors for older kernels
-	if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EINVAL) {
-		Log.Infof("Native rootless mount failed (expected on older kernels): %v. Falling back to 'fuse-overlayfs'.", err)
-		fuseOpts := baseOpts + ",mount_program=/usr/bin/fuse-overlayfs"
-		if fErr := unix.Mount("overlay", mergedDir, "overlay", 0, fuseOpts); fErr != nil {
-			return fmt.Errorf("fallback mount with 'fuse-overlayfs' failed: %w", fErr)
-		}
-		Log.Infoln("Successfully mounted with fallback 'fuse-overlayfs'.")
-		return nil
-	}
-
-	// Unexpected error
-	return fmt.Errorf("native rootless overlayfs mount failed unexpectedly: %w", err)
+	return fmt.Errorf("native rootless overlayfs mount failed: %w", err)
 }
 
 // WithFileBindings mounts each host file from cellColumns into the container
@@ -101,6 +86,9 @@ func WithFileBindings(bindDir string, cellColumns map[string]string) ContainerOp
 	return func(spec *specgen.SpecGenerator) error {
 		// Ensure the working directory is set
 		spec.WorkDir = bindDir
+		if spec.Env == nil {
+			spec.Env = make(map[string]string)
+		}
 
 		// Mount each file and export as env var
 		for header, hostPath := range cellColumns {

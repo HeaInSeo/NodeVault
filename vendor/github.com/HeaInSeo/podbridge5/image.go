@@ -22,9 +22,9 @@ var (
 	digester = digest.Canonical.Digester()
 
 	defaultRunOptions = buildah.RunOptions{
-		User:      "root",
-		Isolation: define.IsolationOCI,
-		Runtime:   "runc",
+		User:             "root",
+		Isolation:        define.IsolationOCI,
+		ConfigureNetwork: define.NetworkDisabled,
 	}
 
 	// 사용하지 않음 주석처리함. 삭제하지 않음.
@@ -207,6 +207,19 @@ func NewUserNamespaceStore(opts ...StoreOption) (storage.Store, error) {
 		if err := applyOpt(&buildStoreOptions); err != nil {
 			return nil, err
 		}
+	}
+	buildStore, err := storage.GetStore(buildStoreOptions)
+	if err != nil {
+		Log.Errorf("failed to get user namespace store: %v", err)
+		return nil, fmt.Errorf("storage.GetStore: %w", err)
+	}
+	return buildStore, nil
+}
+
+func NewUserNamespaceStoreWithConfig(config UserNamespaceBuildConfig) (storage.Store, error) {
+	buildStoreOptions, err := UserNamespaceStoreOptions(config)
+	if err != nil {
+		return nil, err
 	}
 	buildStore, err := storage.GetStore(buildStoreOptions)
 	if err != nil {
@@ -406,6 +419,10 @@ func BuildAndPushDockerfileContent(ctx context.Context, store storage.Store, doc
 		return "", "", fmt.Errorf("store must not be nil")
 	}
 	return buildAndPushDockerfileContentWithRuntime(ctx, realImageBuildRuntime{}, store, dockerfileContent, outputRef)
+}
+
+func BuildAndPushUserNamespace(ctx context.Context, config UserNamespaceBuildConfig, dockerfileContent string) (imageID, digestStr string, err error) {
+	return buildAndPushUserNamespaceWithRuntime(ctx, realImageBuildRuntime{}, NewUserNamespaceStoreWithConfig, shutdown, config, dockerfileContent)
 }
 
 // newBuilder creates a new builder using the NewBuilder function with default options.

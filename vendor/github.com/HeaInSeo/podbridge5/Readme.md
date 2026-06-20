@@ -61,6 +61,8 @@ overlay는 목표 기본값으로 유지하되, NodeVault 전환 시 node filesy
 
 ## 변경 이력
 
+- `v0.1.5` — 실제 런타임/통합 테스트 커버리지 확대(store, builder, registry push/pull, user namespace 빌드, rootless init 경로). 이 과정에서 발견한 버그 수정: `runc` 하드코딩 제거(VM은 `crun`만 설치됨), `RemoveIntermediateCtrs` 미설정으로 인한 빌드 레이어 누수, 불필요한 netavark 네트워크 설정, 잘못된 `Chmod` 기본값(`"0o755"` → `"755"`), 볼륨 정리 타임아웃 조정. remote VM 통합 테스트 하니스를 `unshare -r`에서 `podman unshare`로 교체(subuid/subgid 전체 범위 및 rootless 환경변수를 올바르게 적용), 합산 테스트 커버리지 80%+ 달성
+- `v0.1.4` — `MountOverlay`의 fuse-overlayfs 폴백 제거(네이티브 rootless overlay만 시도), `CreateContainer`의 create-if-absent 계약 명시 및 관련 테스트 정리, remote VM 런타임 테스트 파이프라인 수정(소켓 권한, 출력 스트리밍 끊김), 합산 테스트 커버리지 70%+ 달성
 - `v0.1.2` — Podman/Buildah 의존성 업데이트, remote VM user namespace 통합 수정, user namespace Buildah 기본값 추가
 - `v0.1.1` — `seoyhaein/utils`를 `HeaInSeo/utils v0.0.7`로 교체 (API 변경 없음)
 

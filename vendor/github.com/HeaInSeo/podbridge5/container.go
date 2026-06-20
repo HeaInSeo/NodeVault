@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	nettypes "go.podman.io/common/libnetwork/types"
 	"go.podman.io/podman/v6/libpod/define"
 	"go.podman.io/podman/v6/pkg/specgen"
 )
@@ -115,6 +116,18 @@ func WithEnvs(envs map[string]string) ContainerOptions {
 	}
 }
 
+// WithPortMapping publishes a container port on the host, e.g. for reaching
+// a container-backed service (such as a local registry) from the host side.
+func WithPortMapping(containerPort, hostPort uint16) ContainerOptions {
+	return func(spec *specgen.SpecGenerator) error {
+		spec.PortMappings = append(spec.PortMappings, nettypes.PortMapping{
+			ContainerPort: containerPort,
+			HostPort:      hostPort,
+		})
+		return nil
+	}
+}
+
 func WithCommand(cmd []string) ContainerOptions {
 	return func(spec *specgen.SpecGenerator) error {
 		spec.Command = cmd
@@ -141,7 +154,13 @@ func StartContainer(ctx context.Context, spec *specgen.SpecGenerator) (string, e
 	return startContainerWithRuntime(ctx, podmanContainerRuntime{}, spec)
 }
 
-// CreateContainer 컨테이너 생성
+// CreateContainer creates a new container from conSpec.
+//
+// Contract: this is a create-if-absent API, not an idempotent get-or-create.
+// If a container named conSpec.Name already exists, it returns an error
+// wrapping ErrContainerAlreadyExists instead of reusing the existing
+// container. Callers that want reuse semantics must check for that error
+// (or call ContainerExists/InspectContainer) themselves.
 func CreateContainer(ctx context.Context, conSpec *specgen.SpecGenerator) (*CreateContainerResult, error) {
 	return createContainerWithRuntime(ctx, podmanContainerRuntime{}, conSpec)
 }

@@ -57,7 +57,8 @@ func (podmanVolumeContainerRuntime) StartContainer(ctx context.Context, containe
 }
 
 func (podmanVolumeContainerRuntime) StopContainer(ctx context.Context, containerID string) error {
-	if err := containers.Stop(ctx, containerID, nil); err != nil {
+	opts := new(containers.StopOptions).WithTimeout(2)
+	if err := containers.Stop(ctx, containerID, opts); err != nil {
 		return fmt.Errorf("container stop: %w", err)
 	}
 	return nil
@@ -103,7 +104,7 @@ func startVolumeContainer(ctx context.Context, runtime volumeContainerRuntime, s
 	}
 
 	cleanup := func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanupCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
 
 		if stopErr := runtime.StopContainer(cleanupCtx, cID); stopErr != nil {

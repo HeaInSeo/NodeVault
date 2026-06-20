@@ -103,6 +103,9 @@ func startContainerWithRuntime(ctx context.Context, runtime containerRuntime, sp
 	return ccr.ID, nil
 }
 
+// createContainerWithRuntime implements the create-if-absent contract: it
+// returns ErrContainerAlreadyExists rather than reusing an existing
+// container with the same name.
 func createContainerWithRuntime(ctx context.Context, runtime containerRuntime, conSpec *specgen.SpecGenerator) (*CreateContainerResult, error) {
 	if err := conSpec.Validate(); err != nil {
 		Log.Errorf("validation failed: %v", err)

@@ -78,14 +78,10 @@ spec:
             - name: NODEVAULT_RUNTIME_MODE
               value: "incluster"
 
-            # UserNS/Buildah values copied from the already validated spike
-            # profile. They now apply to the long-lived NodeVault container.
-            - name: _CONTAINERS_USERNS_CONFIGURED
-              value: "done"
-            - name: _CONTAINERS_ROOTLESS_UID
-              value: "1000"
-            - name: _CONTAINERS_ROOTLESS_GID
-              value: "1000"
+            # Kubernetes already places this Pod in a user namespace
+            # (hostUsers:false). Do not set Buildah's legacy rootless env here:
+            # it forces userxattr on native overlay build-context mounts, which
+            # this kernel rejects with EINVAL.
             - name: BUILDAH_ISOLATION
               value: "chroot"
             - name: BUILDAH_RUNTIME

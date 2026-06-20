@@ -100,8 +100,13 @@ L3/L4가 실행된 경우 `nodevault-smoke`의 검증 Job은 정상이다.
 
 1. 현재 전환 패치는 storage driver로 `overlay`를 사용한다. `vfs`와 `fuse-overlayfs`는
    이 환경에서 실패 경로로 확인되었으므로, 명시적 재검증 없이 fallback으로 전환하지 않는다.
-   캐시와 상태는 Pod 재시작 시 사라진다.
-2. `BuildService`는 아직 legacy `BuildRequest`와 L2→L3→L4 결합 흐름을 사용한다.
+   graphroot/runroot와 `/data`가 아직 `emptyDir`이므로 Pod 재시작 뒤 SQLite build state와
+   layer cache는 사라진다. 코드의 durable state 복구 동작은 PVC 전환 후에만 재시작 내구성을
+   제공한다.
+2. legacy `BuildRequest`/`BuildAndRegister`는 L2→L3→L4 결합 흐름을 유지한다. 신규
+   `SubmitToolBuild`는 resolved `raw_spec`의 build 요청을 L2 background build로 실행하며,
+   Watch/Cancel 경로의 실제 클러스터 검증은 아직 남아 있다.
 3. podbridge5 in-Pod 경로는 nan 자동 주입을 아직 수행하지 않는다.
 4. registry 인증은 Buildah용 docker auth secret과 ORAS용 username/password secret이 분리되어 있다.
-5. 실제 durable build state, cancellation/recovery, cache PVC는 후속 단계다.
+5. graphroot/runroot와 `/data` PVC 전환, 실제 subprocess cancellation cleanup, cache 계층은
+   후속 단계다.

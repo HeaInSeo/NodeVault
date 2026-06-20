@@ -22,6 +22,7 @@ BUILDTAGS ?= exclude_graphdriver_btrfs containers_image_openpgp exclude_graphdri
 INFRALAB_KUBECONFIG ?= $(shell realpath ../infra-lab/kubeconfig 2>/dev/null || echo "")
 INFRALAB_REGISTRY   ?= harbor.lab.local
 IMAGE                ?= $(INFRALAB_REGISTRY)/nodevault/controlplane:latest
+INTEGRATION_GRPC_PORT ?= 50051
 
 # ── 포맷 ──────────────────────────────────────────────────────────────────────
 fmt:
@@ -117,7 +118,7 @@ test-integration-infralab:
 	@echo "==> Cluster: $$(KUBECONFIG=$(INFRALAB_KUBECONFIG) kubectl get nodes --no-headers 2>&1 | awk '{print $$1, $$2}' | tr '\n' '  ')"
 	@echo "==> NodeVault service port-forward 시작..."
 	@KUBECONFIG=$(INFRALAB_KUBECONFIG) kubectl -n nodevault-system \
-	    port-forward service/nodevault-controlplane 50051:50051 >/tmp/nodevault-port-forward.log 2>&1 & \
+	    port-forward service/nodevault-controlplane $(INTEGRATION_GRPC_PORT):50051 >/tmp/nodevault-port-forward.log 2>&1 & \
 	PF_PID=$$!; \
 	trap 'kill $$PF_PID 2>/dev/null || true' EXIT INT TERM; \
 	sleep 3; \
@@ -126,7 +127,7 @@ test-integration-infralab:
 	    exit 1; \
 	fi; \
 	echo "==> in-pod-buildah 통합 테스트 실행 (port-forward pid=$$PF_PID)..."; \
-	KUBECONFIG=$(INFRALAB_KUBECONFIG) \
+	KUBECONFIG=$(INFRALAB_KUBECONFIG) NODEVAULT_INTEGRATION_ADDR=localhost:$(INTEGRATION_GRPC_PORT) \
 	    go test -v -tags "integration $(BUILDTAGS)" ./pkg/build/... -timeout 12m
 
 # ── 클러스터 리소스 배포 ────────────────────────────────────────────────────

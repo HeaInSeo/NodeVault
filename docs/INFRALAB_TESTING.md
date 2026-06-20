@@ -54,6 +54,12 @@ make deploy-infralab
 make test-integration-infralab
 ```
 
+원격 host에서 `localhost:50051`이 이미 사용 중이면 다른 local port를 지정한다.
+
+```bash
+make test-integration-infralab INTEGRATION_GRPC_PORT=50052
+```
+
 `make deploy-infralab`은 다음을 적용한다.
 
 | 파일 | 내용 |

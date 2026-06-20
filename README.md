@@ -164,7 +164,7 @@ SQLite 파일 포맷은 플랫폼 외부 계약이 아니다. 장기적으로 No
 | `NODEVAULT_FAST_RECONCILE` | `5m` | FastRun 주기 (integrity 존재 확인) |
 | `NODEVAULT_SLOW_RECONCILE` | `30m` | SlowRun 주기 (pull 도달 가능성) |
 | `NODEVAULT_BUILD_STATE_DB` | `assets/buildstate/build-state.db` | 비동기 빌드 상태 SQLite DB (K8s 배포값: `/data/build-state.db`) |
-| `NODEVAULT_REGISTRY_ADDR` | `harbor.10.113.24.96.nip.io` | 이미지 push 대상 Harbor 주소; infra-lab 배포는 `harbor.lab.local` 사용 |
+| `NODEVAULT_REGISTRY_ADDR` | `harbor.lab.local` | 이미지 push 대상 Harbor Gateway hostname; infra-lab CA와 HTTPRoute가 이 hostname을 기준으로 구성됨 |
 | `NODEVAULT_ORAS_INSECURE_TLS` | `false` | ORAS referrer push TLS 검증 비활성화 |
 | `NODESENTINEL_GRPC_ADDR` | `nodesentinel.nodevault-system.svc.cluster.local:50052` | NodeSentinel EnqueueValidationWork 엔드포인트 |
 | `HARBOR_USER` / `HARBOR_PASS` | — | ORAS referrer 호환용 Harbor 인증 정보; Buildah push는 mounted auth.json 사용 |

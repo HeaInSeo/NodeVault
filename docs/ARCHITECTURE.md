@@ -65,7 +65,7 @@ NodeVault는 Kubernetes에 장기 실행 Pod로 배포되어 Tool Image의 resol
 | containers/storage | 현재 배포는 `overlay`; graphroot/runroot는 Pod volume |
 | Kubernetes API 사용 | L3/L4 ValidateService Job에만 사용. 이미지 빌드는 K8s API 미사용 |
 | gRPC 포트 | Service `:50051` |
-| 상태 저장 | 현재 `/data` emptyDir; durable state/PVC는 후속 작업 |
+| 상태 저장 | SQLite WAL build state는 구현됨. 현재 `/data`가 emptyDir이므로 Pod 재시작 내구성은 PVC 전환 후 확보 |
 | Harbor | `harbor.lab.local` 또는 환경별 `NODEVAULT_REGISTRY_ADDR` |
 
 NodePalette의 최종 배치 위치와 독립 배포 방식은 별도 결정 사항이다.

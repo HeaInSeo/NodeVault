@@ -28,14 +28,21 @@ import (
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
-const nodeforgeAddr = "localhost:50051" // assumes port-forward active
+const defaultIntegrationAddr = "localhost:50051"
+
+func integrationAddr() string {
+	if addr := os.Getenv("NODEVAULT_INTEGRATION_ADDR"); addr != "" {
+		return addr
+	}
+	return defaultIntegrationAddr
+}
 
 func TestBuildAndRegister_SimpleDockerfile(t *testing.T) {
 	if os.Getenv("KUBECONFIG") == "" {
 		t.Skip("KUBECONFIG not set — skipping integration test")
 	}
 
-	conn, err := grpc.NewClient(nodeforgeAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(integrationAddr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatalf("grpc.NewClient: %v", err)
 	}
@@ -104,7 +111,7 @@ func TestBuildAndRegister_BadDockerfile(t *testing.T) {
 		t.Skip("KUBECONFIG not set — skipping integration test")
 	}
 
-	conn, err := grpc.NewClient(nodeforgeAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(integrationAddr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatalf("grpc.NewClient: %v", err)
 	}

@@ -307,7 +307,7 @@ func TestRecordBuildFailure_WritesFailedToolBuildRecord(t *testing.T) {
 func TestRecordBuildSuccess_NilIndexStore_NoOp(t *testing.T) {
 	svc := &Service{builder: &mockBuilder{}}
 	// Must not panic.
-	svc.recordBuildSuccess("build-noop", mustParseTime(t), "sha256:x", "ref", "v0.1.5")
+	svc.recordBuildSuccess("build-noop", mustParseTime(t), "sha256:x", "ref")
 	svc.recordBuildFailure("build-noop-2", mustParseTime(t), errors.New("err"))
 }
 

@@ -498,8 +498,9 @@ func (s *Store) ListToolScanRecordsByImageDigest(imageDigest string) ([]ToolScan
 
 // ── CertifiedToolImageRecord ──────────────────────────────────────────────────
 
-// UpsertCertifiedToolImageRecord creates or replaces the certification record
-// for the given ImageDigest. Replaces on conflict to allow re-certification.
+// UpsertCertifiedToolImageRecord creates or replaces a certification record.
+// New records are keyed by ToolSpecDigest + Platform; image-digest matching is
+// retained only for legacy records which lack either key component.
 //
 //nolint:dupl,gocritic // dupl: same guard+upsert pattern, distinct types. gocritic: by value is intentional.
 func (s *Store) UpsertCertifiedToolImageRecord(r CertifiedToolImageRecord) error {
@@ -513,13 +514,34 @@ func (s *Store) UpsertCertifiedToolImageRecord(r CertifiedToolImageRecord) error
 		r.CertifiedAt = time.Now().UTC()
 	}
 	for i := range s.idx.CertifiedToolImageRecords {
-		if s.idx.CertifiedToolImageRecords[i].ImageDigest == r.ImageDigest {
+		if sameCertifiedToolKey(s.idx.CertifiedToolImageRecords[i], r) {
 			s.idx.CertifiedToolImageRecords[i] = r
 			return s.save()
 		}
 	}
 	s.idx.CertifiedToolImageRecords = append(s.idx.CertifiedToolImageRecords, r)
 	return s.save()
+}
+
+func sameCertifiedToolKey(a, b CertifiedToolImageRecord) bool {
+	if a.ToolSpecDigest != "" && a.Platform != "" && b.ToolSpecDigest != "" && b.Platform != "" {
+		return a.ToolSpecDigest == b.ToolSpecDigest && a.Platform == b.Platform
+	}
+	return a.ImageDigest == b.ImageDigest
+}
+
+// GetCertifiedToolImageRecordByToolSpecDigestAndPlatform returns the current
+// certification decision for an explicitly resolved target platform.
+func (s *Store) GetCertifiedToolImageRecordByToolSpecDigestAndPlatform(toolSpecDigest, platform string) (CertifiedToolImageRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for i := range s.idx.CertifiedToolImageRecords {
+		rec := s.idx.CertifiedToolImageRecords[i]
+		if rec.ToolSpecDigest == toolSpecDigest && rec.Platform == platform {
+			return rec, nil
+		}
+	}
+	return CertifiedToolImageRecord{}, fmt.Errorf("%w: tool_spec_digest=%q platform=%q", ErrNotFound, toolSpecDigest, platform)
 }
 
 // GetCertifiedToolImageRecord returns the certification record for the given image digest.

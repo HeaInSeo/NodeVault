@@ -607,6 +607,29 @@ func TestListToolImageRecordsByBuildID_MultiplePlatforms(t *testing.T) {
 	}
 }
 
+func TestCertifiedToolImageRecord_KeysByToolSpecDigestAndPlatform(t *testing.T) {
+	s := newStore(t)
+	amd64 := index.CertifiedToolImageRecord{
+		ImageDigest: "sha256:amd64", ToolSpecDigest: "spec-001", Platform: "linux/amd64",
+	}
+	arm64 := index.CertifiedToolImageRecord{
+		ImageDigest: "sha256:arm64", ToolSpecDigest: "spec-001", Platform: "linux/arm64",
+	}
+	if err := s.UpsertCertifiedToolImageRecord(amd64); err != nil {
+		t.Fatalf("Upsert amd64: %v", err)
+	}
+	if err := s.UpsertCertifiedToolImageRecord(arm64); err != nil {
+		t.Fatalf("Upsert arm64: %v", err)
+	}
+	got, err := s.GetCertifiedToolImageRecordByToolSpecDigestAndPlatform("spec-001", "linux/arm64")
+	if err != nil {
+		t.Fatalf("Get by composite key: %v", err)
+	}
+	if got.ImageDigest != "sha256:arm64" {
+		t.Errorf("ImageDigest: got %q want sha256:arm64", got.ImageDigest)
+	}
+}
+
 // TestLoad_SchemaV1File_ToolBuildAndImageSections_LoadEmptySlices verifies that a
 // vault-index.json written before schema v2 (missing tool_build_records and
 // tool_image_records fields) loads cleanly with those sections as empty, and

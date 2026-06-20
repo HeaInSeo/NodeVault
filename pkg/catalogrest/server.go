@@ -387,6 +387,7 @@ type SubmitCheckRecordRequest struct {
 	CheckID           string                   `json:"check_id"`
 	ToolSpecDigest    string                   `json:"tool_spec_digest,omitempty"`
 	ImageDigest       string                   `json:"image_digest"`
+	Platform          string                   `json:"platform,omitempty"`
 	ToolName          string                   `json:"tool_name,omitempty"`
 	Version           string                   `json:"version,omitempty"`
 	ValidationStatus  string                   `json:"validation_status"`
@@ -409,6 +410,7 @@ type SubmitScanRecordRequest struct {
 	ScanID         string `json:"scan_id"`
 	ImageDigest    string `json:"image_digest"`
 	ToolName       string `json:"tool_name,omitempty"`
+	Platform       string `json:"platform,omitempty"`
 	Scanner        string `json:"scanner,omitempty"`
 	ScannerVersion string `json:"scanner_version,omitempty"`
 	DbDigest       string `json:"db_digest,omitempty"`
@@ -449,6 +451,7 @@ func (s *Server) handleSubmitCheckRecord(w http.ResponseWriter, r *http.Request)
 		CheckID:          req.CheckID,
 		ToolSpecDigest:   req.ToolSpecDigest,
 		ImageDigest:      req.ImageDigest,
+		Platform:         req.Platform,
 		ToolName:         req.ToolName,
 		Version:          req.Version,
 		ValidationStatus: req.ValidationStatus,
@@ -525,6 +528,7 @@ func (s *Server) handleSubmitScanRecord(w http.ResponseWriter, r *http.Request) 
 		ScanID:         req.ScanID,
 		ImageDigest:    req.ImageDigest,
 		ToolName:       req.ToolName,
+		Platform:       req.Platform,
 		Scanner:        req.Scanner,
 		ScannerVersion: req.ScannerVersion,
 		DbDigest:       req.DbDigest,

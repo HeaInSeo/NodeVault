@@ -102,6 +102,7 @@ func (s *Service) certify(check index.ToolCheckRecord, scan *index.ToolScanRecor
 	cert := index.CertifiedToolImageRecord{
 		ImageDigest:     check.ImageDigest,
 		ToolSpecDigest:  check.ToolSpecDigest,
+		Platform:        check.Platform,
 		ToolName:        check.ToolName,
 		Version:         check.Version,
 		PromotionStatus: promotionStatus,

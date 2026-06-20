@@ -188,6 +188,7 @@ type ToolCheckRecord struct {
 	// ToolSpecDigest references ResolvedToolSpec.
 	ToolSpecDigest string `json:"tool_spec_digest,omitempty"`
 	ImageDigest    string `json:"image_digest"`
+	Platform       string `json:"platform,omitempty"`
 	ToolName       string `json:"tool_name,omitempty"`
 	Version        string `json:"version,omitempty"`
 
@@ -215,6 +216,7 @@ type ToolScanRecord struct {
 	ScanID      string `json:"scan_id"`
 	ImageDigest string `json:"image_digest"`
 	ToolName    string `json:"tool_name,omitempty"`
+	Platform    string `json:"platform,omitempty"`
 
 	Scanner        string `json:"scanner,omitempty"`         // "trivy"
 	ScannerVersion string `json:"scanner_version,omitempty"` // "0.50.0"
@@ -246,11 +248,13 @@ const (
 
 // CertifiedToolImageRecord is the NodeVault decision record after reviewing
 // a ToolCheckRecord + ToolScanRecord. It is the source of truth for whether a
-// given imageDigest is safe to expose via NodePalette.
-// Primary key: ImageDigest.
+// given tool spec and platform is safe to expose via NodePalette.
+// Primary key: ToolSpecDigest + Platform. Records without both fields retain
+// ImageDigest as their backward-compatible lookup key.
 type CertifiedToolImageRecord struct {
 	ImageDigest    string `json:"image_digest"`
 	ToolSpecDigest string `json:"tool_spec_digest,omitempty"`
+	Platform       string `json:"platform,omitempty"`
 	ToolName       string `json:"tool_name,omitempty"`
 	Version        string `json:"version,omitempty"`
 	CasHash        string `json:"cas_hash,omitempty"`

@@ -385,6 +385,7 @@ message ToolCheckRecordRequest {
   ContractCheck            contract_check            = 12;
   string failure_reason     = 13;
   int64  checked_at         = 14;
+  string platform           = 15;
 }
 
 message ToolScanRecordRequest {
@@ -402,6 +403,7 @@ message ToolScanRecordRequest {
   string policy_result    = 12;
   int64  scanned_at       = 13;
   string db_digest        = 14;
+  string platform         = 15;
 }
 
 message SubmitRecordResponse {

@@ -2818,6 +2818,7 @@ type ToolCheckRecordRequest struct {
 	ContractCheck           *ContractCheck           `protobuf:"bytes,12,opt,name=contract_check,json=contractCheck,proto3" json:"contract_check,omitempty"`
 	FailureReason           string                   `protobuf:"bytes,13,opt,name=failure_reason,json=failureReason,proto3" json:"failure_reason,omitempty"`
 	CheckedAt               int64                    `protobuf:"varint,14,opt,name=checked_at,json=checkedAt,proto3" json:"checked_at,omitempty"`
+	Platform                string                   `protobuf:"bytes,15,opt,name=platform,proto3" json:"platform,omitempty"`
 	unknownFields           protoimpl.UnknownFields
 	sizeCache               protoimpl.SizeCache
 }
@@ -2950,6 +2951,13 @@ func (x *ToolCheckRecordRequest) GetCheckedAt() int64 {
 	return 0
 }
 
+func (x *ToolCheckRecordRequest) GetPlatform() string {
+	if x != nil {
+		return x.Platform
+	}
+	return ""
+}
+
 type ToolScanRecordRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	ScanId         string                 `protobuf:"bytes,1,opt,name=scan_id,json=scanId,proto3" json:"scan_id,omitempty"`
@@ -2966,6 +2974,7 @@ type ToolScanRecordRequest struct {
 	PolicyResult   string                 `protobuf:"bytes,12,opt,name=policy_result,json=policyResult,proto3" json:"policy_result,omitempty"`
 	ScannedAt      int64                  `protobuf:"varint,13,opt,name=scanned_at,json=scannedAt,proto3" json:"scanned_at,omitempty"`
 	DbDigest       string                 `protobuf:"bytes,14,opt,name=db_digest,json=dbDigest,proto3" json:"db_digest,omitempty"`
+	Platform       string                 `protobuf:"bytes,15,opt,name=platform,proto3" json:"platform,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -3094,6 +3103,13 @@ func (x *ToolScanRecordRequest) GetScannedAt() int64 {
 func (x *ToolScanRecordRequest) GetDbDigest() string {
 	if x != nil {
 		return x.DbDigest
+	}
+	return ""
+}
+
+func (x *ToolScanRecordRequest) GetPlatform() string {
+	if x != nil {
+		return x.Platform
 	}
 	return ""
 }
@@ -3690,7 +3706,7 @@ const file_nodevault_v1_nodevault_proto_rawDesc = "" +
 	"\x0ftimeout_seconds\x18\a \x01(\x03R\x0etimeoutSeconds\"W\n" +
 	"\rContractCheck\x12.\n" +
 	"\x13all_outputs_present\x18\x01 \x01(\bR\x11allOutputsPresent\x12\x16\n" +
-	"\x06result\x18\x02 \x01(\tR\x06result\"\x82\x05\n" +
+	"\x06result\x18\x02 \x01(\tR\x06result\"\x9e\x05\n" +
 	"\x16ToolCheckRecordRequest\x12\x19\n" +
 	"\bcheck_id\x18\x01 \x01(\tR\acheckId\x12(\n" +
 	"\x10tool_spec_digest\x18\x02 \x01(\tR\x0etoolSpecDigest\x12!\n" +
@@ -3707,7 +3723,8 @@ const file_nodevault_v1_nodevault_proto_rawDesc = "" +
 	"\x0econtract_check\x18\f \x01(\v2\x1b.nodevault.v1.ContractCheckR\rcontractCheck\x12%\n" +
 	"\x0efailure_reason\x18\r \x01(\tR\rfailureReason\x12\x1d\n" +
 	"\n" +
-	"checked_at\x18\x0e \x01(\x03R\tcheckedAt\"\xd3\x03\n" +
+	"checked_at\x18\x0e \x01(\x03R\tcheckedAt\x12\x1a\n" +
+	"\bplatform\x18\x0f \x01(\tR\bplatform\"\xef\x03\n" +
 	"\x15ToolScanRecordRequest\x12\x17\n" +
 	"\ascan_id\x18\x01 \x01(\tR\x06scanId\x12!\n" +
 	"\fimage_digest\x18\x02 \x01(\tR\vimageDigest\x12\x1b\n" +
@@ -3726,7 +3743,8 @@ const file_nodevault_v1_nodevault_proto_rawDesc = "" +
 	"\rpolicy_result\x18\f \x01(\tR\fpolicyResult\x12\x1d\n" +
 	"\n" +
 	"scanned_at\x18\r \x01(\x03R\tscannedAt\x12\x1b\n" +
-	"\tdb_digest\x18\x0e \x01(\tR\bdbDigest\"f\n" +
+	"\tdb_digest\x18\x0e \x01(\tR\bdbDigest\x12\x1a\n" +
+	"\bplatform\x18\x0f \x01(\tR\bplatform\"f\n" +
 	"\x14SubmitRecordResponse\x12\x1b\n" +
 	"\trecord_id\x18\x01 \x01(\tR\brecordId\x121\n" +
 	"\x14certification_status\x18\x02 \x01(\tR\x13certificationStatus\"F\n" +

@@ -58,6 +58,11 @@ Overlay remains the target default, but NodeVault migration still needs separate
 This path assumes Kubernetes 1.36 user namespaces, a Linux kernel/filesystem combination with idmapped mount support, containerd 2.x, and crun 1.9+.
 Incompatible Dockerfiles should later be routed by NodeVault to an isolated privileged fallback strategy.
 
+## Changelog
+
+- `v0.1.2` — updated Podman/Buildah dependencies, fixed remote VM user namespace integration, added user namespace Buildah defaults
+- `v0.1.1` — replaced `seoyhaein/utils` with `HeaInSeo/utils v0.0.7` (no API changes)
+
 ## Documentation
 
 - Korean runtime validation: [docs/runtime-testing.ko.md](docs/runtime-testing.ko.md)

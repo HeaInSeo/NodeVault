@@ -17,6 +17,7 @@ import (
 	nsv1 "github.com/HeaInSeo/NodeVault/protos/nodesentinel/v1"
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 
+	"github.com/HeaInSeo/NodeVault/pkg/buildstate"
 	"github.com/HeaInSeo/NodeVault/pkg/catalog"
 	"github.com/HeaInSeo/NodeVault/pkg/index"
 	"github.com/HeaInSeo/NodeVault/pkg/metrics"
@@ -56,6 +57,7 @@ type Service struct {
 	validator  *validate.Service
 	registry   *catalog.ToolRegistryService
 	indexStore *index.Store
+	buildState *buildstate.Store
 	reconciler ReconcileTriggerer // nil = no eager reconcile
 	sentinel   SentinelEnqueuer   // nil = no L3/L4 enqueue
 }
@@ -64,7 +66,11 @@ type Service struct {
 // reconciler may be nil; when non-nil it is called after successful referrer push
 // so integrity_health transitions to Healthy without waiting for the next reconcile tick.
 func NewService(
-	validator *validate.Service, registry *catalog.ToolRegistryService, store *index.Store, reconciler ReconcileTriggerer,
+	validator *validate.Service,
+	registry *catalog.ToolRegistryService,
+	store *index.Store,
+	stateStore *buildstate.Store,
+	reconciler ReconcileTriggerer,
 ) (*Service, error) {
 	if validator == nil {
 		return nil, fmt.Errorf("build service init: validator must not be nil")
@@ -75,6 +81,9 @@ func NewService(
 	if store == nil {
 		return nil, fmt.Errorf("build service init: index store must not be nil")
 	}
+	if stateStore == nil {
+		return nil, fmt.Errorf("build service init: build state store must not be nil")
+	}
 
 	builder, err := newPodbridge5Builder()
 	if err != nil {
@@ -82,7 +91,7 @@ func NewService(
 	}
 	return &Service{
 		builder: builder, validator: validator, registry: registry,
-		indexStore: store, reconciler: reconciler,
+		indexStore: store, buildState: stateStore, reconciler: reconciler,
 	}, nil
 }
 

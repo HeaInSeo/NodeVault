@@ -23,6 +23,7 @@ L3/L4 검증 Job은 `nodevault-smoke` namespace에서 별도로 실행될 수 �
 
 - infra-lab 클러스터 실행
 - Harbor 실행
+- Harbor CA 배포 완료 (`~/.config/infra-lab/install-guide.md`의 Harbor 설치 절차)
 - NodeVault controlplane 이미지 push
 - User Namespace(`hostUsers:false`) 지원 노드
 - 다음 Secret 생성
@@ -97,7 +98,9 @@ L3/L4가 실행된 경우 `nodevault-smoke`의 검증 Job은 정상이다.
 
 ## 현재 제한
 
-1. 첫 전환 패치는 `vfs`와 `emptyDir`를 사용한다. 캐시와 상태는 Pod 재시작 시 사라진다.
+1. 현재 전환 패치는 storage driver로 `overlay`를 사용한다. `vfs`와 `fuse-overlayfs`는
+   이 환경에서 실패 경로로 확인되었으므로, 명시적 재검증 없이 fallback으로 전환하지 않는다.
+   캐시와 상태는 Pod 재시작 시 사라진다.
 2. `BuildService`는 아직 legacy `BuildRequest`와 L2→L3→L4 결합 흐름을 사용한다.
 3. podbridge5 in-Pod 경로는 nan 자동 주입을 아직 수행하지 않는다.
 4. registry 인증은 Buildah용 docker auth secret과 ORAS용 username/password secret이 분리되어 있다.

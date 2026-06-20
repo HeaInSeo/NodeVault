@@ -24,7 +24,7 @@ type realImageBuildRuntime struct{}
 func (realImageBuildRuntime) BuildDockerfiles(ctx context.Context, store storage.Store, options define.BuildOptions, dockerfilePath string) (buildID, buildRef string, buildErr error) {
 	id, ref, err := imagebuildah.BuildDockerfiles(ctx, store, options, dockerfilePath)
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("imagebuildah.BuildDockerfiles: %w", err)
 	}
 	if ref == nil {
 		return id, "", nil
@@ -45,7 +45,7 @@ func (realImageBuildRuntime) PushImage(ctx context.Context, store storage.Store,
 		},
 	})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("buildah.Push: %w", err)
 	}
 	return manifestDigest.String(), nil
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/HeaInSeo/NodeVault/pkg/index"
 )
@@ -363,6 +364,43 @@ func TestAppendResolvedToolSpec_Duplicate_Rejected(t *testing.T) {
 	}
 	if err := s.AppendResolvedToolSpec(r); err == nil {
 		t.Fatal("expected error for duplicate ToolSpecDigest")
+	}
+}
+
+func TestUpsertResolvedToolSpec_Duplicate_ReturnsExisting(t *testing.T) {
+	s := newStore(t)
+	original := index.ResolvedToolSpec{
+		ToolSpecDigest: "spec-upsert",
+		ToolName:       "bwa-mem2",
+		Version:        "2.2.1",
+		ResolvedAt:     time.Unix(100, 0).UTC(),
+	}
+	if _, err := s.UpsertResolvedToolSpec(original); err != nil {
+		t.Fatalf("first upsert: %v", err)
+	}
+
+	replacement := index.ResolvedToolSpec{
+		ToolSpecDigest: "spec-upsert",
+		ToolName:       "changed",
+		Version:        "changed",
+		ResolvedAt:     time.Unix(200, 0).UTC(),
+	}
+	got, err := s.UpsertResolvedToolSpec(replacement)
+	if err != nil {
+		t.Fatalf("second upsert: %v", err)
+	}
+	if got.ToolName != original.ToolName || got.Version != original.Version {
+		t.Fatalf("got %q@%q, want original %q@%q", got.ToolName, got.Version, original.ToolName, original.Version)
+	}
+	if !got.ResolvedAt.Equal(original.ResolvedAt) {
+		t.Fatalf("ResolvedAt got %s, want original %s", got.ResolvedAt, original.ResolvedAt)
+	}
+}
+
+func TestUpsertResolvedToolSpec_EmptyDigest_Rejected(t *testing.T) {
+	s := newStore(t)
+	if _, err := s.UpsertResolvedToolSpec(index.ResolvedToolSpec{ToolName: "bwa"}); err == nil {
+		t.Fatal("expected error for empty ToolSpecDigest")
 	}
 }
 

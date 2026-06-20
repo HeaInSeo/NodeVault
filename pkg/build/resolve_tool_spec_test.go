@@ -11,6 +11,8 @@ import (
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
+const resolveTestToolName = "bwa-mem2"
+
 func newResolveTestService(t *testing.T) *Service {
 	t.Helper()
 	store, err := index.NewAt(t.TempDir())
@@ -24,9 +26,9 @@ func TestResolveToolSpec_FirstRequest_Succeeds(t *testing.T) {
 	s := newResolveTestService(t)
 
 	resp, err := s.ResolveToolSpec(context.Background(), &nfv1.ToolSpecRequest{
-		ToolName: "bwa-mem2",
+		ToolName: resolveTestToolName,
 		Version:  "2.2.1",
-		RawSpec:  `{"tool_name":"bwa-mem2"}`,
+		RawSpec:  `{"image_uri":"alpine:3.20@sha256:abc123","tool_name":"bwa-mem2"}`,
 	})
 	if err != nil {
 		t.Fatalf("ResolveToolSpec: %v", err)
@@ -34,7 +36,7 @@ func TestResolveToolSpec_FirstRequest_Succeeds(t *testing.T) {
 	if resp.GetToolSpecDigest() == "" {
 		t.Fatal("expected non-empty tool_spec_digest")
 	}
-	if resp.GetToolName() != "bwa-mem2" || resp.GetVersion() != "2.2.1" {
+	if resp.GetToolName() != resolveTestToolName || resp.GetVersion() != "2.2.1" {
 		t.Fatalf("unexpected response fields: %+v", resp)
 	}
 	if resp.GetResolvedAt() == 0 {
@@ -56,9 +58,9 @@ func TestResolveToolSpec_FirstRequest_Succeeds(t *testing.T) {
 func TestResolveToolSpec_IdenticalRequest_IsIdempotent(t *testing.T) {
 	s := newResolveTestService(t)
 	req := &nfv1.ToolSpecRequest{
-		ToolName: "bwa-mem2",
+		ToolName: resolveTestToolName,
 		Version:  "2.2.1",
-		RawSpec:  `{"tool_name":"bwa-mem2"}`,
+		RawSpec:  `{"image_uri":"alpine:3.20@sha256:abc123","tool_name":"bwa-mem2"}`,
 	}
 
 	first, err := s.ResolveToolSpec(context.Background(), req)
@@ -84,6 +86,72 @@ func TestResolveToolSpec_IdenticalRequest_IsIdempotent(t *testing.T) {
 	}
 }
 
+func TestResolveToolSpec_StoresInIndex(t *testing.T) {
+	s := newResolveTestService(t)
+
+	resp, err := s.ResolveToolSpec(context.Background(), &nfv1.ToolSpecRequest{
+		ToolName: resolveTestToolName,
+		Version:  "2.2.1",
+		RawSpec:  `{"base_image":"alpine:3.20@sha256:abc123","tool_name":"bwa-mem2","version":"2.2.1"}`,
+	})
+	if err != nil {
+		t.Fatalf("ResolveToolSpec: %v", err)
+	}
+
+	got, err := s.indexStore.GetResolvedToolSpecByDigest(resp.GetToolSpecDigest())
+	if err != nil {
+		t.Fatalf("GetResolvedToolSpecByDigest: %v", err)
+	}
+	if got.RawSpec != `{"base_image":"alpine:3.20@sha256:abc123","tool_name":"bwa-mem2","version":"2.2.1"}` {
+		t.Fatalf("RawSpec not preserved: %q", got.RawSpec)
+	}
+	if got.ToolName != resolveTestToolName || got.Version != "2.2.1" {
+		t.Fatalf("unexpected stored spec: %+v", got)
+	}
+	if got.RecipeInputsDigest == "" || got.BuildPlanDigest == "" || got.BuilderIdentity == "" {
+		t.Fatalf("expected resolved digests and builder identity: %+v", got)
+	}
+	if got.BaseImageRef != "alpine:3.20@sha256:abc123" || got.BaseImageDigest != "sha256:abc123" {
+		t.Fatalf("unexpected base image pin: %+v", got)
+	}
+}
+
+func TestResolveToolSpec_CanonicalJSON_IsDeterministic(t *testing.T) {
+	s := newResolveTestService(t)
+
+	first, err := s.ResolveToolSpec(context.Background(), &nfv1.ToolSpecRequest{
+		ToolName: resolveTestToolName,
+		Version:  "2.2.1",
+		RawSpec:  `{"image_uri":"alpine:3.20@sha256:abc123","tool_name":"bwa-mem2","version":"2.2.1"}`,
+	})
+	if err != nil {
+		t.Fatalf("first ResolveToolSpec: %v", err)
+	}
+	second, err := s.ResolveToolSpec(context.Background(), &nfv1.ToolSpecRequest{
+		ToolName: resolveTestToolName,
+		Version:  "2.2.1",
+		RawSpec: `{
+			"image_uri": "alpine:3.20@sha256:abc123",
+			"version": "2.2.1",
+			"tool_name": "bwa-mem2"
+		}`,
+	})
+	if err != nil {
+		t.Fatalf("second ResolveToolSpec: %v", err)
+	}
+	if first.GetToolSpecDigest() != second.GetToolSpecDigest() {
+		t.Fatalf("expected same canonical digest, got %q vs %q", first.GetToolSpecDigest(), second.GetToolSpecDigest())
+	}
+
+	specs, err := s.indexStore.ListResolvedToolSpecs()
+	if err != nil {
+		t.Fatalf("ListResolvedToolSpecs: %v", err)
+	}
+	if len(specs) != 1 {
+		t.Fatalf("expected canonical duplicate to store once, got %d records", len(specs))
+	}
+}
+
 func TestResolveToolSpec_EmptyRawSpec_InvalidArgument(t *testing.T) {
 	s := newResolveTestService(t)
 
@@ -104,7 +172,7 @@ func TestResolveToolSpec_EmptyToolName_InvalidArgument(t *testing.T) {
 
 	_, err := s.ResolveToolSpec(context.Background(), &nfv1.ToolSpecRequest{
 		ToolName: "",
-		RawSpec:  `{"tool_name":"bwa-mem2"}`,
+		RawSpec:  `{"image_uri":"alpine:3.20@sha256:abc123","tool_name":"bwa-mem2"}`,
 	})
 	if err == nil {
 		t.Fatal("expected error for empty tool_name")
@@ -119,7 +187,7 @@ func TestResolveToolSpec_DifferentRawSpec_DifferentDigest(t *testing.T) {
 
 	first, err := s.ResolveToolSpec(context.Background(), &nfv1.ToolSpecRequest{
 		ToolName: "bwa-mem2",
-		RawSpec:  `{"tool_name":"bwa-mem2","version":"1"}`,
+		RawSpec:  `{"image_uri":"alpine:3.20@sha256:abc123","tool_name":"bwa-mem2","version":"1"}`,
 	})
 	if err != nil {
 		t.Fatalf("first ResolveToolSpec: %v", err)
@@ -127,7 +195,7 @@ func TestResolveToolSpec_DifferentRawSpec_DifferentDigest(t *testing.T) {
 
 	second, err := s.ResolveToolSpec(context.Background(), &nfv1.ToolSpecRequest{
 		ToolName: "bwa-mem2",
-		RawSpec:  `{"tool_name":"bwa-mem2","version":"2"}`,
+		RawSpec:  `{"image_uri":"alpine:3.20@sha256:abc123","tool_name":"bwa-mem2","version":"2"}`,
 	})
 	if err != nil {
 		t.Fatalf("second ResolveToolSpec: %v", err)
@@ -151,12 +219,27 @@ func TestResolveToolSpec_NilIndexStore_Unavailable(t *testing.T) {
 
 	_, err := s.ResolveToolSpec(context.Background(), &nfv1.ToolSpecRequest{
 		ToolName: "bwa-mem2",
-		RawSpec:  `{"tool_name":"bwa-mem2"}`,
+		RawSpec:  `{"image_uri":"alpine:3.20@sha256:abc123","tool_name":"bwa-mem2"}`,
 	})
 	if err == nil {
 		t.Fatal("expected error when indexStore is nil")
 	}
 	if status.Code(err) != codes.Unavailable {
 		t.Fatalf("expected Unavailable, got %v", status.Code(err))
+	}
+}
+
+func TestResolveToolSpec_UnpinnedBaseImage_InvalidArgument(t *testing.T) {
+	s := newResolveTestService(t)
+
+	_, err := s.ResolveToolSpec(context.Background(), &nfv1.ToolSpecRequest{
+		ToolName: resolveTestToolName,
+		RawSpec:  `{"image_uri":"alpine:3.20","tool_name":"bwa-mem2"}`,
+	})
+	if err == nil {
+		t.Fatal("expected error for unpinned image_uri")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v", status.Code(err))
 	}
 }

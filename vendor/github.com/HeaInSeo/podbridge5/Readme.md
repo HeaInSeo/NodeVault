@@ -59,6 +59,11 @@ overlay는 목표 기본값으로 유지하되, NodeVault 전환 시 node filesy
 이 경로는 Kubernetes 1.36 계열 user namespace, Linux 6.3 이상 수준의 idmapped mount 지원, containerd 2.x, crun 1.9+ 조합을 전제로 합니다.
 호환되지 않는 Dockerfile은 이후 NodeVault의 privileged isolated fallback 전략으로 분리합니다.
 
+## 변경 이력
+
+- `v0.1.2` — Podman/Buildah 의존성 업데이트, remote VM user namespace 통합 수정, user namespace Buildah 기본값 추가
+- `v0.1.1` — `seoyhaein/utils`를 `HeaInSeo/utils v0.0.7`로 교체 (API 변경 없음)
+
 ## 문서
 
 - 한국어 runtime 검증 문서: [docs/runtime-testing.ko.md](docs/runtime-testing.ko.md)

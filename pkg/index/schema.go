@@ -82,7 +82,7 @@ type Entry struct {
 	HealthCheckedAt    time.Time `json:"health_checked_at"`
 }
 
-// ResolvedToolSpec is NodeVault's resolved view of a ToolSpecRequest sent by NodeKit.
+// ResolvedToolSpec is NodeVault's resolved view of a ToolSpecRequest sent by an external authoring tool.
 // Primary key: ToolSpecDigest.
 type ResolvedToolSpec struct {
 	// ToolSpecDigest is the content digest of the resolved spec. Primary key.
@@ -94,6 +94,12 @@ type ResolvedToolSpec struct {
 	// RawSpec preserves the original NodeKit-submitted spec in a serializable form
 	// (e.g. the JSON payload) so it can be replayed or audited later.
 	RawSpec string `json:"raw_spec,omitempty"`
+
+	RecipeInputsDigest string `json:"recipe_inputs_digest,omitempty"`
+	BuildPlanDigest    string `json:"build_plan_digest,omitempty"`
+	BuilderIdentity    string `json:"builder_identity,omitempty"`
+	BaseImageRef       string `json:"base_image_ref,omitempty"`
+	BaseImageDigest    string `json:"base_image_digest,omitempty"`
 
 	ResolvedAt time.Time `json:"resolved_at"`
 }

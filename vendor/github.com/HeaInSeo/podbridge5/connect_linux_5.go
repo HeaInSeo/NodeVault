@@ -7,6 +7,7 @@ package podbridge5
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 
 	"github.com/HeaInSeo/utils"
@@ -20,8 +21,11 @@ func NewConnection5(ctx context.Context, ipcName string) (context.Context, error
 		return nil, errors.New("ipcName cannot be an empty string")
 	}
 	ctx, err := bindings.NewConnection(ctx, ipcName)
+	if err != nil {
+		return nil, fmt.Errorf("bindings.NewConnection: %w", err)
+	}
 
-	return ctx, err
+	return ctx, nil
 }
 
 func NewConnectionLinux5(ctx context.Context) (context.Context, error) {

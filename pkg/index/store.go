@@ -237,6 +237,32 @@ func (s *Store) AppendResolvedToolSpec(r ResolvedToolSpec) error {
 	return s.save()
 }
 
+// UpsertResolvedToolSpec inserts a new resolved tool spec or returns the existing
+// record with the same ToolSpecDigest. Existing records are not mutated.
+//
+//nolint:gocritic // hugeParam: ResolvedToolSpec by value is intentional — callers own their copy.
+func (s *Store) UpsertResolvedToolSpec(r ResolvedToolSpec) (ResolvedToolSpec, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if r.ToolSpecDigest == "" {
+		return ResolvedToolSpec{}, errors.New("index: ToolSpecDigest must not be empty")
+	}
+	for i := range s.idx.ResolvedToolSpecs {
+		if s.idx.ResolvedToolSpecs[i].ToolSpecDigest == r.ToolSpecDigest {
+			return s.idx.ResolvedToolSpecs[i], nil
+		}
+	}
+	if r.ResolvedAt.IsZero() {
+		r.ResolvedAt = time.Now().UTC()
+	}
+	s.idx.ResolvedToolSpecs = append(s.idx.ResolvedToolSpecs, r)
+	if err := s.save(); err != nil {
+		return ResolvedToolSpec{}, err
+	}
+	return r, nil
+}
+
 // GetResolvedToolSpecByDigest returns the resolved tool spec with the given ToolSpecDigest.
 // Returns ErrNotFound if no such entry exists.
 func (s *Store) GetResolvedToolSpecByDigest(toolSpecDigest string) (ResolvedToolSpec, error) {

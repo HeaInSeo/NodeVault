@@ -69,6 +69,9 @@ message ListPoliciesResponse {
 service BuildService {
   rpc BuildAndRegister(BuildRequest) returns (stream BuildEvent);
   rpc ResolveToolSpec(ToolSpecRequest) returns (ResolvedToolSpecResponse);
+  rpc SubmitToolBuild(SubmitToolBuildRequest) returns (SubmitToolBuildResponse);
+  rpc WatchToolBuild(WatchToolBuildRequest) returns (stream BuildEvent);
+  rpc CancelToolBuild(CancelToolBuildRequest) returns (CancelToolBuildResponse);
 }
 
 message ToolSpecRequest {
@@ -83,6 +86,33 @@ message ResolvedToolSpecResponse {
   string tool_name = 2;
   string version = 3;
   int64 resolved_at = 4;
+}
+
+message SubmitToolBuildRequest {
+  string request_id = 1;
+  string tool_spec_digest = 2;
+}
+
+message SubmitToolBuildResponse {
+  string build_id = 1;
+  string tool_spec_digest = 2;
+  string status = 3;
+  int64 submitted_at = 4;
+}
+
+message WatchToolBuildRequest {
+  string build_id = 1;
+}
+
+message CancelToolBuildRequest {
+  string build_id = 1;
+  string reason = 2;
+}
+
+message CancelToolBuildResponse {
+  string build_id = 1;
+  string status = 2;
+  int64 cancelled_at = 3;
 }
 
 message BuildRequest {
@@ -119,6 +149,8 @@ message BuildEvent {
   string message = 2;
   int64 timestamp = 3;
   string digest = 4;
+  string build_id = 5;
+  string status = 6;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

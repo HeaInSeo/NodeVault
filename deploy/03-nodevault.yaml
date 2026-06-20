@@ -51,6 +51,11 @@ spec:
         runAsUser: 0
         seccompProfile:
           type: RuntimeDefault
+        # Required for the in-Pod overlay storage driver AND for podbridge5's
+        # chroot-isolation build path (both unshare(CLONE_NEWUSER) calls).
+        # See the ConfigMap below for the full investigation.
+        appArmorProfile:
+          type: Unconfined
 
       containers:
         - name: nodevault
@@ -116,6 +121,8 @@ spec:
               value: "/data/datacatalog"
             - name: INDEX_DIR
               value: "/data/index"
+            - name: NODEVAULT_BUILD_STATE_DB
+              value: "/data/build-state.db"
 
           securityContext:
             privileged: false
@@ -126,11 +133,29 @@ spec:
               drop:
                 - ALL
               add:
+                # Full default OCI/Buildah capability set, plus SYS_ADMIN.
+                # podbridge5 hardcodes IsolationChroot for every build
+                # (image_options.go), which makes Buildah itself
+                # unshare(CLONE_NEWUSER)/setgroups()/setcap() for each RUN
+                # step. All three calls need this full set. NodeVault's
+                # current deployment target is overlay; do not downgrade to
+                # vfs/fuse-overlayfs without explicit revalidation. See the
+                # ConfigMap below for the full investigation.
                 - CHOWN
                 - DAC_OVERRIDE
                 - FOWNER
-                - SETFCAP
+                - FSETID
+                - KILL
+                - SETGID
+                - SETUID
+                - SETPCAP
+                - NET_BIND_SERVICE
+                - NET_RAW
                 - SYS_CHROOT
+                - MKNOD
+                - AUDIT_WRITE
+                - SETFCAP
+                - SYS_ADMIN
 
           volumeMounts:
             - name: containers-storage-config
@@ -193,33 +218,32 @@ spec:
 ---
 # Explicit containers/storage configuration for the in-Pod builder.
 #
-# 2026-06-18: re-tested overlay on test-wizard-env (libvirt, rebuilt for userNS
-# support). Result: still blocked, for two distinct, confirmed reasons — not
-# silently worked around, driver reverted to "vfs" as a temporary fallback only:
+# 2026-06-18: overlay enabled. Full investigation and root cause recorded in
+# docs/OVERLAY_USERNS_INVESTIGATION.md — summary:
 #
-#   1. native overlay without CAP_SYS_ADMIN: EPERM on
-#      `mount(MS_PRIVATE)` for the graphroot ("failed to make mount private").
-#      The Pod's capability set (CHOWN, DAC_OVERRIDE, FOWNER, SETFCAP,
-#      SYS_CHROOT) does not include SYS_ADMIN.
-#   2. native overlay WITH CAP_SYS_ADMIN added (one-off experiment, not kept):
-#      same call now fails EACCES instead of EPERM — adding the capability
-#      alone is not sufficient. The emptyDir-backed graphroot mount is not
-#      recognized as owned by the Pod's own user namespace, so the kernel
-#      still refuses to let it become private under hostUsers:false.
-#   3. fuse-overlayfs (no CAP_SYS_ADMIN needed) was also probed: the image
-#      already bundles fuse-overlayfs, and /dev/fuse exists on the node, but
-#      mounting /dev/fuse into a hostUsers:false Pod via hostPath fails at
-#      container-create time: `mount_setattr /dev/fuse ... Invalid argument
-#      (maybe the file system used doesn't support idmap mounts on this
-#      kernel?)`. storage.conf mount_program=fuse-overlayfs was therefore not
-#      even deployed — it would hit the same /dev/fuse access failure.
+#   The original "overlay is impossible under hostUsers:false" conclusion
+#   (driver=vfs) was WRONG and has been superseded. There were two distinct,
+#   now-fixed blockers, both caused by containerd's default AppArmor profile
+#   (cri-containerd.apparmor.d, enforce) blocking unprivileged-userns kernel
+#   restrictions, NOT by overlay/vfs storage semantics or hostUsers:false
+#   itself:
 #
-# Conclusion: as long as hostUsers:false is required, neither overlay path
-# works on this cluster's kernel (Ubuntu 24.04, 6.8.0-117-generic). Enabling
-# overlay needs one of: dropping hostUsers:false, a kernel/runtime idmap fix,
-# or node-side overlay setup handed to the Pod via bind mount instead of a
-# Pod-owned mount_setattr call. Do not re-flip this to "overlay" without
-# addressing one of those.
+#   1. The overlay graphroot mount itself needs `mount(MS_PRIVATE)`, which
+#      AppArmor's default profile blocked (EPERM/EACCES depending on
+#      capability set tested). Fixed by securityContext.appArmorProfile:
+#      Unconfined on the Pod (see Deployment above).
+#   2. Separately, podbridge5 hardcodes Buildah's IsolationChroot for every
+#      build (image_options.go), regardless of storage driver. That path
+#      makes Buildah call unshare(CLONE_NEWUSER)/setgroups()/setcap() for
+#      every RUN step. Those calls need the full default OCI capability set
+#      plus SYS_ADMIN (see the container securityContext above). The previous
+#      vfs deployment was not a viable fallback; it had not completed a real
+#      RUN-step build.
+#
+# fuse-overlayfs was also probed and separately confirmed blocked in this
+# environment: mounting /dev/fuse into a hostUsers:false Pod via hostPath fails
+# at container-create time (mount_setattr idmap incompatibility). Do not switch
+# this deployment away from overlay without explicit revalidation.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -228,7 +252,7 @@ metadata:
 data:
   storage.conf: |
     [storage]
-    driver = "vfs"
+    driver = "overlay"
     runroot = "/run/nodevault/containers"
     graphroot = "/var/lib/nodevault/containers"
     rootless_storage_path = "/var/lib/nodevault/containers"

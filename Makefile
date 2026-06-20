@@ -1,4 +1,4 @@
-.PHONY: fmt lint lint-fix lint-config golangci-lint kube-linter kube-lint test test-integration test-integration-infralab \
+.PHONY: fmt lint lint-fix lint-config golangci-lint buf-lint kube-linter kube-lint test test-integration test-integration-infralab \
         deploy-infralab undeploy-infralab build push-image vendor \
         proto coverage vuln slint clean all deploy-seoy
 
@@ -67,6 +67,14 @@ lint-fix: golangci-lint
 
 lint-config: golangci-lint
 	$(GOLANGCI_LINT) config verify --config=.golangci.yml
+
+# ── Proto lint (Buf) ─────────────────────────────────────────────────────────
+buf-lint:
+	@command -v buf >/dev/null 2>&1 || { \
+		echo "ERROR: buf is required; install it from https://buf.build/docs/installation/" >&2; \
+		exit 1; \
+	}
+	buf lint
 
 # ── kube-linter (K8s 매니페스트 가드레일) ──────────────────────────────────────
 # stackrox/kube-linter는 checksums.txt를 게시하지 않으므로, golangci-lint와

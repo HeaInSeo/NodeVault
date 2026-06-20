@@ -1,7 +1,7 @@
 # Platform Schedule
 
 버전: 3.0
-갱신: 2026-06-17
+갱신: 2026-06-19
 기준 문서:
 - `docs/ARCHITECTURE_V01.md` (NodeVault Kubernetes In-Pod 재현 가능 이미지 빌드 아키텍처 v0.1.0)
 - `docs/OBSERVED_PROFILE_SPEC.md`, `docs/SECURITY_SCAN_SPEC.md`, `docs/RUNNER_NODE_SPEC.md`
@@ -14,8 +14,8 @@
 
 | 저장소 | 역할 | 상태 |
 |--------|------|------|
-| [NodeVault](https://github.com/HeaInSeo/NodeVault) | canonical resolver / builder / index SoT | v0.3.0 — in-pod-buildah 완료 |
-| [NodeKit](https://github.com/HeaInSeo/NodeKit) | authoring client (L1, BuildRequest) | 운영 중 |
+| [NodeVault](https://github.com/HeaInSeo/NodeVault) | K8s data-plane canonical resolver / builder / index SoT | v0.3.0 — in-pod-buildah 완료 |
+| [NodeKit](https://github.com/HeaInSeo/NodeKit) | external authoring/admin tool (L1, BuildRequest) | 운영 중 |
 | [NodeSentinel](https://github.com/HeaInSeo/NodeSentinel) | K8s data-plane 검증 에이전트 | L3~L5-b 완료 |
 | [NodePalette](https://github.com/HeaInSeo/NodePalette) | 인증 tool 팔레트 REST 서비스 | v1.0 완료 |
 | [DockGuard](https://github.com/HeaInSeo/DockGuard) | OPA/Rego Dockerfile 정책 + .wasm | 운영 중 |
@@ -43,37 +43,51 @@
 
 아키텍처 v0.1.0은 현재 `legacy BuildRequest` 경로를 `ToolSpecRequest → ResolvedToolSpec → SubmitToolBuild` 경로로 전환하는 것이 핵심이다. 섹션 16의 마이그레이션 단계를 기준으로 한다.
 
+### NodeKit 연동 gate (2026-06-19)
+
+- NodeVault는 K8s data-plane app이며, `ResolveToolSpec` canonical digest/index 저장 경로를 먼저 안정화한다.
+- NodeKit은 data-plane 밖의 external authoring/admin tool이다. `SubmitToolBuild` API와 그 이후 `WatchToolBuild`/`CancelToolBuild` 경로가 준비되기 전까지 production build 제출을 기존 `BuildRequest` / `BuildAndRegister`로 유지한다.
+- NodeKit agent는 외부 소비자 관점에서 현재 NodeVault proto를 관찰/재빌드해도 되지만, production `ToolSpecRequest`/`ResolveToolSpec`/`SubmitToolBuild` 클라이언트 경로는 아직 열지 않는다.
+- `CertifiedToolImageRecord` 키 재정렬과 `TestToolScanRecord_WithDbDigest`는 Phase 5(P3) 검증 항목이다. NodeKit의 초기 `ToolSpecRequest`/`SubmitToolBuild` API entry gate는 아니지만, 신규 경로를 production으로 전환할 때의 readiness risk로 추적한다.
+- 확인 기준: `/opt/dotnet/src/github.com/HeaInSeo/NodeKit`에서 `dotnet test --project tests/NodeKit.Tests/NodeKit.Tests.csproj /p:ApiProtosRoot=/opt/go/src/github.com/HeaInSeo/NodeVault/protos --no-restore` 통과.
+
 ---
 
 ### Phase 1 — Request/Spec 경계 적용
 
-**목표**: NodeKit이 `ToolSpecRequest`를 작성하고, NodeVault가 `ResolvedToolSpec`과 canonical digest를 생성하는 경계를 코드로 확정한다.
+**목표**: 외부 authoring tool이 `ToolSpecRequest`를 작성하고, K8s data-plane의 NodeVault가 `ResolvedToolSpec`과 canonical digest를 생성하는 경계를 코드로 확정한다.
 
 **배경**
 현재 `BuildRequest` (proto)는 NodeKit이 빌드 파라미터를 직접 전달한다.
-v0.1.0 이후에는 NodeKit이 사용자 의도만 담은 `ToolSpecRequest`를 제출하고, NodeVault가 canonical resolve를 담당한다.
+v0.1.0 이후에는 NodeKit 같은 외부 authoring tool이 사용자 의도만 담은 `ToolSpecRequest`를 제출하고, NodeVault가 canonical resolve를 담당한다.
 
 **주요 작업**
 
 | 파일 | 변경 |
 |------|------|
 | `protos/nodevault/v1/nodevault.proto` | `ToolSpecRequest`, `ResolveToolSpec` RPC, `ResolvedToolSpec` 메시지 추가 |
-| `pkg/resolve/` (신규) | `Resolver`: base image digest resolve, recipe pin resolve, canonical digest 계산 |
+| `pkg/resolve/` (신규) | `Resolver`: pinned base image digest 추출, recipe/build plan canonical digest 계산 |
 | `pkg/resolve/digest.go` | `RecipeInputsDigest`, `BuildPlanDigest`, `ToolSpecDigest` 계산 |
 | `pkg/index/schema.go` | `ResolvedToolSpec` 저장 슬라이스 추가 (Index v4) |
-| `pkg/index/store.go` | `UpsertResolvedToolSpec`, `GetResolvedToolSpec` |
+| `pkg/index/store.go` | `UpsertResolvedToolSpec`, `GetResolvedToolSpecByDigest` |
 | `cmd/controlplane/main.go` | `ResolveToolSpec` gRPC handler 등록 |
 | `pkg/build/service.go` | `SubmitToolBuild(toolSpecDigest)` — Index에서 ResolvedToolSpec 참조 |
 | NodeKit: `BuildRequestFactory.cs` | `ToolSpecRequest` 작성 경로 추가 (legacy adapter 병행) |
 
 **완료 판정**
 
-- [ ] 동일 `ToolSpecRequest` + `resolveContext` → 동일 `toolSpecDigest` (결정론 테스트)
-- [ ] `TestRecipeInputsDigest_Deterministic` 통과
-- [ ] `TestBuildPlanDigest_IncludesBuilderIdentity` 통과
-- [ ] `TestToolSpecDigest_Stability` 통과 (기존 casHash 방식과 독립)
-- [ ] `TestResolveToolSpec_StoresInIndex` 통과
-- [ ] `go test ./...` 전체 통과
+- [x] 동일 `ToolSpecRequest` + `resolveContext` → 동일 `toolSpecDigest` (결정론 테스트)
+- [x] `TestRecipeInputsDigest_Deterministic` 통과
+- [x] `TestBuildPlanDigest_IncludesBuilderIdentity` 통과
+- [x] `TestToolSpecDigest_Stability` 통과 (기존 casHash 방식과 독립)
+- [x] `TestResolveToolSpec_StoresInIndex` 통과
+- [x] `TestUpsertResolvedToolSpec_Duplicate_ReturnsExisting` 통과
+- [x] `TestBuildPlanDigest_IncludesBaseImageDigest` 통과
+- [x] `TestResolve_ExtractsPinnedBaseImage` 통과
+- [x] `TestResolve_UnpinnedBaseImageRejected` 통과
+- [x] `TestResolveToolSpec_UnpinnedBaseImage_InvalidArgument` 통과
+- [x] `make test` (`go test ./...` with NodeVault build tags) 전체 통과
+- [ ] registry 조회가 필요한 base image tag → digest resolve는 K8s/registry 접근 가능한 환경에서 별도 구현/검증
 
 ---
 
@@ -98,8 +112,9 @@ v0.1.0 이후에는 `SubmitToolBuild`로 build를 제출하고 `WatchToolBuild`�
 
 **완료 판정**
 
-- [ ] `TestBuildState_RecoverInterrupted` — Pod 재시작 시 Running → Interrupted
-- [ ] `TestBuildState_NeverAutoSucceedInterrupted` — Interrupted를 Succeeded로 오판하지 않음
+- [x] `TestBuildState_RecoverInterrupted` — Pod 재시작 시 Running → Interrupted
+- [x] `TestBuildState_NeverAutoSucceedInterrupted` — Interrupted를 Succeeded로 오판하지 않음
+- [x] `TestBuildState_RecoverInterrupted_LeavesTerminalRecords` 통과
 - [ ] `TestBuildCancel_CleansUpSubprocess` 통과
 - [ ] graphroot가 PVC에 유지됨 (Pod restart 후 layer cache hit 확인)
 - [ ] `go test ./...` 전체 통과
@@ -119,7 +134,7 @@ v0.1.0 이후에는 `SubmitToolBuild`로 build를 제출하고 `WatchToolBuild`�
 | `hostUsers` | false | Pod spec 확인 |
 | `privileged` | false | Pod spec 확인 |
 | `allowPrivilegeEscalation` | false | Pod spec 확인 |
-| storage driver | overlay 또는 vfs | buildah info |
+| storage driver | overlay 유지 (`vfs`/`fuse-overlayfs` fallback은 별도 재검증 필요) | buildah info |
 | isolation mode | chroot | buildah build 로그 |
 | Harbor push → imageDigest 확인 | 일치 | ToolBuildRecord 대조 |
 | rootless 실패 시 자동 privileged fallback | 없음 | normalizeBuildBackend 코드 확인 |

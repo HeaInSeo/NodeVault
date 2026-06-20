@@ -152,7 +152,7 @@ func NewBuilder(ctx context.Context, store storage.Store, opts ...BuilderOption)
 	}
 	builder, err := buildah.NewBuilder(ctx, store, *builderOpts)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("buildah.NewBuilder: %w", err)
 	}
 	return builder, nil
 }
@@ -163,7 +163,7 @@ func NewStore() (storage.Store, error) {
 	buildStoreOptions, err := storage.DefaultStoreOptions()
 	if err != nil {
 		Log.Errorf("failed to get default store options: %v", err)
-		return nil, err
+		return nil, fmt.Errorf("storage.DefaultStoreOptions: %w", err)
 	}
 	// Check if running in rootless mode and using overlay driver
 	if unshare.IsRootless() && buildStoreOptions.GraphDriverName == "overlay" {
@@ -177,7 +177,7 @@ func NewStore() (storage.Store, error) {
 	buildStore, err := storage.GetStore(buildStoreOptions)
 	if err != nil {
 		Log.Errorf("failed to get store: %v", err)
-		return nil, err
+		return nil, fmt.Errorf("storage.GetStore: %w", err)
 	}
 	return buildStore, nil
 }
@@ -186,17 +186,17 @@ func NewStoreWithOptions(opts ...StoreOption) (storage.Store, error) {
 	buildStoreOptions, err := storage.DefaultStoreOptions()
 	if err != nil {
 		Log.Errorf("failed to get default store options: %v", err)
-		return nil, err
+		return nil, fmt.Errorf("storage.DefaultStoreOptions: %w", err)
 	}
 	for _, applyOpt := range opts {
-		if err := applyOpt(&buildStoreOptions); err != nil {
-			return nil, err
+		if applyErr := applyOpt(&buildStoreOptions); applyErr != nil {
+			return nil, applyErr
 		}
 	}
 	buildStore, err := storage.GetStore(buildStoreOptions)
 	if err != nil {
 		Log.Errorf("failed to get store: %v", err)
-		return nil, err
+		return nil, fmt.Errorf("storage.GetStore: %w", err)
 	}
 	return buildStore, nil
 }
@@ -211,7 +211,7 @@ func NewUserNamespaceStore(opts ...StoreOption) (storage.Store, error) {
 	buildStore, err := storage.GetStore(buildStoreOptions)
 	if err != nil {
 		Log.Errorf("failed to get user namespace store: %v", err)
-		return nil, err
+		return nil, fmt.Errorf("storage.GetStore: %w", err)
 	}
 	return buildStore, nil
 }
@@ -345,7 +345,7 @@ func buildImageFromDockerfile(ctx context.Context, dockerfilePath string) (strin
 	// Build the Dockerfile
 	r, err := images.Build(ctx, options.ContainerFiles, options)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("images.Build: %w", err)
 	}
 
 	return r.ID, nil
@@ -379,11 +379,11 @@ func BuildDockerfileContentWithOptions(ctx context.Context, store storage.Store,
 	return buildDockerfileContentWithOptionsRuntime(ctx, realImageBuildRuntime{}, store, dockerfileContent, buildOpts)
 }
 
-func BuildDockerfileContentUserNamespace(ctx context.Context, store storage.Store, dockerfileContent string, config UserNamespaceBuildConfig) (imageID, digestStr string, err error) {
+func BuildDockerfileContentUserNamespace(ctx context.Context, store storage.Store, dockerfileContent string, cfg UserNamespaceBuildConfig) (imageID, digestStr string, err error) {
 	if store == nil {
 		return "", "", fmt.Errorf("store must not be nil")
 	}
-	buildOpts, err := UserNamespaceImageBuildOptions(config)
+	buildOpts, err := UserNamespaceImageBuildOptions(cfg)
 	if err != nil {
 		return "", "", err
 	}

@@ -36,11 +36,13 @@ securityContext:
 ```
 
 컨테이너 root는 host의 비특권 UID에 매핑된다. 컨테이너는 privileged 권한을 사용하지 않으며,
-검증된 최소 capability(`CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETFCAP`, `SYS_CHROOT`)만 추가한다.
+overlay storage driver와 podbridge5 chroot-isolation 빌드 경로에 필요한 capability set을
+명시적으로 추가한다. 자세한 검증 기록은 `docs/OVERLAY_USERNS_INVESTIGATION.md`를 참조한다.
 
 ## 사전 조건
 
 - NodeVault 이미지를 `harbor.lab.local/nodevault/controlplane:latest`에 push
+- infra-lab Harbor CA 배포 완료 (`~/.config/infra-lab/install-guide.md`의 Harbor 설치 절차)
 - image pull과 Buildah push에 공통으로 사용하는 `nodevault-registry-auth` 생성
 - ORAS referrer 호환용 username/password secret 생성
 
@@ -86,7 +88,9 @@ deploy/03-nodevault.yaml
 
 ## 저장소 구성
 
-첫 전환 패치에서는 기존 lab 호환성을 위해 `vfs` driver와 `emptyDir`를 사용한다.
+NodeVault의 현재 배포 storage driver는 `overlay`다. `vfs`와 `fuse-overlayfs`는
+이 환경에서 실패 경로로 확인되었으므로, 명시적 재검증 없이 fallback으로 전환하지 않는다.
+현재 전환 단계에서는 graphroot/runroot/data volume만 `emptyDir`를 사용한다.
 
 ```text
 /var/lib/nodevault/containers  Buildah graphroot
@@ -94,8 +98,8 @@ deploy/03-nodevault.yaml
 /data                           catalog/index 임시 저장
 ```
 
-이 구성은 실행 모델 검증용이다. 다음 단계에서 graphroot/cache와 durable state를 PVC 및
-SQLite WAL로 전환해야 한다.
+이 구성은 실행 모델 검증용이다. 다음 단계에서 overlay graphroot/cache와 durable state를
+PVC 및 SQLite WAL로 전환해야 한다.
 
 ## 확인
 

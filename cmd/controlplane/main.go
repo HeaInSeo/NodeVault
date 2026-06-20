@@ -23,6 +23,7 @@ import (
 	"github.com/HeaInSeo/podbridge5"
 
 	"github.com/HeaInSeo/NodeVault/pkg/build"
+	"github.com/HeaInSeo/NodeVault/pkg/buildstate"
 	"github.com/HeaInSeo/NodeVault/pkg/catalog"
 	"github.com/HeaInSeo/NodeVault/pkg/catalogrest"
 	"github.com/HeaInSeo/NodeVault/pkg/certification"
@@ -39,6 +40,7 @@ import (
 const (
 	defaultGRPCAddr      = ":50051"
 	defaultWebhookAddr   = ":8082"
+	defaultBuildStateDB  = "assets/buildstate/build-state.db"
 	defaultFastReconcile = 5 * time.Minute
 	defaultSlowReconcile = 30 * time.Minute
 
@@ -67,6 +69,7 @@ type runtimeConfig struct {
 	webhookAddr  string
 	catalogPath  string
 	indexPath    string
+	buildStateDB string
 }
 
 func loadRuntimeConfig() (runtimeConfig, error) {
@@ -77,6 +80,7 @@ func loadRuntimeConfig() (runtimeConfig, error) {
 		webhookAddr:  sanitizeLogValue(os.Getenv("NODEVAULT_WEBHOOK_ADDR")),
 		catalogPath:  os.Getenv("CATALOG_DIR"),
 		indexPath:    os.Getenv("INDEX_DIR"),
+		buildStateDB: os.Getenv("NODEVAULT_BUILD_STATE_DB"),
 	}
 	if rc.runtimeMode == "" {
 		rc.runtimeMode = "host"
@@ -99,6 +103,9 @@ func loadRuntimeConfig() (runtimeConfig, error) {
 	}
 	if rc.indexPath == "" {
 		rc.indexPath = "assets/index"
+	}
+	if rc.buildStateDB == "" {
+		rc.buildStateDB = defaultBuildStateDB
 	}
 	return rc, nil
 }
@@ -164,6 +171,22 @@ func run() int {
 		slog.Error("failed to open index store", "err", indexErr)
 		return 1
 	}
+	buildStateStore, buildStateErr := buildstate.Open(rc.buildStateDB)
+	if buildStateErr != nil {
+		slog.Error("failed to open build state store", "err", buildStateErr)
+		return 1
+	}
+	defer func() {
+		if closeErr := buildStateStore.Close(); closeErr != nil {
+			slog.Warn("failed to close build state store", "err", closeErr)
+		}
+	}()
+	if recovered, recoverErr := buildStateStore.RecoverInterrupted(time.Now().UTC()); recoverErr != nil {
+		slog.Error("failed to recover interrupted builds", "err", recoverErr)
+		return 1
+	} else if recovered > 0 {
+		slog.Warn("recovered interrupted builds", "count", recovered)
+	}
 
 	// gRPC server
 	var lc net.ListenConfig
@@ -216,7 +239,7 @@ func run() int {
 
 	rec := startBackground(ctx, indexStore, cat, dataCat, certSvc, rc.webhookAddr, fastInterval, slowInterval)
 
-	if registerErr := registerBuildService(srv, &rc, validateSvc, registrySvc, indexStore, rec); registerErr != nil {
+	if registerErr := registerBuildService(srv, &rc, validateSvc, registrySvc, indexStore, buildStateStore, rec); registerErr != nil {
 		slog.Error("failed to register BuildService", "err", registerErr)
 		return 1
 	}
@@ -247,6 +270,7 @@ func logStartupConfig(rc runtimeConfig) {
 		"build_backend", rc.buildBackend,
 		"catalog_path", rc.catalogPath,
 		"index_path", rc.indexPath,
+		"build_state_db", rc.buildStateDB,
 		"grpc_listen_address", rc.grpcAddr,
 		"kube_config_mode", kubeConfigMode,
 	)
@@ -262,6 +286,7 @@ func registerBuildService(
 	validateSvc *validate.Service,
 	registrySvc *catalog.ToolRegistryService,
 	indexStore *index.Store,
+	buildStateStore *buildstate.Store,
 	rec *reconcile.Reconciler,
 ) error {
 	switch rc.buildBackend {
@@ -270,7 +295,7 @@ func registerBuildService(
 		slog.Info("BuildService registered with disabled backend")
 		return nil
 	case buildBackendInPodBuildah:
-		buildSvc, buildErr := build.NewService(validateSvc, registrySvc, indexStore, rec)
+		buildSvc, buildErr := build.NewService(validateSvc, registrySvc, indexStore, buildStateStore, rec)
 		if buildErr != nil {
 			return fmt.Errorf("initialize in-pod podbridge5/Buildah builder: %w", buildErr)
 		}

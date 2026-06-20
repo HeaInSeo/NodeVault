@@ -161,6 +161,9 @@ var PolicyService_ServiceDesc = grpc.ServiceDesc{
 const (
 	BuildService_BuildAndRegister_FullMethodName = "/nodevault.v1.BuildService/BuildAndRegister"
 	BuildService_ResolveToolSpec_FullMethodName  = "/nodevault.v1.BuildService/ResolveToolSpec"
+	BuildService_SubmitToolBuild_FullMethodName  = "/nodevault.v1.BuildService/SubmitToolBuild"
+	BuildService_WatchToolBuild_FullMethodName   = "/nodevault.v1.BuildService/WatchToolBuild"
+	BuildService_CancelToolBuild_FullMethodName  = "/nodevault.v1.BuildService/CancelToolBuild"
 )
 
 // BuildServiceClient is the client API for BuildService service.
@@ -169,6 +172,9 @@ const (
 type BuildServiceClient interface {
 	BuildAndRegister(ctx context.Context, in *BuildRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BuildEvent], error)
 	ResolveToolSpec(ctx context.Context, in *ToolSpecRequest, opts ...grpc.CallOption) (*ResolvedToolSpecResponse, error)
+	SubmitToolBuild(ctx context.Context, in *SubmitToolBuildRequest, opts ...grpc.CallOption) (*SubmitToolBuildResponse, error)
+	WatchToolBuild(ctx context.Context, in *WatchToolBuildRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BuildEvent], error)
+	CancelToolBuild(ctx context.Context, in *CancelToolBuildRequest, opts ...grpc.CallOption) (*CancelToolBuildResponse, error)
 }
 
 type buildServiceClient struct {
@@ -208,12 +214,54 @@ func (c *buildServiceClient) ResolveToolSpec(ctx context.Context, in *ToolSpecRe
 	return out, nil
 }
 
+func (c *buildServiceClient) SubmitToolBuild(ctx context.Context, in *SubmitToolBuildRequest, opts ...grpc.CallOption) (*SubmitToolBuildResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SubmitToolBuildResponse)
+	err := c.cc.Invoke(ctx, BuildService_SubmitToolBuild_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *buildServiceClient) WatchToolBuild(ctx context.Context, in *WatchToolBuildRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BuildEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &BuildService_ServiceDesc.Streams[1], BuildService_WatchToolBuild_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WatchToolBuildRequest, BuildEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type BuildService_WatchToolBuildClient = grpc.ServerStreamingClient[BuildEvent]
+
+func (c *buildServiceClient) CancelToolBuild(ctx context.Context, in *CancelToolBuildRequest, opts ...grpc.CallOption) (*CancelToolBuildResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CancelToolBuildResponse)
+	err := c.cc.Invoke(ctx, BuildService_CancelToolBuild_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BuildServiceServer is the server API for BuildService service.
 // All implementations must embed UnimplementedBuildServiceServer
 // for forward compatibility.
 type BuildServiceServer interface {
 	BuildAndRegister(*BuildRequest, grpc.ServerStreamingServer[BuildEvent]) error
 	ResolveToolSpec(context.Context, *ToolSpecRequest) (*ResolvedToolSpecResponse, error)
+	SubmitToolBuild(context.Context, *SubmitToolBuildRequest) (*SubmitToolBuildResponse, error)
+	WatchToolBuild(*WatchToolBuildRequest, grpc.ServerStreamingServer[BuildEvent]) error
+	CancelToolBuild(context.Context, *CancelToolBuildRequest) (*CancelToolBuildResponse, error)
 	mustEmbedUnimplementedBuildServiceServer()
 }
 
@@ -229,6 +277,15 @@ func (UnimplementedBuildServiceServer) BuildAndRegister(*BuildRequest, grpc.Serv
 }
 func (UnimplementedBuildServiceServer) ResolveToolSpec(context.Context, *ToolSpecRequest) (*ResolvedToolSpecResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolveToolSpec not implemented")
+}
+func (UnimplementedBuildServiceServer) SubmitToolBuild(context.Context, *SubmitToolBuildRequest) (*SubmitToolBuildResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SubmitToolBuild not implemented")
+}
+func (UnimplementedBuildServiceServer) WatchToolBuild(*WatchToolBuildRequest, grpc.ServerStreamingServer[BuildEvent]) error {
+	return status.Error(codes.Unimplemented, "method WatchToolBuild not implemented")
+}
+func (UnimplementedBuildServiceServer) CancelToolBuild(context.Context, *CancelToolBuildRequest) (*CancelToolBuildResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CancelToolBuild not implemented")
 }
 func (UnimplementedBuildServiceServer) mustEmbedUnimplementedBuildServiceServer() {}
 func (UnimplementedBuildServiceServer) testEmbeddedByValue()                      {}
@@ -280,6 +337,53 @@ func _BuildService_ResolveToolSpec_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BuildService_SubmitToolBuild_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SubmitToolBuildRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BuildServiceServer).SubmitToolBuild(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BuildService_SubmitToolBuild_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BuildServiceServer).SubmitToolBuild(ctx, req.(*SubmitToolBuildRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BuildService_WatchToolBuild_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WatchToolBuildRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(BuildServiceServer).WatchToolBuild(m, &grpc.GenericServerStream[WatchToolBuildRequest, BuildEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type BuildService_WatchToolBuildServer = grpc.ServerStreamingServer[BuildEvent]
+
+func _BuildService_CancelToolBuild_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CancelToolBuildRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BuildServiceServer).CancelToolBuild(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BuildService_CancelToolBuild_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BuildServiceServer).CancelToolBuild(ctx, req.(*CancelToolBuildRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BuildService_ServiceDesc is the grpc.ServiceDesc for BuildService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -291,11 +395,24 @@ var BuildService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "ResolveToolSpec",
 			Handler:    _BuildService_ResolveToolSpec_Handler,
 		},
+		{
+			MethodName: "SubmitToolBuild",
+			Handler:    _BuildService_SubmitToolBuild_Handler,
+		},
+		{
+			MethodName: "CancelToolBuild",
+			Handler:    _BuildService_CancelToolBuild_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "BuildAndRegister",
 			Handler:       _BuildService_BuildAndRegister_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "WatchToolBuild",
+			Handler:       _BuildService_WatchToolBuild_Handler,
 			ServerStreams: true,
 		},
 	},

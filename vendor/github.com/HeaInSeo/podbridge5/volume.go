@@ -188,7 +188,7 @@ func VolumeExists(ctx context.Context, name string) (bool, error) {
 	err := withRetry(ctx, 3, 80*time.Millisecond, func() error {
 		e, err := volumes.Exists(ctx, name, nil)
 		if err != nil {
-			return err
+			return fmt.Errorf("volumes.Exists: %w", err)
 		}
 		exists = e
 		return nil

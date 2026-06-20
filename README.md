@@ -1,6 +1,6 @@
 # NodeVault <!-- v0.3.1 -->
 
-NodeKit에서 `BuildRequest`를 받아 tool 이미지를 빌드·검증·인증·등록하는 Kubernetes 데이터플레인 애플리케이션.
+외부 authoring tool에서 요청을 받아 tool 이미지를 빌드·검증·인증·등록하는 Kubernetes 데이터플레인 애플리케이션.
 NodeVault는 장기 실행 Pod로 배포되며, 같은 Pod 안에서 podbridge5가 Buildah Go API를 사용해 이미지를 빌드하고 Harbor에 push한다.
 현재 infra-lab 기준 production 배포는 Kubernetes User Namespace(`hostUsers:false`)와 `crun` 기반의 non-privileged Buildah 경로를 사용한다.
 
@@ -12,10 +12,10 @@ NodeVault는 장기 실행 Pod로 배포되며, 같은 Pod 안에서 podbridge5�
 ## 전체 구조
 
 ```
-NodeKit (C# 어드민 UI)
+NodeKit (외부 C# authoring/admin tool)
     │  BuildRequest (gRPC)
     ▼
-NodeVault (이 프로젝트 — Go gRPC + REST 서버)
+NodeVault (이 프로젝트 — K8s data-plane Go gRPC + REST app)
     │
     ├── L2: in-pod-buildah (production)
     │       NodeVault process → podbridge5 wrapper → Buildah Go API
@@ -143,8 +143,14 @@ make test-integration-infralab
 - `NODEVAULT_BUILD_BACKEND=k8s-job`은 제거된 spike 경로이며, 현재 바이너리는 이 값을 거부한다.
 - NodeVault Pod는 `hostUsers:false`, `seccompProfile: RuntimeDefault`, `allowPrivilegeEscalation:false`, `privileged:false` 기준으로 배포한다.
 - Buildah는 `BUILDAH_ISOLATION=chroot`, `BUILDAH_RUNTIME=crun` 조합을 사용한다.
-- 현재 lab에서는 storage driver를 `vfs`로 둔다. overlay/idmap 또는 fuse-overlayfs 전환은 별도 성능/호환성 검증 후 진행한다.
+- 현재 lab에서는 storage driver를 `overlay`로 둔다. `hostUsers:false`와 함께 동작하도록 Pod AppArmor를 `Unconfined`로 설정하고, podbridge5 chroot-isolation 빌드 경로에 필요한 capability set을 명시한다.
 - Harbor는 Gateway hostname인 `harbor.lab.local`을 기준으로 사용한다. infra-lab CoreDNS가 `harbor.lab.local -> 10.113.24.96`을 제공한다.
+
+### Build state 저장소와 향후 DB 전환
+
+Phase 2부터 `pkg/buildstate`는 `SubmitToolBuild`/`WatchToolBuild`/`CancelToolBuild` 경로의 durable execution state를 담당한다. 현재 구현체는 SQLite WAL 기반 로컬 store이며, 목적은 Pod 재시작 후 `Requested`/`Resolving`/`Building`/`Pushing` 상태를 `Interrupted`로 복구하는 것이다.
+
+SQLite 파일 포맷은 플랫폼 외부 계약이 아니다. 장기적으로 NodeVault replica 확장, NodeKit/NodeSentinel/NodePalette의 공통 provenance 조회, build/certification/scan/validation history 통합, 운영 SQL 리포팅이 필요해지면 동일한 `buildstate` 경계를 유지하고 Postgres 같은 통합 DB 구현체로 교체한다. 그 전까지 SQLite는 단일 NodeVault Pod와 PVC 기반 배포에서 운영 상태를 보존하는 초기 production 구현으로 둔다.
 
 ### 환경 변수
 
@@ -157,6 +163,7 @@ make test-integration-infralab
 | `NODEVAULT_RUNTIME_MODE` | `host` | Kubernetes 배포에서는 `incluster`; 로컬 compatibility 실행은 `host` |
 | `NODEVAULT_FAST_RECONCILE` | `5m` | FastRun 주기 (integrity 존재 확인) |
 | `NODEVAULT_SLOW_RECONCILE` | `30m` | SlowRun 주기 (pull 도달 가능성) |
+| `NODEVAULT_BUILD_STATE_DB` | `assets/buildstate/build-state.db` | 비동기 빌드 상태 SQLite DB (K8s 배포값: `/data/build-state.db`) |
 | `NODEVAULT_REGISTRY_ADDR` | `harbor.10.113.24.96.nip.io` | 이미지 push 대상 Harbor 주소; infra-lab 배포는 `harbor.lab.local` 사용 |
 | `NODEVAULT_ORAS_INSECURE_TLS` | `false` | ORAS referrer push TLS 검증 비활성화 |
 | `NODESENTINEL_GRPC_ADDR` | `nodesentinel.nodevault-system.svc.cluster.local:50052` | NodeSentinel EnqueueValidationWork 엔드포인트 |
@@ -174,6 +181,9 @@ make test-integration-infralab
 # 유닛 테스트 (race detector + coverage)
 make test
 
+# Proto API lint (Buf)
+make buf-lint
+
 # 커버리지 리포트
 make coverage
 
@@ -187,15 +197,17 @@ make vuln
 
 ### CI (GitHub Actions)
 
-4+1 job 구성 (`[self-hosted, linux, podbridge5]`):
+7개 job 구성 (`[self-hosted, linux, podbridge5]`):
 
 | Job | 내용 |
 |-----|------|
+| `proto-lint` | Buf `STANDARD` lint (`protos/`) |
 | `lint` | golangci-lint (zero-warning) |
 | `build` | go build + go vet |
 | `test-unit` | -race -cover, coverage artifact 업로드 |
 | `vuln-scan` | govulncheck (continue-on-error) |
 | `slint-gate` | kube-slint churn/regression gate (25s window) |
+| `kube-lint` | kube-linter K8s manifest guardrail |
 
 ### kube-slint gate
 

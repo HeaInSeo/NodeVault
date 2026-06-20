@@ -25,7 +25,11 @@ func (realImageBuilderFactoryRuntime) Capabilities() ([]string, error) {
 }
 
 func (realImageBuilderFactoryRuntime) NewBuilder(ctx context.Context, store storage.Store, options buildah.BuilderOptions) (*buildah.Builder, error) {
-	return buildah.NewBuilder(ctx, store, options)
+	builder, err := buildah.NewBuilder(ctx, store, options)
+	if err != nil {
+		return nil, fmt.Errorf("buildah.NewBuilder: %w", err)
+	}
+	return builder, nil
 }
 
 func newBuilderWithRuntime(ctx context.Context, runtime imageBuilderFactoryRuntime, store storage.Store, idName string) (*buildah.Builder, error) {

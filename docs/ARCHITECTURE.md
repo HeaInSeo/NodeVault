@@ -2,7 +2,7 @@
 
 버전: 1.1  
 작성일: 2026-04-18  
-갱신일: 2026-06-17  
+갱신일: 2026-06-19
 상태: Kubernetes data-plane / in-pod-buildah 전환 기준
 
 관련 문서:
@@ -31,10 +31,10 @@ NodeVault는 Kubernetes에 장기 실행 Pod로 배포되어 Tool Image의 resol
 ## 전체 구조
 
 ```text
-[NodeKit]
+[NodeKit: external authoring/admin tool]
     │ BuildRequest / 향후 ToolSpecRequest
     ▼
-[Kubernetes: NodeVault Pod]
+[Kubernetes data plane: NodeVault Pod]
     ├── NodeVault gRPC/REST process
     ├── pkg/build
     │    └── podbridge5 wrapper
@@ -62,7 +62,7 @@ NodeVault는 Kubernetes에 장기 실행 Pod로 배포되어 Tool Image의 resol
 | 빌드 백엔드 | `in-pod-buildah` 단일 production 경로 |
 | User Namespace | `hostUsers:false` 검증 완료 |
 | Buildah isolation | 검증된 초기값 `chroot` |
-| containers/storage | 초기 전환은 `vfs`; graphroot/runroot는 Pod volume |
+| containers/storage | 현재 배포는 `overlay`; graphroot/runroot는 Pod volume |
 | Kubernetes API 사용 | L3/L4 ValidateService Job에만 사용. 이미지 빌드는 K8s API 미사용 |
 | gRPC 포트 | Service `:50051` |
 | 상태 저장 | 현재 `/data` emptyDir; durable state/PVC는 후속 작업 |
@@ -74,7 +74,7 @@ NodePalette의 최종 배치 위치와 독립 배포 방식은 별도 결정 사
 
 ## Write Path — 툴 이미지
 
-NodeKit이 `BuildRequest`를 전송하면 NodeVault가 수행하는 순서:
+외부 NodeKit이 `BuildRequest`를 전송하면 Kubernetes data-plane 안의 NodeVault가 수행하는 순서:
 
 ```
 1. gRPC 수신 (BuildService.BuildAndRegister)

@@ -135,7 +135,9 @@ func (s *Service) SubmitToolCheckRecord(
 }
 
 // pushProfileReferrer attaches an observed validation profile as a Harbor OCI
-// referrer for a successful check record. Non-fatal: if the push fails or the
+// referrer for a successful check record, then records it in the index so
+// NodeVault can compute GC_CANDIDATE marking locally (see
+// docs/OBSERVED_PROFILE_SPEC.md §5.2). Non-fatal: if the push fails or the
 // index.Entry isn't found yet, ObservedProfileDigest simply stays unset until
 // a future validation run retries.
 //
@@ -154,8 +156,15 @@ func (s *Service) pushProfileReferrer(ctx context.Context, rec index.ToolCheckRe
 		slog.Warn("toolprofile referrer push failed", "check_id", rec.CheckID, "err", err)
 		return
 	}
-	if err := s.store.SetObservedProfileDigest(entry.CasHash, referrerDigest); err != nil {
-		slog.Warn("index observed profile digest update failed", "err", err)
+	ref := index.ToolProfileReferrer{
+		Digest:           referrerDigest,
+		ValidationRunID:  rec.CheckID,
+		ValidationStatus: rec.ValidationStatus,
+		ValidatedAt:      rec.CheckedAt,
+		ObservedAt:       time.Now().UTC(),
+	}
+	if _, err := s.store.RecordToolProfileReferrer(entry.CasHash, &ref); err != nil {
+		slog.Warn("index toolprofile referrer record failed", "err", err)
 		return
 	}
 	slog.Info("toolprofile referrer attached", "check_id", rec.CheckID, "referrer", referrerDigest)

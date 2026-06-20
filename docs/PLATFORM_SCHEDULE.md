@@ -187,7 +187,7 @@ v0.1.0 이후에는 `SubmitToolBuild`로 build를 제출하고 `WatchToolBuild`�
 | `ToolBuildRecord.NanVersion` | v0.1.0에 nan 미정의 — 필드 용도 재검토 | 미결 |
 | `CertifiedToolImageRecord` 키 | `toolSpecDigest + platform` | 구현 완료. platform 없는 과거 record는 imageDigest compatibility lookup 유지 |
 | `ToolScanRecord.DbDigest` | scanner + scannerVersion + dbDigest | 구현 완료 (gRPC + REST ingestion) |
-| Harbor OCI referrer | spec referrer / toolprofile referrer | toolspec 구현 완료; toolprofile push 구현 완료 (`PushToolProfileReferrer` + `ObservedProfileDigest`), retention(latest 3개 GC) 미구현 |
+| Harbor OCI referrer | spec referrer / toolprofile referrer | toolspec 구현 완료; toolprofile push 구현 완료 (`PushToolProfileReferrer` + `ObservedProfileDigest`); retention(latest 3개, index-local GC marking) 구현 완료 (`docs/OBSERVED_PROFILE_SPEC.md` §5) |
 
 **완료 판정**
 
@@ -229,7 +229,7 @@ Phase 1 이후 병행 가능.
 | toolspec referrer | `PushToolSpecReferrer` — 구현 완료, build 등록 후 Harbor referrer + index/reconcile 연결 |
 | toolprofile referrer | `PushToolProfileReferrer` — 구현 완료, NodeSentinel의 `SubmitToolCheckRecord`(succeeded + validationHash 有)가 트리거, `index.Entry.ObservedProfileDigest`에 캐시 |
 | artifactType | `application/vnd.nodevault.toolprofile.v1+json` |
-| retention | latest 3개 — 미구현 (registry에 referrer가 쌓이기만 함, GC candidate 표시/삭제 로직 없음) |
+| retention | latest `index.DefaultToolProfileReferrerRetain`(=3)개 — 구현 완료. `pkg/index/store.go:RecordToolProfileReferrer`가 index-local로 `ACTIVE`/`GC_CANDIDATE` 마킹만 수행 (registry push/delete 없음). 물리적 삭제는 Harbor GC 정책에 위임. 조회: `GET /v1/gc/toolprofile-candidates` |
 
 ---
 

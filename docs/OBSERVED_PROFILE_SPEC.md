@@ -174,24 +174,37 @@ L4 smoke run (`pkg/validate/service.go:smokeTimeout = 5*time.Minute`)은 기동 
 
 ## 5. Referrer Retention / GC
 
+NodeVault는 toolprofile referrer에 대해 **index-local GC marking**만 수행한다. OCI referrer
+manifest는 content-addressed이므로 NodeVault는 이를 mutate/repush/delete하지 않는다 — annotation
+변경만으로도 새 digest가 생성되어 traceability/lifecycle 계산이 깨지기 때문이다. 물리적 삭제는
+Harbor retention/GC 정책, 운영자, 또는 외부 cleanup runner에 위임한다.
+
 ### 5.1 index.Entry 캐시
 
-`pkg/index/schema.go:Entry`에 `ObservedProfileDigest` 필드를 추가한다 (Sprint 1).
+`pkg/index/schema.go:Entry`에 다음 필드를 둔다.
 
 ```go
-ObservedProfileDigest string `json:"observed_profile_digest,omitempty"`
+ObservedProfileDigest    string                 `json:"observed_profile_digest,omitempty"`
+ObservedProfileReferrers []ToolProfileReferrer  `json:"observed_profile_referrers,omitempty"`
 ```
 
-- latest toolprofile referrer digest 1개만 캐시
-- 갱신 주체: Validator/Profiler (Sprint 2~) 또는 NodeSentinel
+- `ObservedProfileDigest`: rank 1(최신) referrer의 digest 캐시
+- `ObservedProfileReferrers`: subject당 관측된 모든 toolprofile referrer의 lifecycle 기록
+- 갱신 주체: `pkg/validation/service.go:pushProfileReferrer` (`PushToolProfileReferrer` 성공 후
+  `pkg/index/store.go:RecordToolProfileReferrer` 호출)
 
-### 5.2 Registry 보존
+### 5.2 Lifecycle 상태와 보존 정책
 
 | 정책 | 값 |
 |------|-----|
-| 유지 개수 | latest 3개 |
-| 초과분 처리 | GC candidate 표시 (즉시 삭제 안 함) |
-| 삭제 | registry GC 정책에 위임 |
+| 유지 개수 | latest `index.DefaultToolProfileReferrerRetain` (= 3)개, `ACTIVE` |
+| 초과분 처리 | `GC_CANDIDATE`로 표시 (즉시 삭제 안 함) |
+| 등록 안 된 referrer | `MISSING_IN_REGISTRY` (예약됨, 아직 사용 코드 경로 없음) |
+| 정렬 기준 | ① `ValidatedAt`(검증 완료 시각) ② `ObservedAt`(NodeVault 기록 시각) ③ `Digest` 사전순 — registry `Referrers()` 나열 순서에 의존하지 않음 |
+| 삭제 | registry GC 정책/운영자/외부 cleanup runner에 위임 (NodeVault는 절대 미수행) |
+
+조회는 `pkg/index/store.go:ListToolProfileGCCandidates`, REST는
+`GET /v1/gc/toolprofile-candidates`(`pkg/catalogrest`)로 가능하다.
 
 임상·운영 evidence가 붙은 profile artifact는 자동 삭제하지 않고 manual review 대상으로 둔다.
 
@@ -202,8 +215,9 @@ ObservedProfileDigest string `json:"observed_profile_digest,omitempty"`
 | 단계 | 내용 | Sprint |
 |------|------|--------|
 | `pkg/oras/referrer.go` | `PushToolProfileReferrer` 추가 | Sprint 1 |
-| `pkg/index/schema.go` | `ObservedProfileDigest` 필드 추가 | Sprint 1 |
-| `pkg/index/store.go` | `SetObservedProfileDigest` 추가 | Sprint 1 |
+| `pkg/index/schema.go` | `ObservedProfileDigest`, `ObservedProfileReferrers`, `ToolProfileReferrer`, `ReferrerLifecycleStatus` 추가 | Sprint 1 |
+| `pkg/index/store.go` | `RecordToolProfileReferrer`, `ListToolProfileGCCandidates` 추가 (latest-3 index-local GC marking) | Sprint 1 |
+| `pkg/catalogrest/server.go` | `GET /v1/gc/toolprofile-candidates` 추가 | Sprint 1 |
 | Validator/Profiler 패키지 | sample data 실행 + profile 수집 | Sprint 2 |
 | `pkg/build/service.go` | Profiler hook 연결 | Sprint 2 |
 

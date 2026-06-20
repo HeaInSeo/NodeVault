@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 )
@@ -185,18 +186,90 @@ func (s *Store) SetSpecReferrerDigest(casHash, referrerDigest string) error {
 	return s.save()
 }
 
-// SetObservedProfileDigest records the OCI referrer digest after a successful
-// toolprofile push. Called by pkg/validation after PushToolProfileReferrer succeeds.
-func (s *Store) SetObservedProfileDigest(casHash, referrerDigest string) error {
+// RecordToolProfileReferrer appends a newly pushed toolprofile referrer to the
+// entry's history and re-ranks the full set to compute GC_CANDIDATE marking.
+// Called by pkg/validation after PushToolProfileReferrer succeeds.
+//
+// Ranking never depends on registry Referrers() listing order: it sorts by
+// ref.ValidatedAt (validation completion time), then ref.ObservedAt, then
+// Digest, all descending/deterministic. This call only updates the NodeVault
+// index — it never pushes, re-pushes, or deletes any OCI referrer manifest.
+func (s *Store) RecordToolProfileReferrer(casHash string, ref *ToolProfileReferrer) ([]ToolProfileReferrer, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	idx, err := s.findIndex(casHash)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	s.idx.Entries[idx].ObservedProfileDigest = referrerDigest
-	return s.save()
+	e := &s.idx.Entries[idx]
+	e.ObservedProfileReferrers = append(e.ObservedProfileReferrers, *ref)
+	rankToolProfileReferrers(e.ObservedProfileReferrers)
+	for i := range e.ObservedProfileReferrers {
+		if e.ObservedProfileReferrers[i].Rank == 1 {
+			e.ObservedProfileDigest = e.ObservedProfileReferrers[i].Digest
+			break
+		}
+	}
+	if err := s.save(); err != nil {
+		return nil, err
+	}
+	return append([]ToolProfileReferrer(nil), e.ObservedProfileReferrers...), nil
+}
+
+// ListToolProfileGCCandidates returns the GC_CANDIDATE-marked referrers for
+// the entry identified by casHash, most-recently-marked first.
+func (s *Store) ListToolProfileGCCandidates(casHash string) ([]ToolProfileReferrer, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	idx, err := s.findIndex(casHash)
+	if err != nil {
+		return nil, err
+	}
+	return gcCandidates(s.idx.Entries[idx].ObservedProfileReferrers), nil
+}
+
+// rankToolProfileReferrers sorts refs most-recent-first by ValidatedAt, then
+// ObservedAt, then Digest (a deterministic tie-breaker), assigns 1-based Rank,
+// and marks every referrer beyond DefaultToolProfileReferrerRetain as
+// GC_CANDIDATE. It never touches the registry.
+func rankToolProfileReferrers(refs []ToolProfileReferrer) {
+	sort.SliceStable(refs, func(i, j int) bool {
+		a, b := refs[i], refs[j]
+		if !a.ValidatedAt.Equal(b.ValidatedAt) {
+			return a.ValidatedAt.After(b.ValidatedAt)
+		}
+		if !a.ObservedAt.Equal(b.ObservedAt) {
+			return a.ObservedAt.After(b.ObservedAt)
+		}
+		return a.Digest < b.Digest
+	})
+	now := time.Now().UTC()
+	for i := range refs {
+		refs[i].Rank = i + 1
+		if i < DefaultToolProfileReferrerRetain {
+			refs[i].LifecycleStatus = ReferrerActive
+			refs[i].GCReason = ""
+			refs[i].MarkedAt = time.Time{}
+			continue
+		}
+		if refs[i].LifecycleStatus != ReferrerGCCandidate {
+			refs[i].MarkedAt = now
+		}
+		refs[i].LifecycleStatus = ReferrerGCCandidate
+		refs[i].GCReason = "retained_limit_exceeded"
+	}
+}
+
+func gcCandidates(refs []ToolProfileReferrer) []ToolProfileReferrer {
+	var out []ToolProfileReferrer
+	for i := range refs {
+		if refs[i].LifecycleStatus == ReferrerGCCandidate {
+			out = append(out, refs[i])
+		}
+	}
+	return out
 }
 
 // SetIntegrityHealth updates the integrity_health of the entry identified by casHash.

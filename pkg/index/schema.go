@@ -68,12 +68,18 @@ type Entry struct {
 	// Empty until pkg/oras pushes the referrer (TODO-07).
 	SpecReferrerDigest string `json:"spec_referrer_digest,omitempty"`
 
-	// ObservedProfileDigest is the OCI digest of the latest attached toolprofile
-	// referrer (observed L5-a validation profile). Empty until a successful
-	// ToolCheckRecord triggers pkg/oras.PushToolProfileReferrer. Caches only the
-	// latest digest; the registry itself retains the latest 3 (see
-	// docs/OBSERVED_PROFILE_SPEC.md §5).
+	// ObservedProfileDigest is the OCI digest of the rank-1 (most recent)
+	// toolprofile referrer in ObservedProfileReferrers. Empty until a
+	// successful ToolCheckRecord triggers pkg/oras.PushToolProfileReferrer.
 	ObservedProfileDigest string `json:"observed_profile_digest,omitempty"`
+
+	// ObservedProfileReferrers is the append-only record of every toolprofile
+	// referrer pushed for this entry. NodeVault re-ranks this slice on every
+	// push to compute GC_CANDIDATE marking locally — it never mutates,
+	// re-pushes, or deletes the underlying OCI referrer manifests. Physical
+	// deletion is delegated to Harbor retention/GC policy, operators, or an
+	// external cleanup runner. See docs/OBSERVED_PROFILE_SPEC.md §5.2.
+	ObservedProfileReferrers []ToolProfileReferrer `json:"observed_profile_referrers,omitempty"`
 
 	// ── State axis 1: operator intent ────────────────────────────────────────
 	// Changed only by NodeVault explicit operations (Register, Retract, Delete).
@@ -196,6 +202,56 @@ type ObservedResourceProfile struct {
 type ContractCheck struct {
 	AllOutputsPresent bool   `json:"all_outputs_present"`
 	Result            string `json:"result"` // "pass" | "fail" | "unknown"
+}
+
+// ReferrerLifecycleStatus is NodeVault's local GC marking state for one
+// toolprofile referrer. It never reflects an action taken against the OCI
+// registry — NodeVault does not mutate, re-push, or delete referrer
+// manifests. See docs/OBSERVED_PROFILE_SPEC.md §5.2.
+type ReferrerLifecycleStatus string
+
+const (
+	// ReferrerActive is one of the latest DefaultToolProfileReferrerRetain
+	// referrers for its subject digest.
+	ReferrerActive ReferrerLifecycleStatus = "ACTIVE"
+	// ReferrerGCCandidate is older than the retained set. Physical deletion
+	// is delegated to Harbor retention/GC policy, operators, or an external
+	// cleanup runner — NodeVault only marks it here.
+	ReferrerGCCandidate ReferrerLifecycleStatus = "GC_CANDIDATE"
+	// ReferrerMissingInRegistry is reserved for a future reconcile pass that
+	// detects a tracked referrer no longer present in the registry. No
+	// current code path sets this value.
+	ReferrerMissingInRegistry ReferrerLifecycleStatus = "MISSING_IN_REGISTRY"
+)
+
+// DefaultToolProfileReferrerRetain is the number of most-recent toolprofile
+// referrers kept ACTIVE per subject digest; older ones are marked
+// GC_CANDIDATE. See docs/OBSERVED_PROFILE_SPEC.md §5.2.
+const DefaultToolProfileReferrerRetain = 3
+
+// ToolProfileReferrer is one pushed toolprofile OCI referrer, tracked
+// index-locally so NodeVault can compute "latest N" deterministically without
+// depending on the registry Referrers() listing order.
+type ToolProfileReferrer struct {
+	Digest           string `json:"digest"`
+	ValidationRunID  string `json:"validation_run_id,omitempty"`
+	ValidationStatus string `json:"validation_status,omitempty"`
+
+	// ValidatedAt is the validation-completion timestamp (the source
+	// ToolCheckRecord's CheckedAt) — the primary recency ordering key.
+	ValidatedAt time.Time `json:"validated_at"`
+	// ObservedAt is when NodeVault recorded the push; a tie-breaker when
+	// ValidatedAt is equal or zero.
+	ObservedAt time.Time `json:"observed_at"`
+
+	// Rank is the 1-based recency position after ordering (1 = most recent).
+	Rank int `json:"rank"`
+	// LifecycleStatus is recomputed on every push for the full set.
+	LifecycleStatus ReferrerLifecycleStatus `json:"lifecycle_status"`
+	// GCReason explains why LifecycleStatus is GC_CANDIDATE.
+	GCReason string `json:"gc_reason,omitempty"`
+	// MarkedAt is when LifecycleStatus first became GC_CANDIDATE.
+	MarkedAt time.Time `json:"marked_at,omitempty"`
 }
 
 // ToolCheckRecord is the result of a NodeSentinel L5-a functional validation run.

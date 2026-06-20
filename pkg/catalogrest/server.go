@@ -6,6 +6,8 @@
 //	GET /v1/catalog/tools/{cas_hash}          — get single tool by CAS hash
 //	GET /v1/catalog/data                      — list active data artifacts (query: stable_ref)
 //	GET /v1/catalog/data/{cas_hash}           — get single data artifact by CAS hash
+//	GET /v1/gc/toolprofile-candidates         — list toolprofile referrers marked GC_CANDIDATE
+//	                                             (query: subject_digest, optional)
 //
 // Catalog 노출 규칙: lifecycle_phase = Active 기준만.
 // integrity_health는 이 서비스가 노출 결정에 사용하지 않는다.
@@ -108,6 +110,9 @@ func NewMuxWithCert(
 	// Sprint 3: NodeSentinel → NodeVault validation record push (REST, avoids cross-repo gRPC)
 	mux.HandleFunc("POST /v1/validation/check-records", s.handleSubmitCheckRecord)
 	mux.HandleFunc("POST /v1/validation/scan-records", s.handleSubmitScanRecord)
+	// toolprofile referrer GC candidate visibility (index-local marking only;
+	// see docs/OBSERVED_PROFILE_SPEC.md §5.2)
+	mux.HandleFunc("GET /v1/gc/toolprofile-candidates", s.handleListToolProfileGCCandidates)
 	return mux
 }
 
@@ -556,6 +561,90 @@ func (s *Server) handleSubmitScanRecord(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSON(w, SubmitRecordResponse{RecordID: req.ScanID, CertificationStatus: "pending"})
+}
+
+// ── toolprofile referrer GC candidates ───────────────────────────────────────
+
+// ToolProfileReferrerItem is the JSON wire format for one toolprofile referrer
+// and its NodeVault-local GC marking state.
+type ToolProfileReferrerItem struct {
+	Digest           string `json:"digest"`
+	ValidationRunID  string `json:"validation_run_id,omitempty"`
+	ValidationStatus string `json:"validation_status,omitempty"`
+	ValidatedAt      int64  `json:"validated_at"`
+	Rank             int    `json:"rank"`
+	LifecycleStatus  string `json:"lifecycle_status"`
+	GCReason         string `json:"gc_reason,omitempty"`
+	MarkedAt         int64  `json:"marked_at,omitempty"`
+}
+
+// ListToolProfileGCCandidatesResponse is the JSON body for
+// GET /v1/gc/toolprofile-candidates.
+type ListToolProfileGCCandidatesResponse struct {
+	Candidates []ToolProfileReferrerItem `json:"candidates"`
+}
+
+// handleListToolProfileGCCandidates serves GET /v1/gc/toolprofile-candidates.
+//
+// This is a read-only view of NodeVault's local GC marking — it never
+// triggers a registry call. Physical deletion of GC_CANDIDATE referrers is
+// delegated to Harbor retention/GC policy, operators, or an external cleanup
+// runner. See docs/OBSERVED_PROFILE_SPEC.md §5.2.
+//
+// Query parameter: subject_digest — filter to one image digest (optional;
+// omitting it lists candidates across all entries).
+func (s *Server) handleListToolProfileGCCandidates(w http.ResponseWriter, r *http.Request) {
+	subjectDigest := r.URL.Query().Get("subject_digest")
+
+	var entries []index.Entry
+	if subjectDigest != "" {
+		entry, err := s.store.GetByImageDigest(subjectDigest)
+		if err != nil {
+			if errors.Is(err, index.ErrNotFound) {
+				writeJSON(w, ListToolProfileGCCandidatesResponse{Candidates: []ToolProfileReferrerItem{}})
+				return
+			}
+			http.Error(w, "index error", http.StatusInternalServerError)
+			return
+		}
+		entries = []index.Entry{entry}
+	} else {
+		all, err := s.store.All()
+		if err != nil {
+			http.Error(w, "index error", http.StatusInternalServerError)
+			return
+		}
+		entries = all
+	}
+
+	items := make([]ToolProfileReferrerItem, 0)
+	for i := range entries {
+		cands, err := s.store.ListToolProfileGCCandidates(entries[i].CasHash)
+		if err != nil {
+			continue
+		}
+		for j := range cands {
+			items = append(items, toToolProfileReferrerItem(&cands[j]))
+		}
+	}
+
+	writeJSON(w, ListToolProfileGCCandidatesResponse{Candidates: items})
+}
+
+func toToolProfileReferrerItem(r *index.ToolProfileReferrer) ToolProfileReferrerItem {
+	item := ToolProfileReferrerItem{
+		Digest:           r.Digest,
+		ValidationRunID:  r.ValidationRunID,
+		ValidationStatus: r.ValidationStatus,
+		ValidatedAt:      r.ValidatedAt.UnixMilli(),
+		Rank:             r.Rank,
+		LifecycleStatus:  string(r.LifecycleStatus),
+		GCReason:         r.GCReason,
+	}
+	if !r.MarkedAt.IsZero() {
+		item.MarkedAt = r.MarkedAt.UnixMilli()
+	}
+	return item
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

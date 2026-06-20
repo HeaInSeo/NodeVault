@@ -112,10 +112,10 @@ type cancelableBuilder struct {
 	started chan struct{}
 }
 
-func (b *cancelableBuilder) Build(ctx context.Context, _, _ string) (string, string, string, error) {
+func (b *cancelableBuilder) Build(ctx context.Context, _, _ string) (string, string, error) {
 	close(b.started)
 	<-ctx.Done()
-	return "", "", "", ctx.Err()
+	return "", "", ctx.Err()
 }
 
 func (*cancelableBuilder) Close() error { return nil }

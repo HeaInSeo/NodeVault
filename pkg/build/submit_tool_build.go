@@ -200,7 +200,7 @@ func (s *Service) runSubmittedBuild(ctx context.Context, rec buildstate.Record, 
 		return
 	}
 	destination := fmt.Sprintf("%s/library/%s:latest", registryAddr(), sanitizeName(req.GetToolName()))
-	_, digest, nanVersion, err := s.builder.Build(ctx, req.GetDockerfileContent(), destination)
+	_, digest, err := s.builder.Build(ctx, req.GetDockerfileContent(), destination)
 	if err != nil {
 		s.failSubmittedBuild(rec, err)
 		return
@@ -208,7 +208,7 @@ func (s *Service) runSubmittedBuild(ctx context.Context, rec buildstate.Record, 
 	if _, err := s.buildState.Transition(rec.BuildID, buildstate.StatusPushing, "", time.Now().UTC()); err != nil {
 		return
 	}
-	s.recordBuildSuccess(rec.BuildID, rec.RequestedAt, digest, destination, nanVersion)
+	s.recordBuildSuccess(rec.BuildID, rec.RequestedAt, digest, destination)
 	_, _ = s.buildState.Transition(rec.BuildID, buildstate.StatusSucceeded, "", time.Now().UTC())
 }
 

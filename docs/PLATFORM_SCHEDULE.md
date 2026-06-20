@@ -184,7 +184,7 @@ v0.1.0 이후에는 `SubmitToolBuild`로 build를 제출하고 `WatchToolBuild`�
 | 현재 구현 | v0.1.0 요구 | 상태 |
 |-----------|-------------|------|
 | `ToolBuildRecord.Backend` | `execution.mode` / `execution.hostUsers` 등 분리 필요 | 구현 완료 (`mode`, `host_users`, `storage_driver`, `isolation`) |
-| `ToolBuildRecord.NanVersion` | v0.1.0에 nan 미정의 — 필드 용도 재검토 | 미결 |
+| `ToolBuildRecord.NanVersion` | v0.1.0에 nan 미정의 — 필드 용도 재검토 | 제거 완료. ARCHITECTURE_V01.md에 `nan`/node-artifact-runtime 개념이 전혀 정의되어 있지 않아, 실제 사양이 생기기 전까지 필드·`Builder.Build()` 반환값·관련 테스트를 모두 제거했다. 필요해지면 사양과 함께 재도입한다. |
 | `CertifiedToolImageRecord` 키 | `toolSpecDigest + platform` | 구현 완료. platform 없는 과거 record는 imageDigest compatibility lookup 유지 |
 | `ToolScanRecord.DbDigest` | scanner + scannerVersion + dbDigest | 구현 완료 (gRPC + REST ingestion) |
 | Harbor OCI referrer | spec referrer / toolprofile referrer | toolspec 구현 완료; toolprofile push 구현 완료 (`PushToolProfileReferrer` + `ObservedProfileDigest`); retention(latest 3개, index-local GC marking) 구현 완료 (`docs/OBSERVED_PROFILE_SPEC.md` §5) |

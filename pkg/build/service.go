@@ -147,7 +147,7 @@ func (s *Service) BuildAndRegister(req *nfv1.BuildRequest, stream grpc.ServerStr
 	_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_JOB_CREATED, "image build starting: "+destination)
 	slog.Info("image build starting", "destination", destination)
 
-	_, digest, nanVersion, err := s.builder.Build(ctx, req.DockerfileContent, destination)
+	_, digest, err := s.builder.Build(ctx, req.DockerfileContent, destination)
 	if err != nil {
 		metrics.BuildFailureTotal.Add(1)
 		_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_FAILED, err.Error())
@@ -155,7 +155,7 @@ func (s *Service) BuildAndRegister(req *nfv1.BuildRequest, stream grpc.ServerStr
 		return fmt.Errorf("image build: %w", err)
 	}
 
-	s.recordBuildSuccess(buildID, buildStartedAt, digest, destination, nanVersion)
+	s.recordBuildSuccess(buildID, buildStartedAt, digest, destination)
 	metrics.BuildSuccessTotal.Add(1)
 	slog.Info("image build succeeded", "destination", destination, "digest", digest)
 	_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_PUSH_SUCCEEDED, "image pushed to "+destination)
@@ -307,9 +307,7 @@ func (s *Service) recordBuildFailure(buildID string, startedAt time.Time, buildE
 // recordBuildSuccess persists a successful ToolBuildRecord and the corresponding
 // ToolImageRecord to the index, if a Store is wired. Best-effort: a recording
 // failure is logged but never fails the RPC — the image has already been pushed.
-// nanVersion is the version of the nan (node-artifact-runtime) binary injected into
-// the build by the active Builder; "" if the backend does not inject nan.
-func (s *Service) recordBuildSuccess(buildID string, startedAt time.Time, digest, imageRef, nanVersion string) {
+func (s *Service) recordBuildSuccess(buildID string, startedAt time.Time, digest, imageRef string) {
 	if s.indexStore == nil {
 		return
 	}
@@ -317,7 +315,6 @@ func (s *Service) recordBuildSuccess(buildID string, startedAt time.Time, digest
 	rec := index.ToolBuildRecord{
 		BuildID:     buildID,
 		ImageDigest: digest,
-		NanVersion:  nanVersion,
 		Backend:     s.builderBackendName(),
 		Execution:   s.buildExecution(),
 		StartedAt:   startedAt,

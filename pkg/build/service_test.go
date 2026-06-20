@@ -51,16 +51,15 @@ func (f *fakeStream) kindsSent() []nfv1.BuildEventKind {
 // ─── mockBuilder ─────────────────────────────────────────────────────────────
 
 type mockBuilder struct {
-	imageID    string
-	digest     string
-	nanVersion string
-	err        error
+	imageID string
+	digest  string
+	err     error
 }
 
 func (m *mockBuilder) Build(
 	_ context.Context, _, _ string,
-) (imageID, digest, nanVersion string, err error) {
-	return m.imageID, m.digest, m.nanVersion, m.err
+) (imageID, digest string, err error) {
+	return m.imageID, m.digest, m.err
 }
 
 func (m *mockBuilder) Close() error {
@@ -248,7 +247,7 @@ func TestRecordBuildSuccess_WritesToolBuildRecordAndToolImageRecord(t *testing.T
 	svc := &Service{builder: &mockBuilder{}, indexStore: store}
 
 	startedAt := mustParseTime(t)
-	svc.recordBuildSuccess("build-xyz", startedAt, "sha256:imgdigest", "harbor.example.com/library/tool:latest", "v0.1.5")
+	svc.recordBuildSuccess("build-xyz", startedAt, "sha256:imgdigest", "harbor.example.com/library/tool:latest")
 
 	rec, gerr := store.GetToolBuildRecordByBuildID("build-xyz")
 	if gerr != nil {
@@ -262,9 +261,6 @@ func TestRecordBuildSuccess_WritesToolBuildRecordAndToolImageRecord(t *testing.T
 	}
 	if rec.Execution == nil || rec.Execution.Mode != "in-pod-buildah" || rec.Execution.HostUsers == nil || *rec.Execution.HostUsers {
 		t.Fatalf("Execution: got %+v, want in-pod-buildah with host_users=false", rec.Execution)
-	}
-	if rec.NanVersion != "v0.1.5" {
-		t.Errorf("NanVersion: got %q, want %q", rec.NanVersion, "v0.1.5")
 	}
 	if rec.Backend != "in-pod-buildah" {
 		t.Errorf("Backend: got %q, want in-pod-buildah", rec.Backend)

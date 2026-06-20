@@ -138,10 +138,6 @@ type ToolBuildRecord struct {
 
 	ImageDigest string `json:"image_digest,omitempty"`
 
-	// NanVersion is the nan (node-artifact-runtime) layer version injected into the
-	// build. Populated by the nan injection step (Sprint 1, separate work item).
-	NanVersion string `json:"nan_version,omitempty"`
-
 	// Backend identifies the build executor, e.g. "in-pod-buildah".
 	Backend   string          `json:"backend,omitempty"`
 	Execution *BuildExecution `json:"execution,omitempty"`

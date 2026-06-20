@@ -90,16 +90,18 @@ deploy/03-nodevault.yaml
 
 NodeVault의 현재 배포 storage driver는 `overlay`다. `vfs`와 `fuse-overlayfs`는
 이 환경에서 실패 경로로 확인되었으므로, 명시적 재검증 없이 fallback으로 전환하지 않는다.
-현재 전환 단계에서는 graphroot/runroot/data volume만 `emptyDir`를 사용한다.
+현재 Deployment는 `local-path` 기본 StorageClass에 RWO PVC를 요청한다. NodeVault는
+단일 replica여야 하며, replica 확장은 shared build-state/scheduling 설계가 정해진 뒤에만
+진행한다.
 
 ```text
-/var/lib/nodevault/containers  Buildah graphroot
-/run/nodevault/containers      Buildah runroot
-/data                           catalog/index 임시 저장
+/var/lib/nodevault/containers  nodevault-build-graphroot PVC (20Gi)
+/run/nodevault/containers      nodevault-build-runroot PVC (5Gi)
+/data                           nodevault-data PVC (5Gi, catalog/index/SQLite WAL)
 ```
 
-이 구성은 실행 모델 검증용이다. 다음 단계에서 overlay graphroot/cache와 durable state를
-PVC 및 SQLite WAL로 전환해야 한다.
+PVC 크기는 infra-lab 기준 초기값이다. cache 계층과 capacity admission은 Phase 4에서
+별도로 추가한다.
 
 ## 확인
 

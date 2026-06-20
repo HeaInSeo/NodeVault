@@ -22,6 +22,39 @@
 # User Namespace support has been validated for the target cluster. The Pod
 # therefore runs with hostUsers:false and container-root mapped to an
 # unprivileged host UID.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nodevault-build-graphroot
+  namespace: nodevault-system
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nodevault-build-runroot
+  namespace: nodevault-system
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nodevault-data
+  namespace: nodevault-system
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -195,9 +228,11 @@ spec:
           configMap:
             name: nodevault-containers-storage
         - name: build-graphroot
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: nodevault-build-graphroot
         - name: build-runroot
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: nodevault-build-runroot
         - name: registry-auth
           secret:
             secretName: nodevault-registry-auth
@@ -205,9 +240,8 @@ spec:
               - key: .dockerconfigjson
                 path: auth.json
         - name: nodevault-data
-          # PR-1 intentionally keeps storage ephemeral. Durable build state and
-          # cache PVCs are the next migration step.
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: nodevault-data
         - name: tmp
           emptyDir: {}
 

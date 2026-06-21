@@ -87,7 +87,7 @@ v0.1.0 이후에는 NodeKit 같은 외부 authoring tool이 사용자 의도만 
 - [x] `TestResolve_UnpinnedBaseImageRejected` 통과
 - [x] `TestResolveToolSpec_UnpinnedBaseImage_InvalidArgument` 통과
 - [x] `make test` (`go test ./...` with NodeVault build tags) 전체 통과
-- [ ] registry 조회가 필요한 base image tag → digest resolve는 K8s/registry 접근 가능한 환경에서 별도 구현/검증
+- [x] registry 조회가 필요한 base image tag → digest resolve 구현 완료. `NODEVAULT_RESOLVE_UNPINNED_BASE_IMAGE=true`일 때만 활성화되는 operator opt-in이며, 기본값(off)은 기존 strict reject 동작을 그대로 유지한다. `pkg/registry.Client.ResolveTagDigest`가 HTTPS를 우선 시도하고 `WWW-Authenticate: Bearer` 401 challenge를 anonymous token으로 처리하며, HTTPS 연결 자체가 불가능할 때만 (TLS 없는 내부 Harbor 대응) plain HTTP로 fallback한다 — Harbor와 공개 레지스트리(docker.io/ghcr.io/quay.io)를 별도 코드 경로 없이 단일 구현으로 처리. 새 vendored dependency 없음 (순수 net/http). `pkg/build/resolve_tool_spec.go`의 `ResolveToolSpec`이 `resolve.BaseImagePin`으로 unpinned ref를 감지하면 이 resolver를 호출해 `resolve.Context.BaseImageDigest`를 채운다. 알려진 제한: ref가 `host/name:tag` 형태여야 하며 (Docker의 암묵적 `docker.io` 정규화는 미구현), 호스트가 없는 짧은 ref(예: `alpine:3.20`)는 거부된다.
 
 ---
 

@@ -2,6 +2,7 @@ package build
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -241,5 +242,95 @@ func TestResolveToolSpec_UnpinnedBaseImage_InvalidArgument(t *testing.T) {
 	}
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected InvalidArgument, got %v", status.Code(err))
+	}
+}
+
+// ─── unpinned base image auto-resolution (NODEVAULT_RESOLVE_UNPINNED_BASE_IMAGE) ───
+
+type fakeBaseImageResolver struct {
+	digest string
+	err    error
+	gotRef string
+}
+
+func (f *fakeBaseImageResolver) ResolveTagDigest(_ context.Context, ref string) (string, error) {
+	f.gotRef = ref
+	return f.digest, f.err
+}
+
+func TestResolveToolSpec_UnpinnedBaseImage_FlagOff_StillRejects(t *testing.T) {
+	s := newResolveTestService(t)
+	s.baseImageResolver = &fakeBaseImageResolver{digest: "sha256:shouldnotbeused"}
+
+	_, err := s.ResolveToolSpec(context.Background(), &nfv1.ToolSpecRequest{
+		ToolName: resolveTestToolName,
+		RawSpec:  `{"image_uri":"alpine:3.20","tool_name":"bwa-mem2"}`,
+	})
+	if err == nil {
+		t.Fatal("expected error: flag is off by default, resolver must not be consulted")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v", status.Code(err))
+	}
+}
+
+func TestResolveToolSpec_UnpinnedBaseImage_FlagOn_ResolvesDigest(t *testing.T) {
+	t.Setenv("NODEVAULT_RESOLVE_UNPINNED_BASE_IMAGE", "true")
+	s := newResolveTestService(t)
+	resolver := &fakeBaseImageResolver{digest: "sha256:resolved123"}
+	s.baseImageResolver = resolver
+
+	resp, err := s.ResolveToolSpec(context.Background(), &nfv1.ToolSpecRequest{
+		ToolName: resolveTestToolName,
+		RawSpec:  `{"image_uri":"docker.io/library/alpine:3.20","tool_name":"bwa-mem2"}`,
+	})
+	if err != nil {
+		t.Fatalf("ResolveToolSpec: %v", err)
+	}
+	if resolver.gotRef != "docker.io/library/alpine:3.20" {
+		t.Errorf("resolver called with ref %q", resolver.gotRef)
+	}
+
+	got, err := s.indexStore.GetResolvedToolSpecByDigest(resp.GetToolSpecDigest())
+	if err != nil {
+		t.Fatalf("GetResolvedToolSpecByDigest: %v", err)
+	}
+	if got.BaseImageDigest != "sha256:resolved123" {
+		t.Errorf("BaseImageDigest: got %q, want %q", got.BaseImageDigest, "sha256:resolved123")
+	}
+}
+
+func TestResolveToolSpec_UnpinnedBaseImage_FlagOn_ResolverError_FailedPrecondition(t *testing.T) {
+	t.Setenv("NODEVAULT_RESOLVE_UNPINNED_BASE_IMAGE", "true")
+	s := newResolveTestService(t)
+	s.baseImageResolver = &fakeBaseImageResolver{err: fmt.Errorf("registry unreachable")}
+
+	_, err := s.ResolveToolSpec(context.Background(), &nfv1.ToolSpecRequest{
+		ToolName: resolveTestToolName,
+		RawSpec:  `{"image_uri":"docker.io/library/alpine:3.20","tool_name":"bwa-mem2"}`,
+	})
+	if err == nil {
+		t.Fatal("expected error when resolver fails")
+	}
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition, got %v", status.Code(err))
+	}
+}
+
+func TestResolveToolSpec_UnpinnedBaseImage_FlagOn_AlreadyPinned_ResolverNotCalled(t *testing.T) {
+	t.Setenv("NODEVAULT_RESOLVE_UNPINNED_BASE_IMAGE", "true")
+	s := newResolveTestService(t)
+	resolver := &fakeBaseImageResolver{digest: "sha256:shouldnotbeused"}
+	s.baseImageResolver = resolver
+
+	_, err := s.ResolveToolSpec(context.Background(), &nfv1.ToolSpecRequest{
+		ToolName: resolveTestToolName,
+		RawSpec:  `{"image_uri":"alpine:3.20@sha256:abc123","tool_name":"bwa-mem2"}`,
+	})
+	if err != nil {
+		t.Fatalf("ResolveToolSpec: %v", err)
+	}
+	if resolver.gotRef != "" {
+		t.Errorf("resolver should not be called for an already-pinned ref, got %q", resolver.gotRef)
 	}
 }

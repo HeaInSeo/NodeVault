@@ -54,15 +54,16 @@ func registryAddr() string {
 // Service implements BuildServiceServer.
 type Service struct {
 	nfv1.UnimplementedBuildServiceServer
-	builder    Builder
-	validator  *validate.Service
-	registry   *catalog.ToolRegistryService
-	indexStore *index.Store
-	buildState *buildstate.Store
-	activeMu   sync.Mutex
-	active     map[string]context.CancelFunc
-	reconciler ReconcileTriggerer // nil = no eager reconcile
-	sentinel   SentinelEnqueuer   // nil = no L3/L4 enqueue
+	builder           Builder
+	validator         *validate.Service
+	registry          *catalog.ToolRegistryService
+	indexStore        *index.Store
+	buildState        *buildstate.Store
+	activeMu          sync.Mutex
+	active            map[string]context.CancelFunc
+	reconciler        ReconcileTriggerer // nil = no eager reconcile
+	sentinel          SentinelEnqueuer   // nil = no L3/L4 enqueue
+	baseImageResolver baseImageResolver  // nil = lazily uses registry.NewClient()
 }
 
 // NewService creates a BuildService backed by podbridge5.

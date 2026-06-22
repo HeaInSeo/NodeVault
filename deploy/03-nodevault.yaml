@@ -19,6 +19,12 @@
 #     --from-literal=password=<password> \
 #     -n nodevault-system
 #
+# Harbor CA, trusted by in-Pod Buildah pull/push (not shared with the node's
+# containerd trust config -- see docs/OVERLAY_USERNS_INVESTIGATION.md §7):
+#   kubectl create secret generic nodevault-harbor-ca \
+#     --from-file=ca.crt=<path-to-harbor-ca.crt> \
+#     -n nodevault-system
+#
 # User Namespace support has been validated for the target cluster. The Pod
 # therefore runs with hostUsers:false and container-root mapped to an
 # unprivileged host UID.
@@ -212,6 +218,15 @@ spec:
               mountPath: /data
             - name: tmp
               mountPath: /tmp
+            # In-Pod Buildah pull/push does not share the node's containerd
+            # certs.d trust config (separate filesystem/process). Without
+            # this mount, registry.Client.SystemContext() falls through to
+            # the default /etc/containers/certs.d/<registry> lookup and
+            # finds nothing, failing TLS verification against Harbor's
+            # self-signed CA. See docs/OVERLAY_USERNS_INVESTIGATION.md §7.
+            - name: harbor-ca
+              mountPath: /etc/containers/certs.d/harbor.lab.local
+              readOnly: true
 
           resources:
             requests:
@@ -254,6 +269,9 @@ spec:
             claimName: nodevault-data
         - name: tmp
           emptyDir: {}
+        - name: harbor-ca
+          secret:
+            secretName: nodevault-harbor-ca
 
 ---
 # Explicit containers/storage configuration for the in-Pod builder.

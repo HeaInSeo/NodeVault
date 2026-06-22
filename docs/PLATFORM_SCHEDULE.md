@@ -1,7 +1,7 @@
 # Platform Schedule
 
-버전: 3.0
-갱신: 2026-06-19
+버전: 3.1
+갱신: 2026-06-22
 기준 문서:
 - `docs/ARCHITECTURE_V01.md` (NodeVault Kubernetes In-Pod 재현 가능 이미지 빌드 아키텍처 v0.1.0)
 - `docs/OBSERVED_PROFILE_SPEC.md`, `docs/SECURITY_SCAN_SPEC.md`, `docs/RUNNER_NODE_SPEC.md`
@@ -32,6 +32,9 @@
 | NodeVault | certification.Service (check+scan → 인증 결정) | `91837e7` |
 | NodeVault | sentinelclient (NodeSentinel EnqueueValidationWork) | merged |
 | NodeVault | Catalog REST + DockGuard PolicyService | 이전 |
+| NodeVault | Phase 3 라이브 검증 중 발견된 build-context overlay `userxattr` 충돌(nouserxattr root overlay와 nested overlay) 수정 | issue [#2](https://github.com/HeaInSeo/NodeVault/issues/2) |
+| NodeVault | in-Pod Buildah pull/push의 Harbor 자체서명 CA 신뢰 갭(`/etc/containers/certs.d` Secret 마운트) 수정 | issue [#3](https://github.com/HeaInSeo/NodeVault/issues/3) |
+| NodeVault | Buildah build-context/scratch dir을 `/tmp` 전체가 아닌 전용 서브트리로 스코핑 | issue [#4](https://github.com/HeaInSeo/NodeVault/issues/4) |
 | NodeSentinel | L3 dry-run, L4 smoke-run | Sprint 2 |
 | NodeSentinel | L5-a functional validation + vaultclient | Sprint 3 |
 | NodeSentinel | L5-b trivy-operator scan | Sprint 3 |
@@ -128,7 +131,7 @@ v0.1.0 이후에는 `SubmitToolBuild`로 build를 제출하고 `WatchToolBuild`�
 
 **목표**: 대표 ToolSpec에 대해 `hostUsers: false`, `privileged: false`로 Buildah 빌드가 실제로 동작하는지 seoy(100.123.80.48) 클러스터에서 확인한다. (아키텍처 v0.1.0 §7)
 
-현재 `deploy/03-nodevault.yaml`에 `hostUsers: false`는 적용되어 있으나 실제 Buildah storage driver / isolation mode 동작 여부는 미확인이다.
+**2026-06-22 갱신**: seoy 클러스터에서 라이브 검증을 수행해 `TestBuildAndRegister_SimpleDockerfile`이 end-to-end로 처음 성공했다. 검증 과정에서 실제 블로커 3건을 발견·수정했다 — build-context overlay `userxattr` 충돌(issue #2), Harbor 자체서명 CA 미신뢰(issue #3), Buildah scratch/context dir이 `/tmp` 전체를 덮던 문제(issue #4). 아래 검증 매트릭스는 이 결과를 반영해 갱신했다.
 
 **검증 매트릭스**
 
@@ -144,11 +147,11 @@ v0.1.0 이후에는 `SubmitToolBuild`로 build를 제출하고 `WatchToolBuild`�
 
 **완료 판정**
 
-- [ ] seoy에서 `make deploy-infralab` 성공
-- [ ] 대표 Dockerfile (alpine-based) `privileged: false`로 빌드 성공
-- [ ] `ToolBuildRecord.Backend == "in-pod-buildah"` 확인
-- [ ] Harbor에 image push 및 imageDigest 기록 확인
-- [ ] rootless 실패 시 `BuildEventKind_FAILED` 반환 (fallback 없음) 확인
+- [x] seoy에서 `make deploy-infralab` 성공
+- [x] 대표 Dockerfile (alpine-based) `privileged: false`로 빌드 성공 (`TestBuildAndRegister_SimpleDockerfile`)
+- [x] `ToolBuildRecord.Backend == "in-pod-buildah"` 확인 (단위 테스트 `pkg/build/service_test.go` + 라이브 통합 테스트로 확인)
+- [x] Harbor에 image push 및 imageDigest 기록 확인 (issue #3 수정 후 라이브로 확인)
+- [ ] rootless 실패 시 `BuildEventKind_FAILED` 반환 (fallback 없음) 확인 — 긍정 경로만 검증됨, 음성 경로(rootless 실패 유도) 아직 미실시
 
 ---
 
@@ -259,12 +262,13 @@ Phase 1 이후 병행 가능.
 ## 전체 우선순위 요약
 
 ```
-즉시 (P1)
-  └── Phase 1: ToolSpecRequest / ResolvedToolSpec 경계 적용
-  └── Phase 3: Rootless UserNS seoy 클러스터 검증 (병행 가능)
+완료 (2026-06-22)
+  ├── Phase 1: ToolSpecRequest / ResolvedToolSpec 경계 적용
+  └── Phase 3: Rootless UserNS seoy 클러스터 검증 (음성 경로 1건 제외)
 
 단기 (P2)
   ├── Phase 2: durable build state + cancel/timeout
+  ├── Phase 3 잔여: rootless 실패 시 fallback 없음 확인 (음성 경로)
   ├── 트랙 A: OCI referrer
   └── 트랙 B: L5-a sample fixture
 

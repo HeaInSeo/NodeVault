@@ -4,10 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/HeaInSeo/podbridge5"
 	"go.podman.io/storage"
 )
+
+// buildContextDir is podbridge5's build-context overlay lowerdir. It must be
+// a dedicated, pre-existing directory rather than all of /tmp: Buildah's
+// build-context overlay presents a merged view of this entire tree, and
+// /tmp also holds HOME (/tmp/buildhome) and Buildah's own scratch space
+// (TMPDIR, see deploy/03-nodevault.yaml) -- neither belongs in that view.
+const buildContextDir = "/tmp/nodevault-build/context"
 
 // Builder builds and pushes a container image from Dockerfile content.
 // outputRef is the full destination reference, e.g. "harbor.example.com/myimage:latest".
@@ -48,6 +56,16 @@ type podbridge5Builder struct {
 // themselves use podbridge5's user-namespace defaults (chroot isolation,
 // crun runtime, --layers) regardless of storage driver.
 func newPodbridge5Builder() (Builder, error) {
+	// Buildah requires both its build-context lowerdir (buildContextDir) and
+	// its scratch dir (TMPDIR) to already exist before the first build.
+	if err := os.MkdirAll(buildContextDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create build context directory: %w", err)
+	}
+	if tmpdir := os.Getenv("TMPDIR"); tmpdir != "" {
+		if err := os.MkdirAll(tmpdir, 0o700); err != nil {
+			return nil, fmt.Errorf("create build scratch directory: %w", err)
+		}
+	}
 	store, err := podbridge5.NewStoreWithOptions()
 	if err != nil {
 		return nil, fmt.Errorf("podbridge5 NewStoreWithOptions: %w", err)
@@ -64,10 +82,9 @@ func (b *podbridge5Builder) Build(
 	// unshare.IsRootless() is true (vendor/go.podman.io/buildah/pkg/overlay).
 	// Every hostUsers:false Pod reports rootless there regardless of granted
 	// capabilities, and nesting a userxattr overlay on top of containerd's
-	// nouserxattr root overlay fails with EINVAL. /tmp is a separate
-	// emptyDir-backed filesystem (see deploy/03-nodevault.yaml), so no
-	// nesting occurs.
-	cfg := podbridge5.UserNamespaceBuildConfig{OutputRef: outputRef, ContextDirectory: "/tmp"}
+	// nouserxattr root overlay fails with EINVAL. buildContextDir sits on the
+	// /tmp emptyDir mount (see deploy/03-nodevault.yaml), so no nesting occurs.
+	cfg := podbridge5.UserNamespaceBuildConfig{OutputRef: outputRef, ContextDirectory: buildContextDir}
 	imageID, _, err = podbridge5.BuildDockerfileContentUserNamespace(ctx, b.store, dockerfileContent, cfg)
 	if err != nil {
 		return "", "", fmt.Errorf("build image: %w", err)

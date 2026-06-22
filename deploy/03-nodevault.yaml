@@ -125,6 +125,16 @@ spec:
               value: "/tmp/buildhome/.config"
             - name: XDG_DATA_HOME
               value: "/tmp/buildhome/.local/share"
+            # Buildah's build-context overlay scaffolding (upperdir/workdir)
+            # defaults to /var/tmp (internal/tmpdir.GetTempDir()), which is
+            # NOT a separate mount here -- it lives on the container's root
+            # filesystem, itself a containerd-managed overlay. Mounting an
+            # overlay whose upperdir sits on another overlay is rejected by
+            # the kernel. Point TMPDIR at /tmp (the emptyDir mount below, also
+            # used as the build-context lowerdir) so upper/work/lower all
+            # land on the same plain ext4 mount.
+            - name: TMPDIR
+              value: "/tmp"
 
             # ORAS referrer path still consumes explicit credentials. Buildah
             # itself reads /run/containers/0/auth.json mounted below.

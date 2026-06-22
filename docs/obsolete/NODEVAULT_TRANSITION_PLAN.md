@@ -3,8 +3,10 @@
 버전: 1.2  
 작성일: 2026-04-14 / 갱신: 2026-04-19  
 **상태: obsolete — 2026-06-17부로 [`../PLATFORM_SCHEDULE.md`](../PLATFORM_SCHEDULE.md)가 현재 진행 추적 문서.**
-TODO-01~TODO-17은 대부분 완료(✓) 상태로 종료됨. 미완료였던 TODO-13(sori 패키징 통합 경계),
-TODO-16b(stableRef UI 정책)는 PLATFORM_SCHEDULE.md에 아직 반영되지 않은 이월 항목이므로 별도 확인 필요.
+TODO-01~TODO-17은 대부분 완료(✓) 상태로 종료됨. 이월 항목이던 TODO-13(sori 패키징 통합 경계),
+TODO-16b(stableRef UI 정책)는 2026-06-22 확인 완료 — TODO-13은 이미 구현되어 있었음이 확인되어
+종료(issue #5, closed), TODO-16b는 NodeKit과 조율이 필요한 실제 미결정 사항으로 PLATFORM_SCHEDULE.md
+"미결정 사항" 표에 등록됨(issue #6, open).
 v0.6.1 Sprint 1/2(authoring_hash 등 referrer 기반 additive field)는 구현되지 않았고,
 이후 ValidationResultService/certification.Service(91837e7)라는 다른 설계로 대체되었다.
 

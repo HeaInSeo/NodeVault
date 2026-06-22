@@ -35,6 +35,7 @@
 | NodeVault | Phase 3 라이브 검증 중 발견된 build-context overlay `userxattr` 충돌(nouserxattr root overlay와 nested overlay) 수정 | issue [#2](https://github.com/HeaInSeo/NodeVault/issues/2) |
 | NodeVault | in-Pod Buildah pull/push의 Harbor 자체서명 CA 신뢰 갭(`/etc/containers/certs.d` Secret 마운트) 수정 | issue [#3](https://github.com/HeaInSeo/NodeVault/issues/3) |
 | NodeVault | Buildah build-context/scratch dir을 `/tmp` 전체가 아닌 전용 서브트리로 스코핑 | issue [#4](https://github.com/HeaInSeo/NodeVault/issues/4) |
+| NodeVault | TODO-13 (sori 패키징 통합 경계) — `SORI_INTEGRATION_BOUNDARY.md` + `pkg/oras/referrer.go`로 기존 구현 완료 확인, 스케줄 추적 공백만 메움 | issue [#5](https://github.com/HeaInSeo/NodeVault/issues/5) (closed) |
 | NodeSentinel | L3 dry-run, L4 smoke-run | Sprint 2 |
 | NodeSentinel | L5-a functional validation + vaultclient | Sprint 3 |
 | NodeSentinel | L5-b trivy-operator scan | Sprint 3 |
@@ -304,6 +305,7 @@ Phase 1 이후 병행 가능.
 | 4 | builder.imageDigest exact component boundary (podbridge5 포함 여부) | Phase 1 설계 시 |
 | 5 | NodeVault replica 수 + single-writer build scheduling | Phase 2 이후 |
 | 6 | nan runtime binary 주입 — ToolFunctionSpec 구현 시 함께 정의 | ToolFunctionSpec 설계 단계 |
+| 7 | TODO-16b: stableRef 재사용 UI 정책 (Catalog UI revision 표시, active 전환 수동/자동) — NodeKit과 조율 필요, `docs/NONGOALS.md` N-07을 막고 있음 | NodeKit과 합의 시 — issue [#6](https://github.com/HeaInSeo/NodeVault/issues/6) |
 
 ---
 

@@ -62,6 +62,7 @@ func newPodbridge5Builder() (Builder, error) {
 		return nil, fmt.Errorf("create build context directory: %w", err)
 	}
 	if tmpdir := os.Getenv("TMPDIR"); tmpdir != "" {
+		//nolint:gosec // TMPDIR is an operator-controlled Pod env var (deploy/03-nodevault.yaml), not user input.
 		if err := os.MkdirAll(tmpdir, 0o700); err != nil {
 			return nil, fmt.Errorf("create build scratch directory: %w", err)
 		}

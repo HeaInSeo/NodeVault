@@ -58,7 +58,16 @@ func newPodbridge5Builder() (Builder, error) {
 func (b *podbridge5Builder) Build(
 	ctx context.Context, dockerfileContent, outputRef string,
 ) (imageID, remoteDigest string, err error) {
-	cfg := podbridge5.UserNamespaceBuildConfig{OutputRef: outputRef}
+	// ContextDirectory must not be left at podbridge5's "." default, which
+	// resolves to the container root ("/"). Buildah wraps the build context
+	// in its own overlay and forces the "userxattr" mount option whenever
+	// unshare.IsRootless() is true (vendor/go.podman.io/buildah/pkg/overlay).
+	// Every hostUsers:false Pod reports rootless there regardless of granted
+	// capabilities, and nesting a userxattr overlay on top of containerd's
+	// nouserxattr root overlay fails with EINVAL. /tmp is a separate
+	// emptyDir-backed filesystem (see deploy/03-nodevault.yaml), so no
+	// nesting occurs.
+	cfg := podbridge5.UserNamespaceBuildConfig{OutputRef: outputRef, ContextDirectory: "/tmp"}
 	imageID, _, err = podbridge5.BuildDockerfileContentUserNamespace(ctx, b.store, dockerfileContent, cfg)
 	if err != nil {
 		return "", "", fmt.Errorf("build image: %w", err)

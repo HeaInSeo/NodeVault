@@ -168,8 +168,10 @@ build:
 # ── vendor 생성 (컨테이너 이미지 빌드 전 필요) ────────────────────────────────
 # go.mod의 replace directive(podbridge5)가 로컬 경로를 가리키므로
 # vendor/ 에 복사해야 Dockerfile 내 빌드가 가능하다.
+# patch-vendor.sh는 go mod vendor가 되돌리는 vendor/ 패치(btrfs 등록 제거)를 재적용한다.
 vendor:
 	go mod vendor
+	./scripts/patch-vendor.sh
 
 # ── NodeVault 이미지 빌드 + Harbor push ───────────────────────────────────────
 # 사전 조건:

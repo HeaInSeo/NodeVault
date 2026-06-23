@@ -1,7 +1,7 @@
 # Platform Schedule
 
-버전: 3.1
-갱신: 2026-06-22
+버전: 3.2
+갱신: 2026-06-23
 기준 문서:
 - `docs/ARCHITECTURE_V01.md` (NodeVault Kubernetes In-Pod 재현 가능 이미지 빌드 아키텍처 v0.1.0)
 - `docs/OBSERVED_PROFILE_SPEC.md`, `docs/SECURITY_SCAN_SPEC.md`, `docs/RUNNER_NODE_SPEC.md`
@@ -36,6 +36,7 @@
 | NodeVault | in-Pod Buildah pull/push의 Harbor 자체서명 CA 신뢰 갭(`/etc/containers/certs.d` Secret 마운트) 수정 | issue [#3](https://github.com/HeaInSeo/NodeVault/issues/3) |
 | NodeVault | Buildah build-context/scratch dir을 `/tmp` 전체가 아닌 전용 서브트리로 스코핑 | issue [#4](https://github.com/HeaInSeo/NodeVault/issues/4) |
 | NodeVault | TODO-13 (sori 패키징 통합 경계) — `SORI_INTEGRATION_BOUNDARY.md` + `pkg/oras/referrer.go`로 기존 구현 완료 확인, 스케줄 추적 공백만 메움 | issue [#5](https://github.com/HeaInSeo/NodeVault/issues/5) (closed) |
+| NodeVault | vendor된 btrfs graphdriver 등록 제거 — bare `go test ./...`가 `<btrfs/version.h>` 헤더 부재(Rocky/RHEL 미패키지)로 실패하던 문제 해결 | `bb2b172` |
 | NodeSentinel | L3 dry-run, L4 smoke-run | Sprint 2 |
 | NodeSentinel | L5-a functional validation + vaultclient | Sprint 3 |
 | NodeSentinel | L5-b trivy-operator scan | Sprint 3 |
@@ -122,9 +123,9 @@ v0.1.0 이후에는 `SubmitToolBuild`로 build를 제출하고 `WatchToolBuild`�
 - [x] `SubmitToolBuild`가 buildable `raw_spec`을 decode하여 background podbridge5 build를 실행
 - [x] `WatchToolBuild`가 durable status 변화를 stream하고 terminal state에서 종료
 - [x] `CancelToolBuild`가 active build context와 durable state를 함께 Interrupted로 전환
-- [ ] `TestBuildCancel_CleansUpSubprocess` 통과
-- [ ] graphroot가 PVC에 유지됨 (Pod restart 후 layer cache hit 확인)
-- [ ] `go test ./...` 전체 통과
+- [ ] `TestBuildCancel_CleansUpSubprocess` 통과 — 테스트 자체가 아직 작성되지 않음. issue [#7](https://github.com/HeaInSeo/NodeVault/issues/7)
+- [ ] graphroot가 PVC에 유지됨 (Pod restart 후 layer cache hit 확인) — `deploy/03-nodevault.yaml`은 이미 PVC로 전환되어 있으나, Pod 재시작 후 실제 cache-hit 라이브 검증은 아직 미실행. issue [#7](https://github.com/HeaInSeo/NodeVault/issues/7)
+- [x] `go test ./...` 전체 통과 — 2026-06-23 bare `go test ./...`가 vendor된 btrfs 드라이버의 `<btrfs/version.h>` 헤더 부재로 실패하던 문제를 vendor 패치로 제거, 이제 빌드 태그 없이도 전체 통과 (commit `bb2b172`)
 
 ---
 

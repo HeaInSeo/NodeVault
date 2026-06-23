@@ -155,6 +155,73 @@ func TestCancelToolBuild_MarksInterrupted(t *testing.T) {
 	}
 }
 
+type subprocessBuilder struct {
+	started chan struct{}
+	exited  chan struct{}
+}
+
+// Build simulates a Builder whose underlying podbridge5/Buildah subprocess
+// only stops once ctx is cancelled; exited closing models the subprocess's
+// kill/wait cleanup completing, not just Build returning.
+func (b *subprocessBuilder) Build(ctx context.Context, _, _ string) (string, string, error) {
+	close(b.started)
+	defer close(b.exited)
+	<-ctx.Done()
+	return "", "", ctx.Err()
+}
+
+func (*subprocessBuilder) Close() error { return nil }
+
+func TestBuildCancel_CleansUpSubprocess(t *testing.T) {
+	svc := newSubmitTestService(t)
+	sub := &subprocessBuilder{started: make(chan struct{}), exited: make(chan struct{})}
+	svc.builder = sub
+	if _, err := svc.SubmitToolBuild(context.Background(), &nfv1.SubmitToolBuildRequest{
+		RequestId:      "build-subprocess-cancel",
+		ToolSpecDigest: "spec-123",
+	}); err != nil {
+		t.Fatalf("SubmitToolBuild: %v", err)
+	}
+	select {
+	case <-sub.started:
+	case <-time.After(time.Second):
+		t.Fatal("submitted build did not reach builder")
+	}
+
+	svc.activeMu.Lock()
+	_, tracked := svc.active["build-subprocess-cancel"]
+	svc.activeMu.Unlock()
+	if !tracked {
+		t.Fatal("expected active build to be tracked before cancel")
+	}
+
+	if _, err := svc.CancelToolBuild(context.Background(), &nfv1.CancelToolBuildRequest{
+		BuildId: "build-subprocess-cancel",
+	}); err != nil {
+		t.Fatalf("CancelToolBuild: %v", err)
+	}
+
+	select {
+	case <-sub.exited:
+	case <-time.After(time.Second):
+		t.Fatal("builder did not clean up its subprocess after cancel")
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		svc.activeMu.Lock()
+		_, stillTracked := svc.active["build-subprocess-cancel"]
+		svc.activeMu.Unlock()
+		if !stillTracked {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("active build entry leaked after cancel")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestSubmitToolBuild_IdempotentRetry(t *testing.T) {
 	svc := newSubmitTestService(t)
 	first, err := svc.SubmitToolBuild(context.Background(), &nfv1.SubmitToolBuildRequest{RequestId: "build-retry", ToolSpecDigest: "spec-123"})

@@ -106,13 +106,16 @@ L3/L4가 실행된 경우 `nodevault-smoke`의 검증 Job은 정상이다.
 
 1. 현재 전환 패치는 storage driver로 `overlay`를 사용한다. `vfs`와 `fuse-overlayfs`는
    이 환경에서 실패 경로로 확인되었으므로, 명시적 재검증 없이 fallback으로 전환하지 않는다.
-   graphroot/runroot와 `/data`가 아직 `emptyDir`이므로 Pod 재시작 뒤 SQLite build state와
-   layer cache는 사라진다. 코드의 durable state 복구 동작은 PVC 전환 후에만 재시작 내구성을
-   제공한다.
+   graphroot/runroot와 `/data`는 PVC로 전환되어 있다(`deploy/03-nodevault.yaml`). 2026-06-23
+   seoy에서 Pod 재시작 전후 graphroot의 `overlay-layers/layers.json`과 레이어 디렉터리가
+   byte-identical하게 유지됨을 직접 확인했고, 재시작 직후 Pod에 대해
+   `TestBuildAndRegister_SimpleDockerfile`이 정상적으로 빌드+push+L3+L4+register까지
+   완료됨을 확인했다(issue [#7](https://github.com/HeaInSeo/NodeVault/issues/7)).
 2. legacy `BuildRequest`/`BuildAndRegister`는 L2→L3→L4 결합 흐름을 유지한다. 신규
    `SubmitToolBuild`는 resolved `raw_spec`의 build 요청을 L2 background build로 실행하며,
    Watch/Cancel 경로의 실제 클러스터 검증은 아직 남아 있다.
 3. podbridge5 in-Pod 경로는 nan 자동 주입을 아직 수행하지 않는다.
 4. registry 인증은 Buildah용 docker auth secret과 ORAS용 username/password secret이 분리되어 있다.
-5. graphroot/runroot와 `/data` PVC 전환, 실제 subprocess cancellation cleanup, cache 계층은
-   후속 단계다.
+5. `TestBuildCancel_CleansUpSubprocess`는 NodeVault 패키지 경계 내(simulated subprocess) 추가
+   완료(issue [#7](https://github.com/HeaInSeo/NodeVault/issues/7)). 실제 podbridge5/Buildah
+   subprocess의 cancel-시 kill/wait 동작은 podbridge5 저장소 책임 범위.

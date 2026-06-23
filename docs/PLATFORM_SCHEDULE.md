@@ -123,8 +123,8 @@ v0.1.0 이후에는 `SubmitToolBuild`로 build를 제출하고 `WatchToolBuild`�
 - [x] `SubmitToolBuild`가 buildable `raw_spec`을 decode하여 background podbridge5 build를 실행
 - [x] `WatchToolBuild`가 durable status 변화를 stream하고 terminal state에서 종료
 - [x] `CancelToolBuild`가 active build context와 durable state를 함께 Interrupted로 전환
-- [ ] `TestBuildCancel_CleansUpSubprocess` 통과 — 테스트 자체가 아직 작성되지 않음. issue [#7](https://github.com/HeaInSeo/NodeVault/issues/7)
-- [ ] graphroot가 PVC에 유지됨 (Pod restart 후 layer cache hit 확인) — `deploy/03-nodevault.yaml`은 이미 PVC로 전환되어 있으나, Pod 재시작 후 실제 cache-hit 라이브 검증은 아직 미실행. issue [#7](https://github.com/HeaInSeo/NodeVault/issues/7)
+- [x] `TestBuildCancel_CleansUpSubprocess` 통과 — simulated subprocess builder로 cancel 시 cleanup + active map 누수 없음을 검증. issue [#7](https://github.com/HeaInSeo/NodeVault/issues/7) (closed)
+- [x] graphroot가 PVC에 유지됨 (Pod restart 후 layer cache hit 확인) — seoy에서 `rollout restart` 전후 graphroot `layers.json`/레이어 디렉터리가 byte-identical하게 유지됨을 직접 확인, 재시작 직후 `TestBuildAndRegister_SimpleDockerfile` 실제 빌드 성공. issue [#7](https://github.com/HeaInSeo/NodeVault/issues/7) (closed)
 - [x] `go test ./...` 전체 통과 — 2026-06-23 bare `go test ./...`가 vendor된 btrfs 드라이버의 `<btrfs/version.h>` 헤더 부재로 실패하던 문제를 vendor 패치로 제거, 이제 빌드 태그 없이도 전체 통과 (commit `bb2b172`)
 
 ---
@@ -268,8 +268,10 @@ Phase 1 이후 병행 가능.
   ├── Phase 1: ToolSpecRequest / ResolvedToolSpec 경계 적용
   └── Phase 3: Rootless UserNS seoy 클러스터 검증 (음성 경로 1건 제외)
 
+완료 (2026-06-23)
+  └── Phase 2: durable build state + cancel/timeout
+
 단기 (P2)
-  ├── Phase 2: durable build state + cancel/timeout
   ├── Phase 3 잔여: rootless 실패 시 fallback 없음 확인 (음성 경로)
   ├── 트랙 A: OCI referrer
   └── 트랙 B: L5-a sample fixture

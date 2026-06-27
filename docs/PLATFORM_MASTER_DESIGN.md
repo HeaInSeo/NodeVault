@@ -1,7 +1,8 @@
 # Platform Master Design
 
-버전: 1.0
+버전: 1.1
 작성일: 2026-05-04
+갱신일: 2026-06-27
 상태: **정본 (Canon)** — 흩어진 문서를 단일 진실 원천으로 통합
 갱신 책임: 이 문서가 변경되면 연결된 상세 문서도 함께 갱신한다
 
@@ -41,9 +42,12 @@
     │ BuildRequest (gRPC :50051)    AdminToolList (REST :8080 GET)
     │ AdminDataList  (REST :8080 GET)
     ▼                                     ▲
-[NodeVault]  ── Go, Kubernetes Pod (in-pod-buildah) │
+[NodeVault]  ── Go, Kubernetes Pod (in-pod-buildah, hostUsers:false) │
     ├── BuildService     L2→L3→L4 + CAS 등록 + index 기록
+    ├──   SubmitToolBuild / WatchToolBuild / CancelToolBuild (durable SQLite state)
+    ├──   ResolveToolSpec (canonical digest + index 저장)
     ├── PolicyService    DockGuard .wasm 번들 관리
+    ├── ValidationResultService  L5-a/L5-b 결과 수신 (gRPC + REST)
     ├── pkg/index        artifact 상태 원장 (이중 축 상태 모델)
     ├── pkg/oras         OCI referrer push (sori 래핑)
     └── pkg/reconcile    Harbor 현실 대조 (FastRun/SlowRun)
@@ -56,9 +60,15 @@
     ▼
 [Harbor]  ── OCI 레지스트리 (harbor.10.113.24.96.nip.io)
     └── library/<tool>:latest
-        └── [toolspec referrer]    ← application/vnd.nodevault.toolspec.v1+json
-        └── [toolprofile referrer] ← application/vnd.nodevault.toolprofile.v1+json (Sprint 2~)
-        └── [security referrer]    ← application/vnd.nodevault.security.v1+json  (병렬 트랙~)
+        └── [toolspec referrer]    ← application/vnd.nodevault.toolspec.v1+json    ✓ 구현 완료
+        └── [toolprofile referrer] ← application/vnd.nodevault.toolprofile.v1+json ✓ 구현 완료 (retention latest-3)
+        └── [security referrer]    ← application/vnd.nodevault.security.v1+json    ○ 병렬 트랙 A (미구현)
+
+[NodeSentinel]  ── Go, Kubernetes Pod (data-plane 검증 서비스)
+    ├── L3 dry-run, L4 smoke-run
+    ├── L5-a Validator/Profiler (K8s Job — sample fixture 기동 확인 구현 완료)
+    └── L5-b trivy-operator 보안 스캔
+    → 결과는 NodeVault ValidationResultService(SubmitToolCheckRecord / SubmitToolScanRecord)로 전달
 
 [DockGuard]  ── OPA/Rego 정책 (9개 규칙, .wasm 번들)
     └── NodeKit WasmPolicyChecker가 로컬 실행 (L1)
@@ -69,15 +79,16 @@
     └── PushToolSpecReferrer / PushToolProfileReferrer / PushSecurityReferrer
 ```
 
-### 2.2 미래 컴포넌트 (설계됨, 미구현)
+### 2.2 미구현 컴포넌트
 
 ```
 [DagEdit]  ── C#/Avalonia 파이프라인 빌더 (Stage 1 완성)
-    └── NodePalette REST로 casHash 조회 → RunnerNode.casHash pin (Sprint 3~)
+    └── NodePalette REST로 casHash 조회 → RunnerNode.casHash pin (Sprint 3)
+    └── 현재 NodePalette 미연결
 
-[NodeSentinel]  ── K8s data-plane 검증 서비스 (companion 설계 존재)
-    └── L5-a Validator/Profiler를 K8s Job으로 분리 가능한 미래 경로
-    └── 현재 NodeVault pkg/validate가 그 역할 유지
+[pkg/profiler/]  ── NodeVault 내 Validator/Profiler 타입 + hash 계산 (Sprint 2)
+    └── ValidationRun, ObservedIoProfile, ContractCheck, validationHash
+    └── pkg/build/service.go Profiler hook 연결 미완료
 ```
 
 ---
@@ -93,7 +104,7 @@
 | sori | `/opt/go/src/github.com/HeaInSeo/sori` | Go | 운영 중 (module path 갱신 진행 중) |
 | infra-lab | `/opt/go/src/github.com/HeaInSeo/infra-lab` | Shell/YAML | 클러스터 기동 중 |
 | batch-integration | `/opt/go/src/github.com/HeaInSeo/batch-integration` | Go | JUMI + artifact-handoff + kube-slint |
-| NodeSentinel | `/opt/go/src/github.com/HeaInSeo/NodeSentinel` | Go | 설계만 존재 (미구현) |
+| NodeSentinel | `/opt/go/src/github.com/HeaInSeo/NodeSentinel` | Go | 운영 중 (L3~L5-b 완료) |
 
 ---
 
@@ -217,8 +228,9 @@ Retracted ─[운영자 Delete + Harbor GC]▶ Deleted
 
 ### 4.8 image build 방식
 
-NodeVault 바이너리가 podbridge5를 **in-process로 직접 실행** (seoy 호스트에서).
-K8s Job으로 위임하지 않는다 — podbridge5(buildah) rootless 제약으로 K8s Pod 안에서 overlay 마운트 불가.
+NodeVault가 podbridge5를 **K8s Pod 내부에서 in-process로 직접 실행**.
+`hostUsers: false` + `allowPrivilegeEscalation: false` 환경에서 overlay storage driver + chroot isolation으로 검증 완료 (seoy 클러스터, 2026-06-22).
+K8s Job으로 위임하지 않는다. rootless 실패 시 privileged fallback 없음 — 코드 및 테스트(`TestBuildAndRegister_RootlessFailure_NoPrivilegedFallback`)로 확인.
 
 ---
 
@@ -226,12 +238,12 @@ K8s Job으로 위임하지 않는다 — podbridge5(buildah) rootless 제약으�
 
 | 계층 | 이름 | 담당 | 상태 |
 |------|------|------|------|
-| L1 | 정적 검증 + DockGuard 정책 | NodeKit WasmPolicyChecker (DockGuard .wasm 로컬 실행) | 구현 완료 |
-| L2 | 이미지 빌드 | NodeVault podbridge5 in-process | 구현 완료 |
-| L3 | K8s dry-run (Job manifest 검증) | NodeVault pkg/validate | 구현 완료 |
-| L4 | K8s smoke run (컨테이너 실행 확인) | NodeVault pkg/validate | 구현 완료 |
-| L5-a | Validator/Profiler (observed I/O profile + validationHash) | NodeVault pkg/profiler (Sprint 2~) 또는 NodeSentinel | Sprint 2에서 구현 |
-| L5-b | Security Scan (CVE summary + policy) | trivy-operator → NodeVault pkg/reconcile | 병렬 트랙에서 구현 |
+| L1 | 정적 검증 + DockGuard 정책 | NodeKit WasmPolicyChecker (DockGuard .wasm 로컬 실행) | ✓ 구현 완료 |
+| L2 | 이미지 빌드 | NodeVault podbridge5 in-process (K8s Pod, hostUsers:false) | ✓ 구현 완료 |
+| L3 | K8s dry-run (Job manifest 검증) | NodeSentinel (→ NodeVault ValidationResultService 수신) | ✓ 구현 완료 |
+| L4 | K8s smoke run (컨테이너 실행 확인) | NodeSentinel (→ NodeVault ValidationResultService 수신) | ✓ 구현 완료 |
+| L5-a | Validator/Profiler (observed I/O profile + validationHash) | NodeSentinel 실행 / NodeVault pkg/profiler 타입+hook (Sprint 2) | NodeSentinel 기동 확인 완료; validationHash·Profiler hook 미구현 |
+| L5-b | Security Scan (CVE summary + policy) | trivy-operator → NodeSentinel → NodeVault pkg/reconcile | NodeSentinel 연결 완료; security referrer push 미구현 (병렬 트랙 A) |
 
 ### 5.1 validationHash 운영 규칙 (L5-a)
 
@@ -291,19 +303,21 @@ K8s Job으로 위임하지 않는다 — podbridge5(buildah) rootless 제약으�
 총 기간: Sprint 0 완료(2026-05-03) 기준 7~8주.
 
 ```
-2026-05-04  ■ 현재 위치 (Sprint 0 완료)
+2026-05-04  ■ Sprint 0 완료
             │
-~05-07      ├── 선행: infra-lab 검증 + seoy e2e          [2~6시간]
+~05-07      ├── 선행: infra-lab 검증 + seoy e2e          ✓ 완료 (2026-06-22)
             │
-05-05~18    ├── Sprint 1  additive field + toolprofile referrer  [2주]
+05-05~18    ├── Sprint 1  additive field + toolprofile referrer  ✓ 완료
             │
-05-18~06-08 ├── Sprint 2  Validator/Profiler                     [2~3주]
-            │   └── 병렬 트랙 B: TODO-12 Data write path         [2일]
+05-18~06-08 ├── Sprint 2  Validator/Profiler                     ○ 진행 중
+            │   ├── NodeSentinel L3~L5-b 구현                   ✓ 완료
+            │   ├── pkg/profiler/ 타입 + validationHash          ✗ 미구현
+            │   └── 병렬 트랙 B: TODO-12 Data write path         ✗ 미구현 (P3)
             │
-06-08~06-22 └── Sprint 3  DagEdit RunnerNode                     [2주]
-                └── 병렬 트랙 A: Security Scan                   [1~2주]
+06-08~06-22 └── Sprint 3  DagEdit RunnerNode                     ✗ 미구현
+                └── 병렬 트랙 A: Security Scan                   ✗ 미구현
 
-총 완료 예상: 2026-06-22 (Sprint 3) / Security Scan 포함 시 ~06-29
+2026-06-27  ■ 현재 위치
 ```
 
 ### 7.1 Sprint 0 — 계약 정렬 문서 ✓ (완료: 2026-05-03)
@@ -316,30 +330,26 @@ K8s Job으로 위임하지 않는다 — podbridge5(buildah) rootless 제약으�
 - `docs/NODEVAULT_V03_MAPPING.md` — v0.6.1 vocabulary ↔ NodeVault 코드 위치 포인터
 - `docs/TOOL_NODE_SPEC.md` Layer 5 갱신
 
-### 7.2 Sprint 1 — additive field 코드 추가 (예상: 2026-05-05~18)
+### 7.2 Sprint 1 — additive field 코드 추가 ✓ 완료
 
 **목표**: toolspec referrer 유지 + toolprofile referrer 별도 artifact 추가
 
-| 파일 | 변경 내용 |
-|------|-----------|
-| `protos/nodevault/v1/nodevault.proto` | field 19~22: `authoring_hash`, `validation_hash`, `observed_profile_digest`, `security_scan_digest` |
-| `pkg/index/schema.go:Entry` | 4개 optional field (`omitempty`) |
-| `pkg/oras/referrer.go` | `PushToolProfileReferrer` (sori 래핑) |
-| `pkg/index/store.go` | `SetObservedProfileDigest`, `SetAuthoringHash` |
-| `pkg/catalogrest` | REST 응답에 `observedProfileDigest`, `validationHash` 포함 |
+| 파일 | 변경 내용 | 상태 |
+|------|-----------|------|
+| `protos/nodevault/v1/nodevault.proto` | field 19~22: `authoring_hash`, `validation_hash`, `observed_profile_digest`, `security_scan_digest` | ✓ |
+| `pkg/index/schema.go:Entry` | 4개 optional field (`omitempty`) | ✓ |
+| `pkg/oras/referrer.go` | `PushToolProfileReferrer` (sori 래핑) | ✓ |
+| `pkg/index/store.go` | `SetObservedProfileDigest`, `RecordToolProfileReferrer` (retention latest-3) | ✓ |
+| `pkg/catalogrest` | REST 응답에 `observedProfileDigest`, `validationHash` 포함 | ✓ |
 
-**완료 판정 기준** (모두 통과해야 Sprint 1 완료):
-- [ ] `MediaTypeToolProfile` 상수 코드 존재
-- [ ] `TestPushToolProfileReferrer` 통과
-- [ ] `TestDualReferrerCoexistence` — toolspec + toolprofile 공존
-- [ ] `TestIndexMixedEntries_V04` — 신규 field 있는 entry + 기존 entry 혼재 로드
-- [ ] `TestCasHashStability` 또는 `TestExistingToolDefinitionCasHashGolden` — 기존 casHash 불변
-- [ ] `TestIndexBackwardCompatibility_V03Fields` — 신규 4개 field 없이 기존 entry 정상 로드
-- [ ] `TestIndex_FallbackOnError` — atomic write 실패 시 기존 index 보존
-- [ ] `go test ./...` 전체 통과
-- [ ] `make lint` 경고 없음
+**완료 판정 기준**:
+- [x] `MediaTypeToolProfile` 상수 코드 존재
+- [x] `TestPushToolProfileReferrer` 통과
+- [x] toolspec + toolprofile referrer 공존 구현
+- [x] `go test ./...` 전체 통과
+- [x] `make lint` 경고 없음
 
-### 7.3 Sprint 2 — Validator/Profiler 연결 (예상: 2026-05-18~06-08)
+### 7.3 Sprint 2 — Validator/Profiler 연결 (진행 중)
 
 **목표**: Build/Register 흐름에 Validator/Profiler hook 연결, 최소 dry-run으로 observed I/O profile 생성
 
@@ -349,14 +359,15 @@ command: echo hello > /out/result.txt
 expected: /out/result.txt exists=true, count=1, totalBytes>0
 ```
 
-| 패키지/파일 | 내용 |
-|-------------|------|
-| `pkg/profiler/` (신규) | ValidationRun, ObservedIoProfile, ObservedResourceProfile, ContractCheck |
-| `pkg/profiler/hash.go` | ValidationHash 계산 (환경 독립 항목만, OBSERVED_PROFILE_SPEC.md §3 기준) |
-| `pkg/profiler/classifier.go` | infra-level failure 분류 (OOMKilled, timeout, eviction 등) |
-| `pkg/build/service.go` | Profiler hook 연결 — 등록 후 profile attach |
-| `pkg/oras/referrer.go` | `PushToolProfileReferrer` 호출 |
-| `pkg/index/store.go` | `SetObservedProfileDigest` 호출 |
+| 패키지/파일 | 내용 | 상태 |
+|-------------|------|------|
+| NodeSentinel L3~L5-b 구현 | K8s Job 실행, L5-a 기동 확인, L5-b trivy 스캔 | ✓ 완료 |
+| NodeVault `ValidationResultService` | `SubmitToolCheckRecord` / `SubmitToolScanRecord` gRPC + REST 수신 | ✓ 완료 |
+| NodeVault `pkg/certification` | `EvaluateAfterCheck`, `EvaluateAfterScan` 인증 결정 | ✓ 완료 |
+| `pkg/profiler/` (신규) | ValidationRun, ObservedIoProfile, ObservedResourceProfile, ContractCheck | ✗ 미구현 |
+| `pkg/profiler/hash.go` | ValidationHash 계산 (환경 독립 항목만, OBSERVED_PROFILE_SPEC.md §3 기준) | ✗ 미구현 |
+| `pkg/profiler/classifier.go` | infra-level failure 분류 (OOMKilled, timeout, eviction 등) | ✗ 미구현 |
+| `pkg/build/service.go` Profiler hook | 등록 후 profile attach, `PushToolProfileReferrer` 호출 | ✗ 미구현 |
 
 **완료 판정 기준**:
 - [ ] `go build ./pkg/profiler/...` 성공
@@ -371,7 +382,7 @@ expected: /out/result.txt exists=true, count=1, totalBytes>0
 - [ ] `TestCasHashStability` 통과 (기존 casHash 불변 재확인)
 - [ ] `go test ./...` 전체 통과
 
-### 7.4 Sprint 3 — DagEdit RunnerNode 연결 (예상: 2026-06-08~22)
+### 7.4 Sprint 3 — DagEdit RunnerNode 연결 (미착수)
 
 **목표**: NodeVault catalog → DagEdit RunnerNode까지 casHash 기반 pinning 실제 모델 연결
 
@@ -390,7 +401,7 @@ expected: /out/result.txt exists=true, count=1, totalBytes>0
 - [ ] `TestRunnerNode_FromCatalogResponse`
 - [ ] `TestNodePaletteBadge_DefaultsForMissingOptionalMetadata`
 
-### 7.5 병렬 트랙 A — Security Scan Integration (Sprint 2 이후, ~1~2주)
+### 7.5 병렬 트랙 A — Security Scan Integration (미착수)
 
 | 파일/위치 | 내용 |
 |-----------|------|
@@ -406,7 +417,7 @@ expected: /out/result.txt exists=true, count=1, totalBytes>0
 - [ ] `TestSecurityPolicy_RecordOnlyDoesNotBlockActive`
 - [ ] `TestSecurityRetention_MarksOldReferrersAsGCCandidates`
 
-### 7.6 병렬 트랙 B — TODO-12 Data write path (Sprint 1 이후, ~2일)
+### 7.6 병렬 트랙 B — TODO-12 Data write path (미착수, P3)
 
 | 작업 | 소요 |
 |------|------|
@@ -416,13 +427,13 @@ expected: /out/result.txt exists=true, count=1, totalBytes>0
 
 ---
 
-## 8. 즉시 선행 작업 (Sprint 1 시작 전)
+## 8. 즉시 선행 작업 (Sprint 2 시작 전)
 
-| 작업 | 소요 | 비고 |
+| 작업 | 상태 | 비고 |
 |------|------|------|
-| `make deploy-infralab` + `make test-integration-infralab` | 2~4시간 | 핸드오프 Priority 1, 미실행 |
-| seoy e2e 확인 (`make deploy-seoy` + NodeKit → NodeVault 등록) | 1~2시간 | TODO-09b 완료 조건 |
-| sori/utils module path 정리 | 완료 | `HeaInSeo/sori v0.8.0-rc4`, `HeaInSeo/utils v0.0.7` |
+| `make deploy-infralab` + seoy e2e 통합 테스트 | ✓ 완료 (2026-06-22) | TestBuildAndRegister_SimpleDockerfile 통과 |
+| sori/utils module path 정리 | ✓ 완료 | `HeaInSeo/sori v0.8.0-rc4`, `HeaInSeo/utils v0.0.7` |
+| pkg/profiler/ 타입 설계 확정 | ✗ 미완료 | OBSERVED_PROFILE_SPEC.md §3 기준 — Sprint 2 착수 전 확인 필요 |
 
 ---
 
@@ -455,19 +466,19 @@ expected: /out/result.txt exists=true, count=1, totalBytes>0
 
 ---
 
-## 11. 현재 운영 상태 (2026-05-04 기준)
+## 11. 현재 운영 상태 (2026-06-27 기준)
 
 | 컴포넌트 | 상태 |
 |----------|------|
-| NodeVault | seoy 호스트 바이너리 — `nodevault.service` active |
+| NodeVault | K8s Pod (in-pod-buildah, hostUsers:false) — seoy 클러스터 운영 중 |
 | NodePalette | seoy 호스트 바이너리 — `nodepalette.service` active |
 | Harbor | harbor.10.113.24.96.nip.io 운영 중 |
 | NodeKit | L1 + BuildRequest gRPC 완성, AdminToolList REST 완성 |
 | DockGuard | 9개 규칙, .wasm 번들 완성 |
-| sori | PushToolProfileReferrer, PushSecurityReferrer 추가, GitHub push 완료 |
-| infra-lab | 클러스터 기동 중 — 통합 테스트 **미실행** |
-| DagEdit | Stage 1 완성 — NodePalette 미연결 (Sprint 3 이후) |
-| NodeSentinel | 설계 문서만 존재 — 미구현 |
+| sori | PushToolSpecReferrer / PushToolProfileReferrer / PushSecurityReferrer 구현 완료 |
+| infra-lab | 클러스터 기동 중 — seoy 클러스터 e2e 통합 테스트 완료 (2026-06-22) |
+| DagEdit | Stage 1 완성 — NodePalette 미연결 (Sprint 3) |
+| NodeSentinel | **운영 중** — L3~L5-b 구현 완료, seoy 클러스터 배포 |
 
 ### 알려진 운영 중 경고 (무해, 빌드 파이프라인 완성 전 해결 필요)
 

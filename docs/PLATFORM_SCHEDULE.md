@@ -242,11 +242,13 @@ Phase 1 이후 병행 가능.
 
 현재 L5-a는 `/bin/sh -c true` (기동 확인만). 실제 sample fixture 마운트와 observedIoProfile 수집으로 격상.
 
-| 파일 | 변경 |
-|------|------|
-| `pkg/worker/l5a.go` | sample fixture ConfigMap 마운트 + output emptyDir 수집 |
-| `pkg/worker/l5a.go` | `observedIoProfile`: 포트별 파일 존재·개수·크기 |
-| `pkg/worker/l5a.go` | `contractCheck`: 선언 output 존재 여부 |
+**구현 저장소: NodeSentinel** — L5-a 실행 로직(Job 생성, ConfigMap 마운트, output 캡처, observedIoProfile 수집)은 NodeSentinel 도메인이다. NodeVault는 `pkg/validation/service.go`의 `SubmitToolCheckRecord` RPC로 결과를 수신한다. issue [#9](https://github.com/HeaInSeo/NodeVault/issues/9) (closed)
+
+| 파일 | 변경 | 저장소 |
+|------|------|--------|
+| `pkg/worker/l5a.go` | sample fixture ConfigMap 마운트 + output emptyDir 수집 | NodeSentinel |
+| `pkg/worker/l5a.go` | `observedIoProfile`: 포트별 파일 존재·개수·크기 | NodeSentinel |
+| `pkg/worker/l5a.go` | `contractCheck`: 선언 output 존재 여부 | NodeSentinel |
 
 ---
 
@@ -276,7 +278,7 @@ Phase 1 이후 병행 가능.
   └── 트랙 A: OCI referrer (toolspec + toolprofile referrer, retention 포함 구현 완료)
 
 단기 (P2)
-  └── 트랙 B: L5-a sample fixture
+  └── 트랙 B: L5-a sample fixture (NodeSentinel 작업 — NodeVault 변경 없음)
 
 중기 (P3)
   ├── Phase 4: 캐시 계층

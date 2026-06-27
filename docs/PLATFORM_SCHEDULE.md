@@ -153,7 +153,7 @@ v0.1.0 이후에는 `SubmitToolBuild`로 build를 제출하고 `WatchToolBuild`�
 - [x] 대표 Dockerfile (alpine-based) `privileged: false`로 빌드 성공 (`TestBuildAndRegister_SimpleDockerfile`)
 - [x] `ToolBuildRecord.Backend == "in-pod-buildah"` 확인 (단위 테스트 `pkg/build/service_test.go` + 라이브 통합 테스트로 확인)
 - [x] Harbor에 image push 및 imageDigest 기록 확인 (issue #3 수정 후 라이브로 확인)
-- [ ] rootless 실패 시 `BuildEventKind_FAILED` 반환 (fallback 없음) 확인 — 긍정 경로만 검증됨, 음성 경로(rootless 실패 유도) 아직 미실시
+- [x] rootless 실패 시 `BuildEventKind_FAILED` 반환 (fallback 없음) 확인 — `TestBuildAndRegister_RootlessFailure_NoPrivilegedFallback`: rootless EPERM 에러 주입 시 FAILED 이벤트 발생, SUCCEEDED 없음, Build 정확히 1회 호출(재시도 없음) 검증. builder.go/service.go/submit_tool_build.go 코드 리뷰로 privileged retry 경로 부재 확인.
 
 ---
 
@@ -271,9 +271,11 @@ Phase 1 이후 병행 가능.
 완료 (2026-06-23)
   └── Phase 2: durable build state + cancel/timeout
 
+완료 (2026-06-27)
+  ├── Phase 3 잔여: rootless 실패 시 fallback 없음 확인 (TestBuildAndRegister_RootlessFailure_NoPrivilegedFallback)
+  └── 트랙 A: OCI referrer (toolspec + toolprofile referrer, retention 포함 구현 완료)
+
 단기 (P2)
-  ├── Phase 3 잔여: rootless 실패 시 fallback 없음 확인 (음성 경로)
-  ├── 트랙 A: OCI referrer
   └── 트랙 B: L5-a sample fixture
 
 중기 (P3)

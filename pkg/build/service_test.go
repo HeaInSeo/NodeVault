@@ -157,6 +157,66 @@ RUN echo hello`,
 	}
 }
 
+// TestBuildAndRegister_RootlessFailure_NoPrivilegedFallback verifies that a
+// rootless Buildah error (e.g. mknod EPERM in user namespace) emits
+// BUILD_EVENT_KIND_FAILED and does not fall back to a privileged build path.
+// NodeVault has no retry or escalation logic — builder.Build() is called
+// exactly once and any error is terminal.
+func TestBuildAndRegister_RootlessFailure_NoPrivilegedFallback(t *testing.T) {
+	rootlessErr := fmt.Errorf(
+		"build image: error building at STEP 2: error processing " +
+			"RUN mknod /dev/test c 1 3: exit status 1: mknod: /dev/test: Operation not permitted",
+	)
+
+	buildCalls := 0
+	svc := &Service{
+		builder: &countCallBuilder{inner: &mockBuilder{err: rootlessErr}, calls: &buildCalls},
+	}
+	stream := newFakeStream()
+	req := &nfv1.BuildRequest{
+		RequestId:         "req-rootless-01",
+		ToolName:          "test-tool",
+		DockerfileContent: "FROM alpine:3.20\nRUN mknod /dev/test c 1 3",
+	}
+
+	if err := svc.BuildAndRegister(req, stream); err == nil {
+		t.Fatal("expected error from rootless build failure, got nil")
+	}
+
+	kinds := stream.kindsSent()
+	var failedCount, succeededCount int
+	for _, k := range kinds {
+		switch k {
+		case nfv1.BuildEventKind_BUILD_EVENT_KIND_FAILED:
+			failedCount++
+		case nfv1.BuildEventKind_BUILD_EVENT_KIND_SUCCEEDED:
+			succeededCount++
+		}
+	}
+	if failedCount == 0 {
+		t.Errorf("FAILED event not emitted; got %v", kinds)
+	}
+	if succeededCount > 0 {
+		t.Errorf("SUCCEEDED must never be emitted after rootless failure (no privileged fallback)")
+	}
+	if buildCalls != 1 {
+		t.Errorf("Build called %d times, want exactly 1 — no privileged retry", buildCalls)
+	}
+}
+
+// countCallBuilder wraps a Builder and counts Build invocations.
+type countCallBuilder struct {
+	inner Builder
+	calls *int
+}
+
+func (c *countCallBuilder) Build(ctx context.Context, dockerfile, outputRef string) (imageID, digest string, err error) {
+	*c.calls++
+	return c.inner.Build(ctx, dockerfile, outputRef)
+}
+
+func (c *countCallBuilder) Close() error { return c.inner.Close() }
+
 // TestBuildAndRegister_BuilderError_NoSucceededEvent verifies that SUCCEEDED is
 // never emitted when the image build fails.
 func TestBuildAndRegister_BuilderError_NoSucceededEvent(t *testing.T) {

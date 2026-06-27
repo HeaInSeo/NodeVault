@@ -71,8 +71,8 @@ func (s *Service) WatchToolBuild(
 		}
 		return status.Errorf(codes.Internal, "get build state: %v", err)
 	}
-	if err := stream.Send(buildStateEvent(rec)); err != nil || buildstate.Terminal(rec.Status) {
-		return err
+	if sendErr := stream.Send(buildStateEvent(rec)); sendErr != nil || buildstate.Terminal(rec.Status) {
+		return sendErr
 	}
 
 	ticker := time.NewTicker(watchPollInterval)
@@ -90,8 +90,8 @@ func (s *Service) WatchToolBuild(
 			if rec.UpdatedAt.Equal(lastUpdated) {
 				continue
 			}
-			if err := stream.Send(buildStateEvent(rec)); err != nil {
-				return err
+			if sendErr := stream.Send(buildStateEvent(rec)); sendErr != nil {
+				return sendErr
 			}
 			lastUpdated = rec.UpdatedAt
 			if buildstate.Terminal(rec.Status) {
@@ -113,17 +113,18 @@ func (s *Service) CancelToolBuild(
 	}
 	reason := req.GetReason()
 	if reason == "" {
-		reason = "cancelled by client"
+		reason = "canceled by client"
 	}
 	s.cancelSubmittedBuild(req.GetBuildId())
 	rec, err := s.buildState.Transition(
 		req.GetBuildId(),
 		buildstate.StatusInterrupted,
-		fmt.Sprintf("cancelled: %s", reason),
+		fmt.Sprintf("canceled: %s", reason),
 		time.Now().UTC(),
 	)
 	if err != nil {
-		if current, getErr := s.buildState.Get(req.GetBuildId()); getErr == nil && current.Status == buildstate.StatusInterrupted {
+		if current, getErr := s.buildState.Get(req.GetBuildId()); getErr == nil &&
+			current.Status == buildstate.StatusInterrupted {
 			return &nfv1.CancelToolBuildResponse{
 				BuildId:     current.BuildID,
 				Status:      string(current.Status),
@@ -142,6 +143,7 @@ func (s *Service) CancelToolBuild(
 	}, nil
 }
 
+//nolint:gocritic // hugeParam: by-value snapshot is intentional — read-only helper, no pointer lifetime risk.
 func buildRequestFromResolved(buildID string, spec index.ResolvedToolSpec) (*nfv1.BuildRequest, error) {
 	var req nfv1.BuildRequest
 	if err := json.Unmarshal([]byte(spec.RawSpec), &req); err != nil {
@@ -163,6 +165,7 @@ func buildRequestFromResolved(buildID string, spec index.ResolvedToolSpec) (*nfv
 	return &req, nil
 }
 
+//nolint:gocritic // hugeParam: by-value snapshot is intentional — goroutine-safe, no shared mutation.
 func (s *Service) startSubmittedBuild(rec buildstate.Record, req *nfv1.BuildRequest) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.activeMu.Lock()
@@ -171,7 +174,7 @@ func (s *Service) startSubmittedBuild(rec buildstate.Record, req *nfv1.BuildRequ
 	}
 	s.active[rec.BuildID] = cancel
 	s.activeMu.Unlock()
-	go s.runSubmittedBuild(ctx, rec, req)
+	go s.runSubmittedBuild(ctx, cancel, rec, req)
 }
 
 func (s *Service) cancelSubmittedBuild(buildID string) {
@@ -183,7 +186,11 @@ func (s *Service) cancelSubmittedBuild(buildID string) {
 	}
 }
 
-func (s *Service) runSubmittedBuild(ctx context.Context, rec buildstate.Record, req *nfv1.BuildRequest) {
+//nolint:gocritic // hugeParam: by-value snapshot is intentional — goroutine-safe, no shared mutation.
+func (s *Service) runSubmittedBuild(
+	ctx context.Context, cancel context.CancelFunc, rec buildstate.Record, req *nfv1.BuildRequest,
+) {
+	defer cancel()
 	defer func() {
 		s.activeMu.Lock()
 		delete(s.active, rec.BuildID)
@@ -212,15 +219,17 @@ func (s *Service) runSubmittedBuild(ctx context.Context, rec buildstate.Record, 
 	_, _ = s.buildState.Transition(rec.BuildID, buildstate.StatusSucceeded, "", time.Now().UTC())
 }
 
+//nolint:gocritic // hugeParam: by-value snapshot is intentional — read-only helper, no pointer needed.
 func (s *Service) failSubmittedBuild(rec buildstate.Record, buildErr error) {
 	if errors.Is(buildErr, context.Canceled) {
-		_, _ = s.buildState.Transition(rec.BuildID, buildstate.StatusInterrupted, "cancelled", time.Now().UTC())
+		_, _ = s.buildState.Transition(rec.BuildID, buildstate.StatusInterrupted, "canceled", time.Now().UTC())
 		return
 	}
 	s.recordBuildFailure(rec.BuildID, rec.RequestedAt, buildErr)
 	_, _ = s.buildState.Transition(rec.BuildID, buildstate.StatusFailed, buildErr.Error(), time.Now().UTC())
 }
 
+//nolint:gocritic // hugeParam: by-value snapshot is intentional — read-only helper, no pointer lifetime risk.
 func buildStateEvent(rec buildstate.Record) *nfv1.BuildEvent {
 	return &nfv1.BuildEvent{
 		Kind:      nfv1.BuildEventKind_BUILD_EVENT_KIND_LOG,

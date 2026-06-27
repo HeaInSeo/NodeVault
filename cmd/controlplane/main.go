@@ -145,6 +145,7 @@ func main() {
 	os.Exit(run())
 }
 
+//nolint:funlen // startup orchestration — linear sequence of independent service registrations.
 func run() int {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
@@ -205,27 +206,8 @@ func run() int {
 	// PolicyService — serves dockguard.wasm bundle to NodeKit.
 	nfv1.RegisterPolicyServiceServer(srv, policy.NewService())
 
-	// ValidateService — L3 dry-run + L4 smoke run.
-	// In incluster mode use ServiceAccount token; in host mode use local kubeconfig.
-	var validateSvc *validate.Service
-	if rc.runtimeMode == "incluster" {
-		validateSvc, err = validate.NewInClusterService()
-	} else {
-		validateSvc, err = validate.NewService()
-	}
-	if err != nil {
-		slog.Warn("ValidateService unavailable", "runtime_mode", rc.runtimeMode, "err", err)
-	} else {
-		nfv1.RegisterValidateServiceServer(srv, validateSvc)
-	}
-
-	// ToolRegistryService — CAS storage + index dual-write (gRPC write path).
-	registrySvc := catalog.NewToolRegistryService(cat, indexStore)
-	nfv1.RegisterToolRegistryServiceServer(srv, registrySvc)
-
-	// DataRegistryService — data artifact registration (gRPC write path).
-	dataRegistrySvc := catalog.NewDataRegistryService(dataCat, indexStore)
-	nfv1.RegisterDataRegistryServiceServer(srv, dataRegistrySvc)
+	validateSvc := initValidateService(srv, &rc)
+	registrySvc := registerCatalogServices(srv, cat, dataCat, indexStore)
 
 	// Reconcile loops + webhook + validation REST
 	fastInterval := parseDuration("NODEVAULT_FAST_RECONCILE", defaultFastReconcile)
@@ -239,7 +221,9 @@ func run() int {
 
 	rec := startBackground(ctx, indexStore, cat, dataCat, certSvc, rc.webhookAddr, fastInterval, slowInterval)
 
-	if registerErr := registerBuildService(srv, &rc, validateSvc, registrySvc, indexStore, buildStateStore, rec); registerErr != nil {
+	if registerErr := registerBuildService(
+		srv, &rc, validateSvc, registrySvc, indexStore, buildStateStore, rec,
+	); registerErr != nil {
 		slog.Error("failed to register BuildService", "err", registerErr)
 		return 1
 	}
@@ -255,6 +239,40 @@ func run() int {
 		return 1
 	}
 	return 0
+}
+
+// initValidateService creates the ValidateService for the given runtime mode and registers it
+// on srv. Returns nil (and logs a warning) if the kubeconfig is unavailable — other services
+// continue to operate normally in that case.
+func initValidateService(srv *grpc.Server, rc *runtimeConfig) *validate.Service {
+	var svc *validate.Service
+	var err error
+	if rc.runtimeMode == "incluster" {
+		svc, err = validate.NewInClusterService()
+	} else {
+		svc, err = validate.NewService()
+	}
+	if err != nil {
+		slog.Warn("ValidateService unavailable", "runtime_mode", rc.runtimeMode, "err", err)
+		return nil
+	}
+	nfv1.RegisterValidateServiceServer(srv, svc)
+	return svc
+}
+
+// registerCatalogServices registers ToolRegistryService and DataRegistryService on srv.
+// Returns the ToolRegistryService so the caller can pass it to BuildService.
+func registerCatalogServices(
+	srv *grpc.Server,
+	cat *catalog.Catalog,
+	dataCat *catalog.DataCatalog,
+	indexStore *index.Store,
+) *catalog.ToolRegistryService {
+	registrySvc := catalog.NewToolRegistryService(cat, indexStore)
+	nfv1.RegisterToolRegistryServiceServer(srv, registrySvc)
+	dataRegistrySvc := catalog.NewDataRegistryService(dataCat, indexStore)
+	nfv1.RegisterDataRegistryServiceServer(srv, dataRegistrySvc)
+	return registrySvc
 }
 
 // logStartupConfig emits a structured log line with the active runtime configuration.

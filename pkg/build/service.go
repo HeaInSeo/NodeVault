@@ -42,7 +42,10 @@ type ReconcileTriggerer interface {
 	ReconcileOne(ctx context.Context, casHash string) error
 }
 
-const defaultRegistryAddr = "harbor.10.113.24.96.nip.io"
+const (
+	defaultRegistryAddr = "harbor.10.113.24.96.nip.io"
+	backendInPodBuildah = "in-pod-buildah"
+)
 
 func registryAddr() string {
 	if v := os.Getenv("NODEVAULT_REGISTRY_ADDR"); v != "" {
@@ -338,12 +341,12 @@ func (s *Service) recordBuildSuccess(buildID string, startedAt time.Time, digest
 }
 
 func (s *Service) buildExecution() *index.BuildExecution {
-	if s.builderBackendName() != "in-pod-buildah" {
+	if s.builderBackendName() != backendInPodBuildah {
 		return nil
 	}
 	hostUsers := false
 	return &index.BuildExecution{
-		Mode: "in-pod-buildah", HostUsers: &hostUsers,
+		Mode: backendInPodBuildah, HostUsers: &hostUsers,
 		StorageDriver: "overlay", Isolation: "chroot",
 	}
 }
@@ -355,7 +358,7 @@ func (s *Service) builderBackendName() string {
 	case disabledBuilder:
 		return "disabled"
 	default:
-		return "in-pod-buildah"
+		return backendInPodBuildah
 	}
 }
 

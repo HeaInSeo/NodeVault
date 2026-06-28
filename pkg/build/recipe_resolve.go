@@ -85,7 +85,9 @@ func (s *Service) ResolveRecipe(
 // extractResolutionsFromDefinitions parses EnvironmentSpec from existing tool definitions
 // to find pinned build strings for the requested packages.
 // Returns nil when no build strings can be extracted (e.g. no Active entries).
-func extractResolutionsFromDefinitions(defs []*nfv1.RegisteredToolDefinition, packages []*nfv1.PackageSpec) []*nfv1.PackageResolution {
+func extractResolutionsFromDefinitions(
+	defs []*nfv1.RegisteredToolDefinition, packages []*nfv1.PackageSpec,
+) []*nfv1.PackageResolution {
 	var resolutions []*nfv1.PackageResolution
 
 	for _, pkg := range packages {
@@ -181,11 +183,7 @@ func resolveCondaPackages(
 		if pkg == nil {
 			continue
 		}
-		candidates, err := queryAnacondaOrg(ctx, pkg.GetName(), pkg.GetVersion(), channels)
-		if err != nil {
-			return nil, status.Errorf(codes.Unavailable,
-				"Anaconda.org API query failed for '%s=%s': %v", pkg.GetName(), pkg.GetVersion(), err)
-		}
+		candidates := queryAnacondaOrg(ctx, pkg.GetName(), pkg.GetVersion(), channels)
 		resolutions = append(resolutions, &nfv1.PackageResolution{
 			Name:       pkg.GetName(),
 			Version:    pkg.GetVersion(),
@@ -244,7 +242,7 @@ type anacondaPackageResp struct {
 // in order. Results are cached per (channel, name, version) for channelCacheTTL.
 func queryAnacondaOrg(
 	ctx context.Context, name, version string, channels []string,
-) ([]*nfv1.BuildStringCandidate, error) {
+) []*nfv1.BuildStringCandidate {
 	var all []*nfv1.BuildStringCandidate
 	seen := map[string]bool{}
 
@@ -285,7 +283,7 @@ func queryAnacondaOrg(
 		}
 	}
 
-	return all, nil
+	return all
 }
 
 func fetchAnacondaChannel(

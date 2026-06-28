@@ -2,10 +2,6 @@ package build
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -92,7 +88,7 @@ func TestIsLinux64_Various(t *testing.T) {
 		{anacondaFile{Platform: "linux-64"}, true},
 		{anacondaFile{Platform: "linux", Arch: "x86_64"}, true},
 		{anacondaFile{Platform: "linux", Arch: "64"}, true},
-		{anacondaFile{Platform: "", Arch: ""}, true}, // empty = accept
+		{anacondaFile{Platform: "", Arch: ""}, true},
 		{anacondaFile{Platform: "osx-64"}, false},
 		{anacondaFile{Platform: "linux", Arch: "aarch64"}, false},
 		{anacondaFile{Platform: "win-64"}, false},
@@ -215,28 +211,16 @@ func TestResolveRecipe_PackageMirrorNotFound(t *testing.T) {
 // ── integration-style test: fetchAnacondaChannel with a fake server ──────────
 
 func TestFetchAnacondaChannel_ParsesBuilds(t *testing.T) {
-	// Build a fake Anaconda.org response.
 	fakeResp := anacondaPackageResp{
 		Name: "bwa",
 		Files: []anacondaFile{
 			{Version: "0.7.17", Build: "h5bf99c6_8", Platform: "linux-64"},
 			{Version: "0.7.17", Build: "he4a0461_2", Platform: "linux-64"},
-			{Version: "0.7.17", Build: "hc9558a2_0", Platform: "osx-64"},   // should be filtered
-			{Version: "0.7.18", Build: "hc9558a2_0", Platform: "linux-64"}, // wrong version
+			{Version: "0.7.17", Build: "hc9558a2_0", Platform: "osx-64"},
+			{Version: "0.7.18", Build: "hc9558a2_0", Platform: "linux-64"},
 		},
 	}
-	body, _ := json.Marshal(fakeResp)
 
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, string(body))
-	}))
-	defer ts.Close()
-
-	// Temporarily patch anacondaAPIBase (test-only).
-	origBase := anacondaAPIBase
-	_ = origBase // suppress unused warning; constant cannot be assigned — use a helper
-	// Instead, test fetchAnacondaChannel via an overridden URL by modifying the fetch logic.
-	// We test the full pipeline via a table-driven check on the parsed body.
 	candidates := filterAnacondaFiles(fakeResp.Files, "bwa", "0.7.17")
 	if len(candidates) != 2 {
 		t.Errorf("expected 2 linux-64 candidates for 0.7.17, got %d", len(candidates))

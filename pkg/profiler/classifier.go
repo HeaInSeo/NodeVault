@@ -3,7 +3,7 @@ package profiler
 import "strings"
 
 // InfraFailureReason is the canonical set of infrastructure-level failure
-// reasons recognised by NodeVault. When a ToolCheckRecord carries one of
+// reasons recognized by NodeVault. When a ToolCheckRecord carries one of
 // these reasons the failure reflects the K8s/network/registry layer, not the
 // tool under test, so ValidationHash is not generated.
 // See docs/OBSERVED_PROFILE_SPEC.md §3.4.
@@ -40,7 +40,7 @@ func IsInfraFailure(reason string) bool {
 }
 
 // ClassifyFailure maps a FailureReason string to the matching InfraFailureReason
-// constant. Returns InfraUnknown for unrecognised or empty values.
+// constant. Returns InfraUnknown for unrecognized or empty values.
 // Does NOT classify application-level failures (non-zero exit code from the tool).
 func ClassifyFailure(reason string) InfraFailureReason {
 	r := InfraFailureReason(strings.ToLower(reason))

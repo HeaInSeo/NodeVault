@@ -126,7 +126,7 @@ func TestValidationHash_IoPortOrderIndependent(t *testing.T) {
 
 // ── InfraFailure classifier tests ─────────────────────────────────────────────
 
-// TestValidator_InfraFailureClassification verifies recognised infra reasons.
+// TestValidator_InfraFailureClassification verifies recognized infra reasons.
 func TestValidator_InfraFailureClassification(t *testing.T) {
 	infraCases := []string{
 		"oomkilled", "OOMKilled", "OOMKILLED",

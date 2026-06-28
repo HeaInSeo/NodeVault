@@ -200,6 +200,8 @@ v0.1.0 이후에는 `SubmitToolBuild`로 build를 제출하고 `WatchToolBuild`�
 - [x] `ToolBuildRecord`에 `execution.*` 필드 추가 (backward-compatible optional)
 - [x] `CertifiedToolImageRecord` 키를 `toolSpecDigest + platform`으로 재정렬 (Phase 1 이후)
 - [x] `TestToolScanRecord_WithDbDigest` 통과
+- [x] `pkg/profiler` 신규 — `ComputeValidationHash` (환경 독립 SHA256) + `IsInfraFailure`/`ClassifyFailure` 분류기 (2026-06-28)
+- [x] 9개 profiler 단위 테스트 통과 (hash 결정론·환경값 제외·infra/timeout 분류) (2026-06-28)
 
 ---
 
@@ -307,13 +309,15 @@ Phase 1 이후 병행 가능.
   ├── Phase 3 잔여: rootless 실패 시 fallback 없음 확인 (TestBuildAndRegister_RootlessFailure_NoPrivilegedFallback)
   └── 트랙 A: OCI referrer (toolspec + toolprofile referrer, retention 포함 구현 완료)
 
+완료 (2026-06-28)
+  ├── 트랙 D: ResolveRecipe NodeVault 측 완료; NodeKit UX 진행 중
+  ├── Phase 4: 캐시 계층 (package cache PVC + Harbor layer cache; seoy 라이브 검증·GC 미완)
+  └── Phase 5: Record/Certification 통합 — pkg/profiler hash·classifier 구현 완료
+
 단기 (P2)
   └── 트랙 B: L5-a sample fixture (NodeSentinel 작업 — NodeVault 변경 없음)
 
-중기 (P2/P3)
-  ├── 트랙 D: ResolveRecipe NodeVault 측 완료 (2026-06-28); NodeKit UX 진행 중
-  ├── Phase 4: 캐시 계층
-  ├── Phase 5: Record/Certification 통합 검증
+중기 (P3)
   └── 트랙 C: 운영 안정화 (Data write path 완료; RBAC·Secret·DagEdit 미완)
 
 장기 (P4)

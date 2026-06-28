@@ -413,23 +413,23 @@ expected: /out/result.txt exists=true, count=1, totalBytes>0
 | NodeSentinel L3~L5-b 구현 | K8s Job 실행, L5-a 기동 확인, L5-b trivy 스캔 | ✓ 완료 |
 | NodeVault `ValidationResultService` | `SubmitToolCheckRecord` / `SubmitToolScanRecord` gRPC + REST 수신 | ✓ 완료 |
 | NodeVault `pkg/certification` | `EvaluateAfterCheck`, `EvaluateAfterScan` 인증 결정 | ✓ 완료 |
-| `pkg/profiler/` (신규) | ValidationRun, ObservedIoProfile, ObservedResourceProfile, ContractCheck | ✗ 미구현 |
-| `pkg/profiler/hash.go` | ValidationHash 계산 (환경 독립 항목만, OBSERVED_PROFILE_SPEC.md §3 기준) | ✗ 미구현 |
-| `pkg/profiler/classifier.go` | infra-level failure 분류 (OOMKilled, timeout, eviction 등) | ✗ 미구현 |
+| `pkg/profiler/` (신규) | ValidationRun, ObservedIoProfile, ObservedResourceProfile, ContractCheck | ✓ 완료 (2026-06-28) |
+| `pkg/profiler/hash.go` | ValidationHash 계산 (환경 독립 항목만, OBSERVED_PROFILE_SPEC.md §3 기준) | ✓ 완료 (2026-06-28) |
+| `pkg/profiler/classifier.go` | infra-level failure 분류 (OOMKilled, timeout, eviction 등) | ✓ 완료 (2026-06-28) |
 | `pkg/build/service.go` Profiler hook | 등록 후 profile attach, `PushToolProfileReferrer` 호출 | ✗ 미구현 |
 
 **완료 판정 기준**:
-- [ ] `go build ./pkg/profiler/...` 성공
+- [x] `go build ./pkg/profiler/...` 성공
 - [ ] `TestBuildAndRegister_ProfilerHookCalled` 통과
 - [ ] `TestProfiler_OutputCapture` 통과
-- [ ] `TestValidationHash_Deterministic` 통과
-- [ ] `TestValidationHash_ExcludesObservedResourcesByDefault` 통과
-- [ ] `TestValidationHash_OnlyForSuccessfulFunctionalValidation` 통과
-- [ ] `TestValidator_InfraFailureClassification` 통과
-- [ ] `TestProfiler_TimeoutProducesInconclusiveProfile` 통과
+- [x] `TestValidationHash_Deterministic` 통과
+- [x] `TestValidationHash_ExcludesObservedResourcesByDefault` 통과
+- [x] `TestValidationHash_OnlyForSuccessfulFunctionalValidation` 통과
+- [x] `TestValidator_InfraFailureClassification` 통과
+- [x] `TestProfiler_TimeoutProducesInconclusiveProfile` 통과
 - [ ] `TestBuildAndRegister_WithProfile` 통합 테스트 통과
 - [ ] `TestCasHashStability` 통과 (기존 casHash 불변 재확인)
-- [ ] `go test ./...` 전체 통과
+- [x] `go test ./...` 전체 통과 (2026-06-28)
 
 ### 7.4 Sprint 3 — DagEdit RunnerNode 연결 (미착수)
 

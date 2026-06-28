@@ -72,6 +72,7 @@ service BuildService {
   rpc SubmitToolBuild(SubmitToolBuildRequest) returns (SubmitToolBuildResponse);
   rpc WatchToolBuild(WatchToolBuildRequest) returns (stream BuildEvent);
   rpc CancelToolBuild(CancelToolBuildRequest) returns (CancelToolBuildResponse);
+  rpc ResolveRecipe(ResolveRecipeRequest) returns (ResolveRecipeResponse);
 }
 
 message ToolSpecRequest {
@@ -113,6 +114,53 @@ message CancelToolBuildResponse {
   string build_id = 1;
   string status = 2;
   int64 cancelled_at = 3;
+}
+
+// ── ResolveRecipe — 빌드 전 artifact 후보 조회 ──────────────────────────────
+
+enum RecipeVariant {
+  RECIPE_VARIANT_UNSPECIFIED = 0;
+  RECIPE_VARIANT_CONDA = 1;
+  RECIPE_VARIANT_MICROMAMBA = 2;
+  RECIPE_VARIANT_PACKAGE_MIRROR = 3;
+  RECIPE_VARIANT_BIOCONTAINER = 4;
+}
+
+message PackageSpec {
+  string name = 1;
+  string version = 2;
+}
+
+// BuildStringCandidate is a single resolved artifact option for a package.
+message BuildStringCandidate {
+  string build_string = 1;
+  string full_pin = 2;
+  string channel = 3;
+}
+
+// PackageResolution groups candidates for a single package.
+message PackageResolution {
+  string name = 1;
+  string version = 2;
+  repeated BuildStringCandidate candidates = 3;
+}
+
+message ResolveRecipeRequest {
+  string tool_name = 1;
+  string version = 2;
+  RecipeVariant variant = 3;
+  repeated PackageSpec packages = 4;
+  repeated string channels = 5;
+  string package_mirror_uri = 6;
+  string bio_container_image_uri = 7;
+  bool closed_network = 8;
+}
+
+// ResolveRecipeResponse returns artifact candidates for each requested package.
+// resolution_source: "harbor_cache" | "external_source" | "not_found"
+message ResolveRecipeResponse {
+  string resolution_source = 1;
+  repeated PackageResolution packages = 2;
 }
 
 message BuildRequest {

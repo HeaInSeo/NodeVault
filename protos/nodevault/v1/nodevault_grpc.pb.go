@@ -164,6 +164,7 @@ const (
 	BuildService_SubmitToolBuild_FullMethodName  = "/nodevault.v1.BuildService/SubmitToolBuild"
 	BuildService_WatchToolBuild_FullMethodName   = "/nodevault.v1.BuildService/WatchToolBuild"
 	BuildService_CancelToolBuild_FullMethodName  = "/nodevault.v1.BuildService/CancelToolBuild"
+	BuildService_ResolveRecipe_FullMethodName    = "/nodevault.v1.BuildService/ResolveRecipe"
 )
 
 // BuildServiceClient is the client API for BuildService service.
@@ -175,6 +176,7 @@ type BuildServiceClient interface {
 	SubmitToolBuild(ctx context.Context, in *SubmitToolBuildRequest, opts ...grpc.CallOption) (*SubmitToolBuildResponse, error)
 	WatchToolBuild(ctx context.Context, in *WatchToolBuildRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BuildEvent], error)
 	CancelToolBuild(ctx context.Context, in *CancelToolBuildRequest, opts ...grpc.CallOption) (*CancelToolBuildResponse, error)
+	ResolveRecipe(ctx context.Context, in *ResolveRecipeRequest, opts ...grpc.CallOption) (*ResolveRecipeResponse, error)
 }
 
 type buildServiceClient struct {
@@ -253,6 +255,16 @@ func (c *buildServiceClient) CancelToolBuild(ctx context.Context, in *CancelTool
 	return out, nil
 }
 
+func (c *buildServiceClient) ResolveRecipe(ctx context.Context, in *ResolveRecipeRequest, opts ...grpc.CallOption) (*ResolveRecipeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolveRecipeResponse)
+	err := c.cc.Invoke(ctx, BuildService_ResolveRecipe_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BuildServiceServer is the server API for BuildService service.
 // All implementations must embed UnimplementedBuildServiceServer
 // for forward compatibility.
@@ -262,6 +274,7 @@ type BuildServiceServer interface {
 	SubmitToolBuild(context.Context, *SubmitToolBuildRequest) (*SubmitToolBuildResponse, error)
 	WatchToolBuild(*WatchToolBuildRequest, grpc.ServerStreamingServer[BuildEvent]) error
 	CancelToolBuild(context.Context, *CancelToolBuildRequest) (*CancelToolBuildResponse, error)
+	ResolveRecipe(context.Context, *ResolveRecipeRequest) (*ResolveRecipeResponse, error)
 	mustEmbedUnimplementedBuildServiceServer()
 }
 
@@ -286,6 +299,9 @@ func (UnimplementedBuildServiceServer) WatchToolBuild(*WatchToolBuildRequest, gr
 }
 func (UnimplementedBuildServiceServer) CancelToolBuild(context.Context, *CancelToolBuildRequest) (*CancelToolBuildResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CancelToolBuild not implemented")
+}
+func (UnimplementedBuildServiceServer) ResolveRecipe(context.Context, *ResolveRecipeRequest) (*ResolveRecipeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResolveRecipe not implemented")
 }
 func (UnimplementedBuildServiceServer) mustEmbedUnimplementedBuildServiceServer() {}
 func (UnimplementedBuildServiceServer) testEmbeddedByValue()                      {}
@@ -384,6 +400,24 @@ func _BuildService_CancelToolBuild_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BuildService_ResolveRecipe_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolveRecipeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BuildServiceServer).ResolveRecipe(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BuildService_ResolveRecipe_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BuildServiceServer).ResolveRecipe(ctx, req.(*ResolveRecipeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BuildService_ServiceDesc is the grpc.ServiceDesc for BuildService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -402,6 +436,10 @@ var BuildService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CancelToolBuild",
 			Handler:    _BuildService_CancelToolBuild_Handler,
+		},
+		{
+			MethodName: "ResolveRecipe",
+			Handler:    _BuildService_ResolveRecipe_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

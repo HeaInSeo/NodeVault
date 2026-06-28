@@ -144,7 +144,7 @@ ip route add 10.113.24.96/32 via 10.113.24.254
 |------|------|
 | `latest` 태그 금지 | L1에서 무조건 차단. bypass 플래그 없음 |
 | digest 미고정 금지 | 이미지 URI에 digest 또는 버전 필수 |
-| 버전 미고정 패키지 금지 | package dependency에 unpinned 버전 차단 |
+| 버전 미고정 패키지 금지 | NodeKit L1은 `=version` 형식(버전 고정)만 요구. build string (`=version=build`) 결정은 NodeVault `ResolveToolSpec`이 담당 (§4.9 참조) |
 | casHash 실행 pin | 파이프라인 노드는 반드시 casHash로 실행을 pin |
 
 ### 4.2 casHash 정의 (불변)
@@ -232,6 +232,49 @@ NodeVault가 podbridge5를 **K8s Pod 내부에서 in-process로 직접 실행**.
 `hostUsers: false` + `allowPrivilegeEscalation: false` 환경에서 overlay storage driver + chroot isolation으로 검증 완료 (seoy 클러스터, 2026-06-22).
 K8s Job으로 위임하지 않는다. rootless 실패 시 privileged fallback 없음 — 코드 및 테스트(`TestBuildAndRegister_RootlessFailure_NoPrivilegedFallback`)로 확인.
 
+### 4.9 Recipe 재현성 해소 (ResolveRecipe)
+
+사용자는 툴 이름과 버전만 입력한다. recipe variant에 따라 결정해야 할 artifact가 다르며,
+NodeVault `ResolveRecipe` RPC가 Harbor 우선 조회로 이를 담당한다.
+
+**variant별 resolve 대상**:
+
+| Variant | Harbor 조회 대상 | Harbor 없을 때 외부 소스 |
+|---------|-----------------|------------------------|
+| conda | `library/<tool>` 이미지의 conda 패키지 build string | conda 채널 repodata (bioconda, conda-forge 등) |
+| micromamba | 동일 | 동일 |
+| package mirror | 동일 | 내부 mirror URL 조회 |
+| BioContainer | `library/<tool>` 이미지 존재 여부 | BioContainers registry (quay.io/biocontainers) |
+| source build | 해당 없음 — SourceUri + SourceChecksum으로 이미 고정 | — |
+| Dockerfile fallback | 해당 없음 — 사용자가 전부 직접 작성 | — |
+
+**resolve 경로 (conda/micromamba/mirror/BioContainer 공통)**:
+
+| 경로 | 동작 |
+|------|------|
+| Harbor에 동일 tool+version 이미지 존재 | 이미지 메타데이터에서 artifact 정보 추출 → 후보 1개 반환 |
+| Harbor에 없음 + 열린망 | 외부 소스 조회 → 후보 목록 반환 → NodeKit이 사용자에게 표시·선택 |
+| Harbor에 없음 + 폐쇄망 | `InvalidArgument` — 관리자 사전 Harbor 등록 필요 |
+
+**폐쇄망에서 Harbor는 필수 인프라다.**
+
+**역할 분리**:
+- NodeKit L1: 버전 고정 여부만 검증 (`=version` 형식). artifact 결정은 L1 요구사항이 아니다.
+- NodeVault `ResolveRecipe`: Harbor 조회 → 후보 목록 반환. NodeKit이 사용자 확인 후 BuildRequest 생성.
+
+**응답 구조**:
+```
+ResolveRecipeResponse
+  ├── resolution_source: "harbor_cache" | "external_source" | "not_found"
+  └── packages[]  (conda/micromamba/mirror 전용)
+        └── PackageResolution
+              ├── name, version
+              └── candidates[]  ← build string 후보 목록
+                    └── {build_string, full_pin, channel}
+```
+
+Harbor cache 명중 시 candidates는 1개 (자동 선택). 외부 소스 조회 시 복수 가능 → NodeKit이 목록 표시.
+
 ---
 
 ## 5. 검증 계층 (L1~L5)
@@ -266,30 +309,36 @@ K8s Job으로 위임하지 않는다. rootless 실패 시 privileged fallback �
    ├── L1 정적 검증 (RequiredFields / ImageUri / PackageVersion)
    └── DockGuard .wasm 정책 검사 (WasmPolicyChecker)
 
-2. BuildRequest → gRPC :50051 → NodeVault BuildService
+2. NodeKit → NodeVault `ResolveRecipe` (사전 조회, §4.9)
+   ├── Harbor에 동일 tool+version 이미지 있으면 → artifact 정보 추출 (후보 1개)
+   ├── 없으면 + 열린망 → 외부 소스 조회 → 후보 목록 반환
+   └── 없으면 + 폐쇄망 → InvalidArgument (관리자 Harbor 사전 등록 필요)
+   → NodeKit이 사용자에게 후보 표시·확인 후 BuildRequest 생성
+
+3. BuildRequest → gRPC :50051 → NodeVault BuildService
    ├── L2: podbridge5 in-process 이미지 빌드 → Harbor push → digest 획득
    ├── L3: K8s Job dry-run (Job manifest 검증)
    └── L4: K8s smoke run (실제 컨테이너 실행 확인)
 
-3. 등록
+4. 등록
    ├── pkg/catalog: CAS JSON 저장 (assets/catalog/{casHash}.tooldefinition)
    ├── pkg/index: vault-index.json append
    │     lifecycle_phase = Active, integrity_health = Partial
    └── pkg/oras → sori.PushToolSpecReferrer() → Harbor
          integrity_health = Healthy (referrer 첨부 완료)
 
-4. BuildEvent 스트림 → NodeKit 빌드 로그 표시
+5. BuildEvent 스트림 → NodeKit 빌드 로그 표시
 
-5. NodeKit AdminToolList
+6. NodeKit AdminToolList
    └── GET /v1/catalog/tools → NodePalette → index.Store.ListActive()
 
 [Sprint 2 이후 — Validator/Profiler hook]
-6. pkg/profiler: 등록 후 dry-run profile 실행
+7. pkg/profiler: 등록 후 dry-run profile 실행
    └── sori.PushToolProfileReferrer() → Harbor toolprofile referrer
    └── index.Entry.ObservedProfileDigest 갱신
 
 [병렬 트랙 이후 — Security Scan]
-7. trivy-operator VulnerabilityReport CR 조회 → summary 추출
+8. trivy-operator VulnerabilityReport CR 조회 → summary 추출
    └── sori.PushSecurityReferrer() → Harbor security referrer
    └── index.Entry.SecurityScanDigest 갱신
 ```

@@ -263,6 +263,31 @@ Phase 1 이후 병행 가능.
 
 ---
 
+### 병렬 트랙 D — Recipe 재현성 해소 (ResolveRecipe)
+
+**배경**: 사용자는 툴 이름과 버전만 입력한다. recipe variant에 따라 conda build string, BioContainer 이미지 후보 등 결정이 필요한 artifact가 다르다. Dockerfile fallback(사용자 직접 작성)과 source build(checksum 고정)를 제외한 4개 variant가 대상이다. NodeVault `ResolveRecipe` RPC가 Harbor 우선 조회로 담당한다.
+
+| 항목 | 내용 | 우선순위 |
+|------|------|---------|
+| proto: `ResolveRecipe` RPC 추가 | `ResolveRecipeRequest` / `ResolveRecipeResponse` / `PackageResolution` / `BuildStringCandidate` 메시지 정의 | P2 |
+| NodeVault Harbor 조회 | Harbor에서 동일 tool+version 이미지 탐색 → 이미지 메타데이터에서 artifact 정보 추출 → 후보 1개 반환 | P2 |
+| 열린망 외부 소스 fallback (conda/micromamba/mirror) | Harbor 미존재 + 열린망 → conda 채널 repodata 조회 → build string 후보 목록 반환 | P2 |
+| 열린망 외부 소스 fallback (BioContainer) | Harbor 미존재 + 열린망 → BioContainers registry 조회 → 이미지 후보 반환 | P3 |
+| 폐쇄망 에러 응답 | Harbor 미존재 + 폐쇄망 → `InvalidArgument` ("Harbor 사전 등록 필요") | P2 |
+| NodeKit UX — 후보 표시·선택 | NodeVault 반환 candidates를 NodeKit이 목록으로 표시 → 사용자 선택 → BuildRequest 생성 | P2 |
+| NodeKit L1 완화 ✓ | `PackageVersionValidator`: `=version=build` 강제 → `=version` 형식만 요구 (구현 완료) | ✓ |
+
+**완료 판정**
+
+- [ ] proto: `ResolveRecipe` RPC, `PackageResolution`, `BuildStringCandidate` 메시지 추가
+- [ ] `bwa=0.7.17` 입력 → Harbor 캐시 명중 시 build string 1개 반환
+- [ ] Harbor 미존재 + 열린망 → conda 채널에서 build string 후보 목록 반환
+- [ ] Harbor 미존재 + 폐쇄망 → `InvalidArgument` 반환
+- [ ] candidates 복수 시 NodeKit이 목록 표시 → 사용자 선택 → BuildRequest 고정 확인
+- [ ] NodeKit `PackageVersionValidator` 테스트: `=version` 통과, 버전 미고정 거부 ✓
+
+---
+
 ## 전체 우선순위 요약
 
 ```
@@ -280,7 +305,8 @@ Phase 1 이후 병행 가능.
 단기 (P2)
   └── 트랙 B: L5-a sample fixture (NodeSentinel 작업 — NodeVault 변경 없음)
 
-중기 (P3)
+중기 (P2/P3)
+  ├── 트랙 D: Build String 해소 (conda 재현성) ← NodeVault + NodeKit 동시 작업
   ├── Phase 4: 캐시 계층
   ├── Phase 5: Record/Certification 통합 검증
   └── 트랙 C: 운영 안정화

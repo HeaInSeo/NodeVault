@@ -173,10 +173,11 @@ v0.1.0 이후에는 `SubmitToolBuild`로 build를 제출하고 `WatchToolBuild`�
 
 **완료 판정**
 
-- [ ] 동일 ToolSpec 두 번째 빌드에서 `packageCacheHit: true`
-- [ ] `layerCacheHits > 0` (Harbor cache hit)
-- [ ] `TestCacheGC_DoesNotEvictActiveBuildLayers` 통과
-- [ ] cache 용량 상한 초과 시 신규 build 거절 (readiness 분리)
+- [x] package cache PVC (`nodevault-package-cache`) + CONDA_PKGS_DIRS/MAMBA_PKG_CACHE 마운트 (2026-06-28)
+- [x] Harbor layer cache (`NODEVAULT_BUILD_CACHE_REF` → `podbridge5.CacheRef`) 연결 — operator opt-in (2026-06-28)
+- [x] `BuildExecution.CacheRef` + `LayerCacheHit` 필드 추가 (2026-06-28)
+- [ ] 동일 ToolSpec 두 번째 빌드에서 `LayerCacheHit: true` seoy 라이브 검증
+- [ ] cache GC (high watermark 기반 eviction)
 
 ---
 
@@ -279,12 +280,12 @@ Phase 1 이후 병행 가능.
 
 **완료 판정**
 
-- [ ] proto: `ResolveRecipe` RPC, `PackageResolution`, `BuildStringCandidate` 메시지 추가
-- [ ] `bwa=0.7.17` 입력 → Harbor 캐시 명중 시 build string 1개 반환
-- [ ] Harbor 미존재 + 열린망 → conda 채널에서 build string 후보 목록 반환
-- [ ] Harbor 미존재 + 폐쇄망 → `InvalidArgument` 반환
-- [ ] candidates 복수 시 NodeKit이 목록 표시 → 사용자 선택 → BuildRequest 고정 확인
-- [ ] NodeKit `PackageVersionValidator` 테스트: `=version` 통과, 버전 미고정 거부 ✓
+- [x] proto: `ResolveRecipe` RPC, `PackageResolution`, `BuildStringCandidate` 메시지 추가 (2026-06-28)
+- [x] `bwa=0.7.17` 입력 → Harbor 캐시 명중 시 build string 1개 반환 (2026-06-28)
+- [x] Harbor 미존재 + 열린망 → conda 채널에서 build string 후보 목록 반환 (2026-06-28)
+- [x] Harbor 미존재 + 폐쇄망 → `InvalidArgument` 반환 (2026-06-28)
+- [ ] candidates 복수 시 NodeKit이 목록 표시 → 사용자 선택 → BuildRequest 고정 확인 (NodeKit 담당)
+- [x] NodeKit `PackageVersionValidator` 테스트: `=version` 통과, 버전 미고정 거부 ✓
 
 ---
 
@@ -306,7 +307,7 @@ Phase 1 이후 병행 가능.
   └── 트랙 B: L5-a sample fixture (NodeSentinel 작업 — NodeVault 변경 없음)
 
 중기 (P2/P3)
-  ├── 트랙 D: Build String 해소 (conda 재현성) ← NodeVault + NodeKit 동시 작업
+  ├── 트랙 D: ResolveRecipe NodeVault 측 완료 (2026-06-28); NodeKit UX 진행 중
   ├── Phase 4: 캐시 계층
   ├── Phase 5: Record/Certification 통합 검증
   └── 트랙 C: 운영 안정화

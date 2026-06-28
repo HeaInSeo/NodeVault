@@ -345,10 +345,14 @@ func (s *Service) buildExecution() *index.BuildExecution {
 		return nil
 	}
 	hostUsers := false
-	return &index.BuildExecution{
+	exec := &index.BuildExecution{
 		Mode: backendInPodBuildah, HostUsers: &hostUsers,
 		StorageDriver: "overlay", Isolation: "chroot",
 	}
+	if ref := layerCacheRef(); ref != "" {
+		exec.CacheRef = ref
+	}
+	return exec
 }
 
 // builderBackendName returns a human-readable identifier of the active build backend,

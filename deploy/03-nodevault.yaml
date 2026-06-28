@@ -61,6 +61,20 @@ spec:
     requests:
       storage: 5Gi
 ---
+# Package manager download cache (conda/micromamba).
+# Survives Pod restarts so successive builds skip re-downloading packages.
+# Size: adjust based on expected package footprint per tool family.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nodevault-package-cache
+  namespace: nodevault-system
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 30Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -171,6 +185,19 @@ spec:
             - name: NODEVAULT_BUILD_STATE_DB
               value: "/data/build-state.db"
 
+            # Package manager cache directories (conda/micromamba).
+            # Both tools respect CONDA_PKGS_DIRS; micromamba also checks MAMBA_PKG_CACHE.
+            - name: CONDA_PKGS_DIRS
+              value: "/var/cache/nodevault/packages/conda"
+            - name: MAMBA_PKG_CACHE
+              value: "/var/cache/nodevault/packages/conda"
+
+            # Harbor layer cache for --cache-from/--cache-to (optional).
+            # Set to e.g. "harbor.lab.local/nodevault-cache/layers:latest" to enable.
+            # Leave empty (default) to build without a remote layer cache.
+            # - name: NODEVAULT_BUILD_CACHE_REF
+            #   value: "harbor.lab.local/nodevault-cache/layers:latest"
+
           securityContext:
             privileged: false
             allowPrivilegeEscalation: false
@@ -229,6 +256,8 @@ spec:
             - name: harbor-ca
               mountPath: /etc/containers/certs.d/harbor.lab.local
               readOnly: true
+            - name: package-cache
+              mountPath: /var/cache/nodevault/packages
 
           resources:
             requests:
@@ -274,6 +303,9 @@ spec:
         - name: harbor-ca
           secret:
             secretName: nodevault-harbor-ca
+        - name: package-cache
+          persistentVolumeClaim:
+            claimName: nodevault-package-cache
 
 ---
 # Explicit containers/storage configuration for the in-Pod builder.

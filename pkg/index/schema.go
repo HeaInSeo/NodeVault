@@ -125,6 +125,14 @@ type BuildExecution struct {
 	HostUsers     *bool  `json:"host_users,omitempty"`
 	StorageDriver string `json:"storage_driver,omitempty"`
 	Isolation     string `json:"isolation,omitempty"`
+
+	// CacheRef is the Harbor reference used for --cache-from/--cache-to.
+	// Empty when layer cache was not configured for this build.
+	CacheRef string `json:"cache_ref,omitempty"`
+
+	// LayerCacheHit is true when at least one layer was served from the cache.
+	// nil means the build predates cache tracking (backward compatible).
+	LayerCacheHit *bool `json:"layer_cache_hit,omitempty"`
 }
 
 // ToolBuildRecord captures the outcome of a single build execution.

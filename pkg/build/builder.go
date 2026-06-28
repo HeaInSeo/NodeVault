@@ -85,7 +85,11 @@ func (b *podbridge5Builder) Build(
 	// capabilities, and nesting a userxattr overlay on top of containerd's
 	// nouserxattr root overlay fails with EINVAL. buildContextDir sits on the
 	// /tmp emptyDir mount (see deploy/03-nodevault.yaml), so no nesting occurs.
-	cfg := podbridge5.UserNamespaceBuildConfig{OutputRef: outputRef, ContextDirectory: buildContextDir}
+	cfg := podbridge5.UserNamespaceBuildConfig{
+		OutputRef:        outputRef,
+		ContextDirectory: buildContextDir,
+		CacheRef:         layerCacheRef(),
+	}
 	imageID, _, err = podbridge5.BuildDockerfileContentUserNamespace(ctx, b.store, dockerfileContent, cfg)
 	if err != nil {
 		return "", "", fmt.Errorf("build image: %w", err)
@@ -95,6 +99,13 @@ func (b *podbridge5Builder) Build(
 		return "", "", fmt.Errorf("push image: %w", err)
 	}
 	return imageID, remoteDigest, nil
+}
+
+// layerCacheRef returns the operator-configured Harbor cache reference for
+// --cache-from/--cache-to, or empty string when not configured.
+// Set NODEVAULT_BUILD_CACHE_REF to e.g. "harbor.lab.local/nodevault-cache/layers:latest".
+func layerCacheRef() string {
+	return os.Getenv("NODEVAULT_BUILD_CACHE_REF")
 }
 
 func (b *podbridge5Builder) Close() error {

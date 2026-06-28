@@ -259,8 +259,12 @@ Phase 1 이후 병행 가능.
 |------|------|---------|
 | ValidateService RBAC 이관 | L3/L4 Job 권한 NodeVault SA → NodeSentinel SA | P3 |
 | Harbor 인증 Secret 통합 | buildah용 + ORAS용 분리 → 단일 정리 | P3 |
-| Data write path | DataRegisterRequest gRPC 경로 완성 | P3 |
+| Data write path | DataRegisterRequest gRPC 경로 완성 | ✓ |
 | DagEdit ↔ NodePalette 연결 | GET /v1/palette/tools → casHash pin | P4 |
+
+**완료 판정**
+
+- [x] DataRegisterRequest gRPC 경로 완성 — `DataRegistryService.RegisterData/GetData/ListData` + `cmd/controlplane/main.go:RegisterDataRegistryServiceServer` (2026-06-28)
 
 ---
 
@@ -310,7 +314,7 @@ Phase 1 이후 병행 가능.
   ├── 트랙 D: ResolveRecipe NodeVault 측 완료 (2026-06-28); NodeKit UX 진행 중
   ├── Phase 4: 캐시 계층
   ├── Phase 5: Record/Certification 통합 검증
-  └── 트랙 C: 운영 안정화
+  └── 트랙 C: 운영 안정화 (Data write path 완료; RBAC·Secret·DagEdit 미완)
 
 장기 (P4)
   └── Phase 6: Legacy API 축소

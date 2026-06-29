@@ -36,13 +36,10 @@ func newTestDeps(t *testing.T) (*index.Store, *catalog.Catalog) {
 func registerTool(t *testing.T, svc *catalog.ToolRegistryService, name, version string) string {
 	t.Helper()
 	resp, err := svc.RegisterTool(context.Background(), &nfv1.RegisterToolRequest{
-		ToolName: name,
-		Version:  version,
-		Digest:   "sha256:abc",
-		Display: &nfv1.DisplaySpec{
-			Label:    name + " " + version,
-			Category: "Test",
-		},
+		ToolName:  name,
+		Version:   version,
+		Digest:    "sha256:abc",
+		BuildKind: nfv1.BuildKind_BUILD_KIND_TOOLSPEC,
 	})
 	if err != nil {
 		t.Fatalf("RegisterTool %s: %v", name, err)
@@ -199,8 +196,9 @@ func TestGetTool_Found(t *testing.T) {
 	if item.LifecyclePhase != "Active" {
 		t.Errorf("LifecyclePhase: got %q want Active", item.LifecyclePhase)
 	}
-	if item.DisplayLabel != "hisat2 2.2.1" {
-		t.Errorf("DisplayLabel: got %q want 'hisat2 2.2.1'", item.DisplayLabel)
+	// DisplayLabel is populated via ToolFunctionSpec after dry-run, not at registration time.
+	if item.DisplayLabel != "" {
+		t.Errorf("DisplayLabel: got %q want empty (ToolFunctionSpec not yet set)", item.DisplayLabel)
 	}
 }
 

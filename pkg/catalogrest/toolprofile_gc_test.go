@@ -21,10 +21,10 @@ func newGCServer(t *testing.T) (*httptest.Server, *index.Store, string) {
 	svc := catalog.NewToolRegistryService(cat, store)
 
 	resp, err := svc.RegisterTool(context.Background(), &nfv1.RegisterToolRequest{
-		ToolName: "bwa-mem2",
-		Version:  "2.2.1",
-		Digest:   "sha256:subject-1",
-		Display:  &nfv1.DisplaySpec{Label: "bwa-mem2", Category: "Test"},
+		ToolName:  "bwa-mem2",
+		Version:   "2.2.1",
+		Digest:    "sha256:subject-1",
+		BuildKind: nfv1.BuildKind_BUILD_KIND_TOOLSPEC,
 	})
 	if err != nil {
 		t.Fatalf("RegisterTool: %v", err)

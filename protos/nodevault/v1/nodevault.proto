@@ -62,6 +62,15 @@ message ListPoliciesResponse {
   string bundle_version = 2;
 }
 
+// BuildKind identifies which image type a build produces.
+// TOOLSPEC builds a base image from a build recipe (dockerfile_content + environment_spec).
+// TOOLFUNCTIONSPEC builds a function image on top of a base image (base_image_digest + script + nan shim).
+enum BuildKind {
+  BUILD_KIND_UNSPECIFIED = 0;
+  BUILD_KIND_TOOLSPEC = 1;
+  BUILD_KIND_TOOLFUNCTIONSPEC = 2;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // BuildService — in-Pod podbridge5/Buildah orchestration
 // ─────────────────────────────────────────────────────────────────────────────
@@ -168,17 +177,19 @@ message BuildRequest {
   string tool_definition_id = 2;
   string tool_name = 3;
   string image_uri = 4;
-  string dockerfile_content = 5;
-  string script = 6;
-  string environment_spec = 9;
   string version = 10;
-  repeated PortSpec inputs = 12;
-  repeated PortSpec outputs = 13;
-  DisplaySpec display = 14;
-  string command = 15;
+  BuildKind kind = 16;
 
-  reserved 7, 8;
-  reserved "input_names", "output_names";
+  // BUILD_KIND_TOOLSPEC: base image from build recipe
+  string dockerfile_content = 5;
+  string environment_spec = 9;
+
+  // BUILD_KIND_TOOLFUNCTIONSPEC: function image on top of base image
+  string script = 6;
+  string base_image_digest = 17;
+
+  reserved 7, 8, 12, 13, 14, 15;
+  reserved "input_names", "output_names", "inputs", "outputs", "display", "command";
 }
 
 enum BuildEventKind {
@@ -253,13 +264,10 @@ message RegisterToolRequest {
   string environment_spec = 8;
   string version = 9;
   string stable_ref = 10;
-  repeated PortSpec inputs = 11;
-  repeated PortSpec outputs = 12;
-  DisplaySpec display = 13;
-  string command = 14;
+  BuildKind build_kind = 15;
 
-  reserved 6, 7;
-  reserved "input_names", "output_names";
+  reserved 6, 7, 11, 12, 13, 14;
+  reserved "input_names", "output_names", "inputs", "outputs", "display", "command";
 }
 
 message RegisterToolResponse {
@@ -290,13 +298,17 @@ message RegisteredToolDefinition {
   string environment_spec = 9;
   string version = 10;
   string stable_ref = 11;
+  string lifecycle_phase = 15;
+  ValidationStatus validation = 16;
+  string integrity_health = 18;
+  BuildKind build_kind = 19;
+
+  // ToolFunctionSpec fields — populated after dry-run validation, not at build time.
+  // inputs (12), outputs (13), display (14), command (17) are reserved for ToolFunctionSpec.
   repeated PortSpec inputs = 12;
   repeated PortSpec outputs = 13;
   DisplaySpec display = 14;
-  string lifecycle_phase = 15;
-  ValidationStatus validation = 16;
   string command = 17;
-  string integrity_health = 18;
 
   reserved 6, 7;
   reserved "input_names", "output_names";

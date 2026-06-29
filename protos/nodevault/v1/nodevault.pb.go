@@ -21,6 +21,58 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// BuildKind identifies which image type a build produces.
+// TOOLSPEC builds a base image from a build recipe (dockerfile_content + environment_spec).
+// TOOLFUNCTIONSPEC builds a function image on top of a base image (base_image_digest + script + nan shim).
+type BuildKind int32
+
+const (
+	BuildKind_BUILD_KIND_UNSPECIFIED      BuildKind = 0
+	BuildKind_BUILD_KIND_TOOLSPEC         BuildKind = 1
+	BuildKind_BUILD_KIND_TOOLFUNCTIONSPEC BuildKind = 2
+)
+
+// Enum value maps for BuildKind.
+var (
+	BuildKind_name = map[int32]string{
+		0: "BUILD_KIND_UNSPECIFIED",
+		1: "BUILD_KIND_TOOLSPEC",
+		2: "BUILD_KIND_TOOLFUNCTIONSPEC",
+	}
+	BuildKind_value = map[string]int32{
+		"BUILD_KIND_UNSPECIFIED":      0,
+		"BUILD_KIND_TOOLSPEC":         1,
+		"BUILD_KIND_TOOLFUNCTIONSPEC": 2,
+	}
+)
+
+func (x BuildKind) Enum() *BuildKind {
+	p := new(BuildKind)
+	*p = x
+	return p
+}
+
+func (x BuildKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (BuildKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_nodevault_v1_nodevault_proto_enumTypes[0].Descriptor()
+}
+
+func (BuildKind) Type() protoreflect.EnumType {
+	return &file_nodevault_v1_nodevault_proto_enumTypes[0]
+}
+
+func (x BuildKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use BuildKind.Descriptor instead.
+func (BuildKind) EnumDescriptor() ([]byte, []int) {
+	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{0}
+}
+
 type RecipeVariant int32
 
 const (
@@ -60,11 +112,11 @@ func (x RecipeVariant) String() string {
 }
 
 func (RecipeVariant) Descriptor() protoreflect.EnumDescriptor {
-	return file_nodevault_v1_nodevault_proto_enumTypes[0].Descriptor()
+	return file_nodevault_v1_nodevault_proto_enumTypes[1].Descriptor()
 }
 
 func (RecipeVariant) Type() protoreflect.EnumType {
-	return &file_nodevault_v1_nodevault_proto_enumTypes[0]
+	return &file_nodevault_v1_nodevault_proto_enumTypes[1]
 }
 
 func (x RecipeVariant) Number() protoreflect.EnumNumber {
@@ -73,7 +125,7 @@ func (x RecipeVariant) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RecipeVariant.Descriptor instead.
 func (RecipeVariant) EnumDescriptor() ([]byte, []int) {
-	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{0}
+	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{1}
 }
 
 type BuildEventKind int32
@@ -124,11 +176,11 @@ func (x BuildEventKind) String() string {
 }
 
 func (BuildEventKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_nodevault_v1_nodevault_proto_enumTypes[1].Descriptor()
+	return file_nodevault_v1_nodevault_proto_enumTypes[2].Descriptor()
 }
 
 func (BuildEventKind) Type() protoreflect.EnumType {
-	return &file_nodevault_v1_nodevault_proto_enumTypes[1]
+	return &file_nodevault_v1_nodevault_proto_enumTypes[2]
 }
 
 func (x BuildEventKind) Number() protoreflect.EnumNumber {
@@ -137,7 +189,7 @@ func (x BuildEventKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use BuildEventKind.Descriptor instead.
 func (BuildEventKind) EnumDescriptor() ([]byte, []int) {
-	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{1}
+	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{2}
 }
 
 type PortSpec struct {
@@ -1353,21 +1405,21 @@ func (x *ResolveRecipeResponse) GetPackages() []*PackageResolution {
 }
 
 type BuildRequest struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	RequestId         string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
-	ToolDefinitionId  string                 `protobuf:"bytes,2,opt,name=tool_definition_id,json=toolDefinitionId,proto3" json:"tool_definition_id,omitempty"`
-	ToolName          string                 `protobuf:"bytes,3,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
-	ImageUri          string                 `protobuf:"bytes,4,opt,name=image_uri,json=imageUri,proto3" json:"image_uri,omitempty"`
-	DockerfileContent string                 `protobuf:"bytes,5,opt,name=dockerfile_content,json=dockerfileContent,proto3" json:"dockerfile_content,omitempty"`
-	Script            string                 `protobuf:"bytes,6,opt,name=script,proto3" json:"script,omitempty"`
-	EnvironmentSpec   string                 `protobuf:"bytes,9,opt,name=environment_spec,json=environmentSpec,proto3" json:"environment_spec,omitempty"`
-	Version           string                 `protobuf:"bytes,10,opt,name=version,proto3" json:"version,omitempty"`
-	Inputs            []*PortSpec            `protobuf:"bytes,12,rep,name=inputs,proto3" json:"inputs,omitempty"`
-	Outputs           []*PortSpec            `protobuf:"bytes,13,rep,name=outputs,proto3" json:"outputs,omitempty"`
-	Display           *DisplaySpec           `protobuf:"bytes,14,opt,name=display,proto3" json:"display,omitempty"`
-	Command           string                 `protobuf:"bytes,15,opt,name=command,proto3" json:"command,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	RequestId        string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	ToolDefinitionId string                 `protobuf:"bytes,2,opt,name=tool_definition_id,json=toolDefinitionId,proto3" json:"tool_definition_id,omitempty"`
+	ToolName         string                 `protobuf:"bytes,3,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	ImageUri         string                 `protobuf:"bytes,4,opt,name=image_uri,json=imageUri,proto3" json:"image_uri,omitempty"`
+	Version          string                 `protobuf:"bytes,10,opt,name=version,proto3" json:"version,omitempty"`
+	Kind             BuildKind              `protobuf:"varint,16,opt,name=kind,proto3,enum=nodevault.v1.BuildKind" json:"kind,omitempty"`
+	// BUILD_KIND_TOOLSPEC: base image from build recipe
+	DockerfileContent string `protobuf:"bytes,5,opt,name=dockerfile_content,json=dockerfileContent,proto3" json:"dockerfile_content,omitempty"`
+	EnvironmentSpec   string `protobuf:"bytes,9,opt,name=environment_spec,json=environmentSpec,proto3" json:"environment_spec,omitempty"`
+	// BUILD_KIND_TOOLFUNCTIONSPEC: function image on top of base image
+	Script          string `protobuf:"bytes,6,opt,name=script,proto3" json:"script,omitempty"`
+	BaseImageDigest string `protobuf:"bytes,17,opt,name=base_image_digest,json=baseImageDigest,proto3" json:"base_image_digest,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *BuildRequest) Reset() {
@@ -1428,16 +1480,23 @@ func (x *BuildRequest) GetImageUri() string {
 	return ""
 }
 
-func (x *BuildRequest) GetDockerfileContent() string {
+func (x *BuildRequest) GetVersion() string {
 	if x != nil {
-		return x.DockerfileContent
+		return x.Version
 	}
 	return ""
 }
 
-func (x *BuildRequest) GetScript() string {
+func (x *BuildRequest) GetKind() BuildKind {
 	if x != nil {
-		return x.Script
+		return x.Kind
+	}
+	return BuildKind_BUILD_KIND_UNSPECIFIED
+}
+
+func (x *BuildRequest) GetDockerfileContent() string {
+	if x != nil {
+		return x.DockerfileContent
 	}
 	return ""
 }
@@ -1449,37 +1508,16 @@ func (x *BuildRequest) GetEnvironmentSpec() string {
 	return ""
 }
 
-func (x *BuildRequest) GetVersion() string {
+func (x *BuildRequest) GetScript() string {
 	if x != nil {
-		return x.Version
+		return x.Script
 	}
 	return ""
 }
 
-func (x *BuildRequest) GetInputs() []*PortSpec {
+func (x *BuildRequest) GetBaseImageDigest() string {
 	if x != nil {
-		return x.Inputs
-	}
-	return nil
-}
-
-func (x *BuildRequest) GetOutputs() []*PortSpec {
-	if x != nil {
-		return x.Outputs
-	}
-	return nil
-}
-
-func (x *BuildRequest) GetDisplay() *DisplaySpec {
-	if x != nil {
-		return x.Display
-	}
-	return nil
-}
-
-func (x *BuildRequest) GetCommand() string {
-	if x != nil {
-		return x.Command
+		return x.BaseImageDigest
 	}
 	return ""
 }
@@ -1802,10 +1840,7 @@ type RegisterToolRequest struct {
 	EnvironmentSpec  string                 `protobuf:"bytes,8,opt,name=environment_spec,json=environmentSpec,proto3" json:"environment_spec,omitempty"`
 	Version          string                 `protobuf:"bytes,9,opt,name=version,proto3" json:"version,omitempty"`
 	StableRef        string                 `protobuf:"bytes,10,opt,name=stable_ref,json=stableRef,proto3" json:"stable_ref,omitempty"`
-	Inputs           []*PortSpec            `protobuf:"bytes,11,rep,name=inputs,proto3" json:"inputs,omitempty"`
-	Outputs          []*PortSpec            `protobuf:"bytes,12,rep,name=outputs,proto3" json:"outputs,omitempty"`
-	Display          *DisplaySpec           `protobuf:"bytes,13,opt,name=display,proto3" json:"display,omitempty"`
-	Command          string                 `protobuf:"bytes,14,opt,name=command,proto3" json:"command,omitempty"`
+	BuildKind        BuildKind              `protobuf:"varint,15,opt,name=build_kind,json=buildKind,proto3,enum=nodevault.v1.BuildKind" json:"build_kind,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -1896,32 +1931,11 @@ func (x *RegisterToolRequest) GetStableRef() string {
 	return ""
 }
 
-func (x *RegisterToolRequest) GetInputs() []*PortSpec {
+func (x *RegisterToolRequest) GetBuildKind() BuildKind {
 	if x != nil {
-		return x.Inputs
+		return x.BuildKind
 	}
-	return nil
-}
-
-func (x *RegisterToolRequest) GetOutputs() []*PortSpec {
-	if x != nil {
-		return x.Outputs
-	}
-	return nil
-}
-
-func (x *RegisterToolRequest) GetDisplay() *DisplaySpec {
-	if x != nil {
-		return x.Display
-	}
-	return nil
-}
-
-func (x *RegisterToolRequest) GetCommand() string {
-	if x != nil {
-		return x.Command
-	}
-	return ""
+	return BuildKind_BUILD_KIND_UNSPECIFIED
 }
 
 type RegisterToolResponse struct {
@@ -2127,15 +2141,18 @@ type RegisteredToolDefinition struct {
 	EnvironmentSpec  string                 `protobuf:"bytes,9,opt,name=environment_spec,json=environmentSpec,proto3" json:"environment_spec,omitempty"`
 	Version          string                 `protobuf:"bytes,10,opt,name=version,proto3" json:"version,omitempty"`
 	StableRef        string                 `protobuf:"bytes,11,opt,name=stable_ref,json=stableRef,proto3" json:"stable_ref,omitempty"`
-	Inputs           []*PortSpec            `protobuf:"bytes,12,rep,name=inputs,proto3" json:"inputs,omitempty"`
-	Outputs          []*PortSpec            `protobuf:"bytes,13,rep,name=outputs,proto3" json:"outputs,omitempty"`
-	Display          *DisplaySpec           `protobuf:"bytes,14,opt,name=display,proto3" json:"display,omitempty"`
 	LifecyclePhase   string                 `protobuf:"bytes,15,opt,name=lifecycle_phase,json=lifecyclePhase,proto3" json:"lifecycle_phase,omitempty"`
 	Validation       *ValidationStatus      `protobuf:"bytes,16,opt,name=validation,proto3" json:"validation,omitempty"`
-	Command          string                 `protobuf:"bytes,17,opt,name=command,proto3" json:"command,omitempty"`
 	IntegrityHealth  string                 `protobuf:"bytes,18,opt,name=integrity_health,json=integrityHealth,proto3" json:"integrity_health,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	BuildKind        BuildKind              `protobuf:"varint,19,opt,name=build_kind,json=buildKind,proto3,enum=nodevault.v1.BuildKind" json:"build_kind,omitempty"`
+	// ToolFunctionSpec fields — populated after dry-run validation, not at build time.
+	// inputs (12), outputs (13), display (14), command (17) are reserved for ToolFunctionSpec.
+	Inputs        []*PortSpec  `protobuf:"bytes,12,rep,name=inputs,proto3" json:"inputs,omitempty"`
+	Outputs       []*PortSpec  `protobuf:"bytes,13,rep,name=outputs,proto3" json:"outputs,omitempty"`
+	Display       *DisplaySpec `protobuf:"bytes,14,opt,name=display,proto3" json:"display,omitempty"`
+	Command       string       `protobuf:"bytes,17,opt,name=command,proto3" json:"command,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RegisteredToolDefinition) Reset() {
@@ -2231,6 +2248,34 @@ func (x *RegisteredToolDefinition) GetStableRef() string {
 	return ""
 }
 
+func (x *RegisteredToolDefinition) GetLifecyclePhase() string {
+	if x != nil {
+		return x.LifecyclePhase
+	}
+	return ""
+}
+
+func (x *RegisteredToolDefinition) GetValidation() *ValidationStatus {
+	if x != nil {
+		return x.Validation
+	}
+	return nil
+}
+
+func (x *RegisteredToolDefinition) GetIntegrityHealth() string {
+	if x != nil {
+		return x.IntegrityHealth
+	}
+	return ""
+}
+
+func (x *RegisteredToolDefinition) GetBuildKind() BuildKind {
+	if x != nil {
+		return x.BuildKind
+	}
+	return BuildKind_BUILD_KIND_UNSPECIFIED
+}
+
 func (x *RegisteredToolDefinition) GetInputs() []*PortSpec {
 	if x != nil {
 		return x.Inputs
@@ -2252,30 +2297,9 @@ func (x *RegisteredToolDefinition) GetDisplay() *DisplaySpec {
 	return nil
 }
 
-func (x *RegisteredToolDefinition) GetLifecyclePhase() string {
-	if x != nil {
-		return x.LifecyclePhase
-	}
-	return ""
-}
-
-func (x *RegisteredToolDefinition) GetValidation() *ValidationStatus {
-	if x != nil {
-		return x.Validation
-	}
-	return nil
-}
-
 func (x *RegisteredToolDefinition) GetCommand() string {
 	if x != nil {
 		return x.Command
-	}
-	return ""
-}
-
-func (x *RegisteredToolDefinition) GetIntegrityHealth() string {
-	if x != nil {
-		return x.IntegrityHealth
 	}
 	return ""
 }
@@ -3951,22 +3975,20 @@ const file_nodevault_v1_nodevault_proto_rawDesc = "" +
 	"\x0eclosed_network\x18\b \x01(\bR\rclosedNetwork\"\x81\x01\n" +
 	"\x15ResolveRecipeResponse\x12+\n" +
 	"\x11resolution_source\x18\x01 \x01(\tR\x10resolutionSource\x12;\n" +
-	"\bpackages\x18\x02 \x03(\v2\x1f.nodevault.v1.PackageResolutionR\bpackages\"\xf9\x03\n" +
+	"\bpackages\x18\x02 \x03(\v2\x1f.nodevault.v1.PackageResolutionR\bpackages\"\xdc\x03\n" +
 	"\fBuildRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12,\n" +
 	"\x12tool_definition_id\x18\x02 \x01(\tR\x10toolDefinitionId\x12\x1b\n" +
 	"\ttool_name\x18\x03 \x01(\tR\btoolName\x12\x1b\n" +
-	"\timage_uri\x18\x04 \x01(\tR\bimageUri\x12-\n" +
-	"\x12dockerfile_content\x18\x05 \x01(\tR\x11dockerfileContent\x12\x16\n" +
-	"\x06script\x18\x06 \x01(\tR\x06script\x12)\n" +
-	"\x10environment_spec\x18\t \x01(\tR\x0fenvironmentSpec\x12\x18\n" +
+	"\timage_uri\x18\x04 \x01(\tR\bimageUri\x12\x18\n" +
 	"\aversion\x18\n" +
-	" \x01(\tR\aversion\x12.\n" +
-	"\x06inputs\x18\f \x03(\v2\x16.nodevault.v1.PortSpecR\x06inputs\x120\n" +
-	"\aoutputs\x18\r \x03(\v2\x16.nodevault.v1.PortSpecR\aoutputs\x123\n" +
-	"\adisplay\x18\x0e \x01(\v2\x19.nodevault.v1.DisplaySpecR\adisplay\x12\x18\n" +
-	"\acommand\x18\x0f \x01(\tR\acommandJ\x04\b\a\x10\bJ\x04\b\b\x10\tR\vinput_namesR\foutput_names\"\xc1\x01\n" +
+	" \x01(\tR\aversion\x12+\n" +
+	"\x04kind\x18\x10 \x01(\x0e2\x17.nodevault.v1.BuildKindR\x04kind\x12-\n" +
+	"\x12dockerfile_content\x18\x05 \x01(\tR\x11dockerfileContent\x12)\n" +
+	"\x10environment_spec\x18\t \x01(\tR\x0fenvironmentSpec\x12\x16\n" +
+	"\x06script\x18\x06 \x01(\tR\x06script\x12*\n" +
+	"\x11base_image_digest\x18\x11 \x01(\tR\x0fbaseImageDigestJ\x04\b\a\x10\bJ\x04\b\b\x10\tJ\x04\b\f\x10\rJ\x04\b\r\x10\x0eJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10R\vinput_namesR\foutput_namesR\x06inputsR\aoutputsR\adisplayR\acommand\"\xc1\x01\n" +
 	"\n" +
 	"BuildEvent\x120\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x1c.nodevault.v1.BuildEventKindR\x04kind\x12\x18\n" +
@@ -3991,7 +4013,7 @@ const file_nodevault_v1_nodevault_proto_rawDesc = "" +
 	"\texit_code\x18\x02 \x01(\x05R\bexitCode\x12\x1d\n" +
 	"\n" +
 	"log_output\x18\x03 \x01(\tR\tlogOutput\x12#\n" +
-	"\rerror_message\x18\x04 \x01(\tR\ferrorMessage\"\xf0\x03\n" +
+	"\rerror_message\x18\x04 \x01(\tR\ferrorMessage\"\xb2\x03\n" +
 	"\x13RegisterToolRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12,\n" +
@@ -4003,11 +4025,9 @@ const file_nodevault_v1_nodevault_proto_rawDesc = "" +
 	"\aversion\x18\t \x01(\tR\aversion\x12\x1d\n" +
 	"\n" +
 	"stable_ref\x18\n" +
-	" \x01(\tR\tstableRef\x12.\n" +
-	"\x06inputs\x18\v \x03(\v2\x16.nodevault.v1.PortSpecR\x06inputs\x120\n" +
-	"\aoutputs\x18\f \x03(\v2\x16.nodevault.v1.PortSpecR\aoutputs\x123\n" +
-	"\adisplay\x18\r \x01(\v2\x19.nodevault.v1.DisplaySpecR\adisplay\x12\x18\n" +
-	"\acommand\x18\x0e \x01(\tR\acommandJ\x04\b\x06\x10\aJ\x04\b\a\x10\bR\vinput_namesR\foutput_names\"m\n" +
+	" \x01(\tR\tstableRef\x126\n" +
+	"\n" +
+	"build_kind\x18\x0f \x01(\x0e2\x17.nodevault.v1.BuildKindR\tbuildKindJ\x04\b\x06\x10\aJ\x04\b\a\x10\bJ\x04\b\v\x10\fJ\x04\b\f\x10\rJ\x04\b\r\x10\x0eJ\x04\b\x0e\x10\x0fR\vinput_namesR\foutput_namesR\x06inputsR\aoutputsR\adisplayR\acommand\"m\n" +
 	"\x14RegisterToolResponse\x12\x19\n" +
 	"\bcas_hash\x18\x01 \x01(\tR\acasHash\x12:\n" +
 	"\x04tool\x18\x02 \x01(\v2&.nodevault.v1.RegisteredToolDefinitionR\x04tool\"+\n" +
@@ -4018,7 +4038,7 @@ const file_nodevault_v1_nodevault_proto_rawDesc = "" +
 	"stable_ref\x18\x01 \x01(\tR\tstableRef\x12#\n" +
 	"\rartifact_kind\x18\x02 \x01(\tR\fartifactKind\"Q\n" +
 	"\x11ListToolsResponse\x12<\n" +
-	"\x05tools\x18\x01 \x03(\v2&.nodevault.v1.RegisteredToolDefinitionR\x05tools\"\xaa\x05\n" +
+	"\x05tools\x18\x01 \x03(\v2&.nodevault.v1.RegisteredToolDefinitionR\x05tools\"\xe2\x05\n" +
 	"\x18RegisteredToolDefinition\x12\x19\n" +
 	"\bcas_hash\x18\x01 \x01(\tR\acasHash\x12,\n" +
 	"\x12tool_definition_id\x18\x02 \x01(\tR\x10toolDefinitionId\x12\x1b\n" +
@@ -4030,16 +4050,18 @@ const file_nodevault_v1_nodevault_proto_rawDesc = "" +
 	"\aversion\x18\n" +
 	" \x01(\tR\aversion\x12\x1d\n" +
 	"\n" +
-	"stable_ref\x18\v \x01(\tR\tstableRef\x12.\n" +
-	"\x06inputs\x18\f \x03(\v2\x16.nodevault.v1.PortSpecR\x06inputs\x120\n" +
-	"\aoutputs\x18\r \x03(\v2\x16.nodevault.v1.PortSpecR\aoutputs\x123\n" +
-	"\adisplay\x18\x0e \x01(\v2\x19.nodevault.v1.DisplaySpecR\adisplay\x12'\n" +
+	"stable_ref\x18\v \x01(\tR\tstableRef\x12'\n" +
 	"\x0flifecycle_phase\x18\x0f \x01(\tR\x0elifecyclePhase\x12>\n" +
 	"\n" +
 	"validation\x18\x10 \x01(\v2\x1e.nodevault.v1.ValidationStatusR\n" +
-	"validation\x12\x18\n" +
-	"\acommand\x18\x11 \x01(\tR\acommand\x12)\n" +
-	"\x10integrity_health\x18\x12 \x01(\tR\x0fintegrityHealthJ\x04\b\x06\x10\aJ\x04\b\a\x10\bR\vinput_namesR\foutput_names\"G\n" +
+	"validation\x12)\n" +
+	"\x10integrity_health\x18\x12 \x01(\tR\x0fintegrityHealth\x126\n" +
+	"\n" +
+	"build_kind\x18\x13 \x01(\x0e2\x17.nodevault.v1.BuildKindR\tbuildKind\x12.\n" +
+	"\x06inputs\x18\f \x03(\v2\x16.nodevault.v1.PortSpecR\x06inputs\x120\n" +
+	"\aoutputs\x18\r \x03(\v2\x16.nodevault.v1.PortSpecR\aoutputs\x123\n" +
+	"\adisplay\x18\x0e \x01(\v2\x19.nodevault.v1.DisplaySpecR\adisplay\x12\x18\n" +
+	"\acommand\x18\x11 \x01(\tR\acommandJ\x04\b\x06\x10\aJ\x04\b\a\x10\bR\vinput_namesR\foutput_names\"G\n" +
 	"\x12RetractToolRequest\x12\x19\n" +
 	"\bcas_hash\x18\x01 \x01(\tR\acasHash\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"Y\n" +
@@ -4178,7 +4200,11 @@ const file_nodevault_v1_nodevault_proto_rawDesc = "" +
 	"\amessage\x18\x01 \x01(\tR\amessage\"E\n" +
 	"\fPingResponse\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x12\x1b\n" +
-	"\tserver_id\x18\x02 \x01(\tR\bserverId*\xac\x01\n" +
+	"\tserver_id\x18\x02 \x01(\tR\bserverId*a\n" +
+	"\tBuildKind\x12\x1a\n" +
+	"\x16BUILD_KIND_UNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13BUILD_KIND_TOOLSPEC\x10\x01\x12\x1f\n" +
+	"\x1bBUILD_KIND_TOOLFUNCTIONSPEC\x10\x02*\xac\x01\n" +
 	"\rRecipeVariant\x12\x1e\n" +
 	"\x1aRECIPE_VARIANT_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14RECIPE_VARIANT_CONDA\x10\x01\x12\x1d\n" +
@@ -4237,146 +4263,144 @@ func file_nodevault_v1_nodevault_proto_rawDescGZIP() []byte {
 	return file_nodevault_v1_nodevault_proto_rawDescData
 }
 
-var file_nodevault_v1_nodevault_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_nodevault_v1_nodevault_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
 var file_nodevault_v1_nodevault_proto_msgTypes = make([]protoimpl.MessageInfo, 55)
 var file_nodevault_v1_nodevault_proto_goTypes = []any{
-	(RecipeVariant)(0),                 // 0: nodevault.v1.RecipeVariant
-	(BuildEventKind)(0),                // 1: nodevault.v1.BuildEventKind
-	(*PortSpec)(nil),                   // 2: nodevault.v1.PortSpec
-	(*DisplaySpec)(nil),                // 3: nodevault.v1.DisplaySpec
-	(*ValidationStatus)(nil),           // 4: nodevault.v1.ValidationStatus
-	(*GetPolicyBundleRequest)(nil),     // 5: nodevault.v1.GetPolicyBundleRequest
-	(*PolicyBundle)(nil),               // 6: nodevault.v1.PolicyBundle
-	(*ListPoliciesRequest)(nil),        // 7: nodevault.v1.ListPoliciesRequest
-	(*PolicyInfo)(nil),                 // 8: nodevault.v1.PolicyInfo
-	(*ListPoliciesResponse)(nil),       // 9: nodevault.v1.ListPoliciesResponse
-	(*ToolSpecRequest)(nil),            // 10: nodevault.v1.ToolSpecRequest
-	(*ResolvedToolSpecResponse)(nil),   // 11: nodevault.v1.ResolvedToolSpecResponse
-	(*SubmitToolBuildRequest)(nil),     // 12: nodevault.v1.SubmitToolBuildRequest
-	(*SubmitToolBuildResponse)(nil),    // 13: nodevault.v1.SubmitToolBuildResponse
-	(*WatchToolBuildRequest)(nil),      // 14: nodevault.v1.WatchToolBuildRequest
-	(*CancelToolBuildRequest)(nil),     // 15: nodevault.v1.CancelToolBuildRequest
-	(*CancelToolBuildResponse)(nil),    // 16: nodevault.v1.CancelToolBuildResponse
-	(*PackageSpec)(nil),                // 17: nodevault.v1.PackageSpec
-	(*BuildStringCandidate)(nil),       // 18: nodevault.v1.BuildStringCandidate
-	(*PackageResolution)(nil),          // 19: nodevault.v1.PackageResolution
-	(*ResolveRecipeRequest)(nil),       // 20: nodevault.v1.ResolveRecipeRequest
-	(*ResolveRecipeResponse)(nil),      // 21: nodevault.v1.ResolveRecipeResponse
-	(*BuildRequest)(nil),               // 22: nodevault.v1.BuildRequest
-	(*BuildEvent)(nil),                 // 23: nodevault.v1.BuildEvent
-	(*DryRunRequest)(nil),              // 24: nodevault.v1.DryRunRequest
-	(*DryRunResult)(nil),               // 25: nodevault.v1.DryRunResult
-	(*SmokeRunRequest)(nil),            // 26: nodevault.v1.SmokeRunRequest
-	(*SmokeRunResult)(nil),             // 27: nodevault.v1.SmokeRunResult
-	(*RegisterToolRequest)(nil),        // 28: nodevault.v1.RegisterToolRequest
-	(*RegisterToolResponse)(nil),       // 29: nodevault.v1.RegisterToolResponse
-	(*GetToolRequest)(nil),             // 30: nodevault.v1.GetToolRequest
-	(*ListToolsRequest)(nil),           // 31: nodevault.v1.ListToolsRequest
-	(*ListToolsResponse)(nil),          // 32: nodevault.v1.ListToolsResponse
-	(*RegisteredToolDefinition)(nil),   // 33: nodevault.v1.RegisteredToolDefinition
-	(*RetractToolRequest)(nil),         // 34: nodevault.v1.RetractToolRequest
-	(*RetractToolResponse)(nil),        // 35: nodevault.v1.RetractToolResponse
-	(*DeleteToolRequest)(nil),          // 36: nodevault.v1.DeleteToolRequest
-	(*DeleteToolResponse)(nil),         // 37: nodevault.v1.DeleteToolResponse
-	(*DataRegisterRequest)(nil),        // 38: nodevault.v1.DataRegisterRequest
-	(*DataRegisterResponse)(nil),       // 39: nodevault.v1.DataRegisterResponse
-	(*GetDataRequest)(nil),             // 40: nodevault.v1.GetDataRequest
-	(*ListDataRequest)(nil),            // 41: nodevault.v1.ListDataRequest
-	(*ListDataResponse)(nil),           // 42: nodevault.v1.ListDataResponse
-	(*RegisteredDataDefinition)(nil),   // 43: nodevault.v1.RegisteredDataDefinition
-	(*PortObservation)(nil),            // 44: nodevault.v1.PortObservation
-	(*ObservedIoProfile)(nil),          // 45: nodevault.v1.ObservedIoProfile
-	(*ObservedResourceProfile)(nil),    // 46: nodevault.v1.ObservedResourceProfile
-	(*ContractCheck)(nil),              // 47: nodevault.v1.ContractCheck
-	(*ToolCheckRecordRequest)(nil),     // 48: nodevault.v1.ToolCheckRecordRequest
-	(*ToolScanRecordRequest)(nil),      // 49: nodevault.v1.ToolScanRecordRequest
-	(*SubmitRecordResponse)(nil),       // 50: nodevault.v1.SubmitRecordResponse
-	(*ListCertifiedToolsRequest)(nil),  // 51: nodevault.v1.ListCertifiedToolsRequest
-	(*CertifiedToolEntry)(nil),         // 52: nodevault.v1.CertifiedToolEntry
-	(*ListCertifiedToolsResponse)(nil), // 53: nodevault.v1.ListCertifiedToolsResponse
-	(*PingRequest)(nil),                // 54: nodevault.v1.PingRequest
-	(*PingResponse)(nil),               // 55: nodevault.v1.PingResponse
-	nil,                                // 56: nodevault.v1.PortSpec.ConstraintsEntry
+	(BuildKind)(0),                     // 0: nodevault.v1.BuildKind
+	(RecipeVariant)(0),                 // 1: nodevault.v1.RecipeVariant
+	(BuildEventKind)(0),                // 2: nodevault.v1.BuildEventKind
+	(*PortSpec)(nil),                   // 3: nodevault.v1.PortSpec
+	(*DisplaySpec)(nil),                // 4: nodevault.v1.DisplaySpec
+	(*ValidationStatus)(nil),           // 5: nodevault.v1.ValidationStatus
+	(*GetPolicyBundleRequest)(nil),     // 6: nodevault.v1.GetPolicyBundleRequest
+	(*PolicyBundle)(nil),               // 7: nodevault.v1.PolicyBundle
+	(*ListPoliciesRequest)(nil),        // 8: nodevault.v1.ListPoliciesRequest
+	(*PolicyInfo)(nil),                 // 9: nodevault.v1.PolicyInfo
+	(*ListPoliciesResponse)(nil),       // 10: nodevault.v1.ListPoliciesResponse
+	(*ToolSpecRequest)(nil),            // 11: nodevault.v1.ToolSpecRequest
+	(*ResolvedToolSpecResponse)(nil),   // 12: nodevault.v1.ResolvedToolSpecResponse
+	(*SubmitToolBuildRequest)(nil),     // 13: nodevault.v1.SubmitToolBuildRequest
+	(*SubmitToolBuildResponse)(nil),    // 14: nodevault.v1.SubmitToolBuildResponse
+	(*WatchToolBuildRequest)(nil),      // 15: nodevault.v1.WatchToolBuildRequest
+	(*CancelToolBuildRequest)(nil),     // 16: nodevault.v1.CancelToolBuildRequest
+	(*CancelToolBuildResponse)(nil),    // 17: nodevault.v1.CancelToolBuildResponse
+	(*PackageSpec)(nil),                // 18: nodevault.v1.PackageSpec
+	(*BuildStringCandidate)(nil),       // 19: nodevault.v1.BuildStringCandidate
+	(*PackageResolution)(nil),          // 20: nodevault.v1.PackageResolution
+	(*ResolveRecipeRequest)(nil),       // 21: nodevault.v1.ResolveRecipeRequest
+	(*ResolveRecipeResponse)(nil),      // 22: nodevault.v1.ResolveRecipeResponse
+	(*BuildRequest)(nil),               // 23: nodevault.v1.BuildRequest
+	(*BuildEvent)(nil),                 // 24: nodevault.v1.BuildEvent
+	(*DryRunRequest)(nil),              // 25: nodevault.v1.DryRunRequest
+	(*DryRunResult)(nil),               // 26: nodevault.v1.DryRunResult
+	(*SmokeRunRequest)(nil),            // 27: nodevault.v1.SmokeRunRequest
+	(*SmokeRunResult)(nil),             // 28: nodevault.v1.SmokeRunResult
+	(*RegisterToolRequest)(nil),        // 29: nodevault.v1.RegisterToolRequest
+	(*RegisterToolResponse)(nil),       // 30: nodevault.v1.RegisterToolResponse
+	(*GetToolRequest)(nil),             // 31: nodevault.v1.GetToolRequest
+	(*ListToolsRequest)(nil),           // 32: nodevault.v1.ListToolsRequest
+	(*ListToolsResponse)(nil),          // 33: nodevault.v1.ListToolsResponse
+	(*RegisteredToolDefinition)(nil),   // 34: nodevault.v1.RegisteredToolDefinition
+	(*RetractToolRequest)(nil),         // 35: nodevault.v1.RetractToolRequest
+	(*RetractToolResponse)(nil),        // 36: nodevault.v1.RetractToolResponse
+	(*DeleteToolRequest)(nil),          // 37: nodevault.v1.DeleteToolRequest
+	(*DeleteToolResponse)(nil),         // 38: nodevault.v1.DeleteToolResponse
+	(*DataRegisterRequest)(nil),        // 39: nodevault.v1.DataRegisterRequest
+	(*DataRegisterResponse)(nil),       // 40: nodevault.v1.DataRegisterResponse
+	(*GetDataRequest)(nil),             // 41: nodevault.v1.GetDataRequest
+	(*ListDataRequest)(nil),            // 42: nodevault.v1.ListDataRequest
+	(*ListDataResponse)(nil),           // 43: nodevault.v1.ListDataResponse
+	(*RegisteredDataDefinition)(nil),   // 44: nodevault.v1.RegisteredDataDefinition
+	(*PortObservation)(nil),            // 45: nodevault.v1.PortObservation
+	(*ObservedIoProfile)(nil),          // 46: nodevault.v1.ObservedIoProfile
+	(*ObservedResourceProfile)(nil),    // 47: nodevault.v1.ObservedResourceProfile
+	(*ContractCheck)(nil),              // 48: nodevault.v1.ContractCheck
+	(*ToolCheckRecordRequest)(nil),     // 49: nodevault.v1.ToolCheckRecordRequest
+	(*ToolScanRecordRequest)(nil),      // 50: nodevault.v1.ToolScanRecordRequest
+	(*SubmitRecordResponse)(nil),       // 51: nodevault.v1.SubmitRecordResponse
+	(*ListCertifiedToolsRequest)(nil),  // 52: nodevault.v1.ListCertifiedToolsRequest
+	(*CertifiedToolEntry)(nil),         // 53: nodevault.v1.CertifiedToolEntry
+	(*ListCertifiedToolsResponse)(nil), // 54: nodevault.v1.ListCertifiedToolsResponse
+	(*PingRequest)(nil),                // 55: nodevault.v1.PingRequest
+	(*PingResponse)(nil),               // 56: nodevault.v1.PingResponse
+	nil,                                // 57: nodevault.v1.PortSpec.ConstraintsEntry
 }
 var file_nodevault_v1_nodevault_proto_depIdxs = []int32{
-	56, // 0: nodevault.v1.PortSpec.constraints:type_name -> nodevault.v1.PortSpec.ConstraintsEntry
-	8,  // 1: nodevault.v1.ListPoliciesResponse.policies:type_name -> nodevault.v1.PolicyInfo
-	18, // 2: nodevault.v1.PackageResolution.candidates:type_name -> nodevault.v1.BuildStringCandidate
-	0,  // 3: nodevault.v1.ResolveRecipeRequest.variant:type_name -> nodevault.v1.RecipeVariant
-	17, // 4: nodevault.v1.ResolveRecipeRequest.packages:type_name -> nodevault.v1.PackageSpec
-	19, // 5: nodevault.v1.ResolveRecipeResponse.packages:type_name -> nodevault.v1.PackageResolution
-	2,  // 6: nodevault.v1.BuildRequest.inputs:type_name -> nodevault.v1.PortSpec
-	2,  // 7: nodevault.v1.BuildRequest.outputs:type_name -> nodevault.v1.PortSpec
-	3,  // 8: nodevault.v1.BuildRequest.display:type_name -> nodevault.v1.DisplaySpec
-	1,  // 9: nodevault.v1.BuildEvent.kind:type_name -> nodevault.v1.BuildEventKind
-	2,  // 10: nodevault.v1.RegisterToolRequest.inputs:type_name -> nodevault.v1.PortSpec
-	2,  // 11: nodevault.v1.RegisterToolRequest.outputs:type_name -> nodevault.v1.PortSpec
-	3,  // 12: nodevault.v1.RegisterToolRequest.display:type_name -> nodevault.v1.DisplaySpec
-	33, // 13: nodevault.v1.RegisterToolResponse.tool:type_name -> nodevault.v1.RegisteredToolDefinition
-	33, // 14: nodevault.v1.ListToolsResponse.tools:type_name -> nodevault.v1.RegisteredToolDefinition
-	2,  // 15: nodevault.v1.RegisteredToolDefinition.inputs:type_name -> nodevault.v1.PortSpec
-	2,  // 16: nodevault.v1.RegisteredToolDefinition.outputs:type_name -> nodevault.v1.PortSpec
-	3,  // 17: nodevault.v1.RegisteredToolDefinition.display:type_name -> nodevault.v1.DisplaySpec
-	4,  // 18: nodevault.v1.RegisteredToolDefinition.validation:type_name -> nodevault.v1.ValidationStatus
-	3,  // 19: nodevault.v1.DataRegisterRequest.display:type_name -> nodevault.v1.DisplaySpec
-	43, // 20: nodevault.v1.DataRegisterResponse.data:type_name -> nodevault.v1.RegisteredDataDefinition
-	43, // 21: nodevault.v1.ListDataResponse.data:type_name -> nodevault.v1.RegisteredDataDefinition
-	3,  // 22: nodevault.v1.RegisteredDataDefinition.display:type_name -> nodevault.v1.DisplaySpec
-	44, // 23: nodevault.v1.ObservedIoProfile.inputs:type_name -> nodevault.v1.PortObservation
-	44, // 24: nodevault.v1.ObservedIoProfile.outputs:type_name -> nodevault.v1.PortObservation
-	45, // 25: nodevault.v1.ToolCheckRecordRequest.observed_io_profile:type_name -> nodevault.v1.ObservedIoProfile
-	46, // 26: nodevault.v1.ToolCheckRecordRequest.observed_resource_profile:type_name -> nodevault.v1.ObservedResourceProfile
-	47, // 27: nodevault.v1.ToolCheckRecordRequest.contract_check:type_name -> nodevault.v1.ContractCheck
-	52, // 28: nodevault.v1.ListCertifiedToolsResponse.tools:type_name -> nodevault.v1.CertifiedToolEntry
-	5,  // 29: nodevault.v1.PolicyService.GetPolicyBundle:input_type -> nodevault.v1.GetPolicyBundleRequest
-	7,  // 30: nodevault.v1.PolicyService.ListPolicies:input_type -> nodevault.v1.ListPoliciesRequest
-	22, // 31: nodevault.v1.BuildService.BuildAndRegister:input_type -> nodevault.v1.BuildRequest
-	10, // 32: nodevault.v1.BuildService.ResolveToolSpec:input_type -> nodevault.v1.ToolSpecRequest
-	12, // 33: nodevault.v1.BuildService.SubmitToolBuild:input_type -> nodevault.v1.SubmitToolBuildRequest
-	14, // 34: nodevault.v1.BuildService.WatchToolBuild:input_type -> nodevault.v1.WatchToolBuildRequest
-	15, // 35: nodevault.v1.BuildService.CancelToolBuild:input_type -> nodevault.v1.CancelToolBuildRequest
-	20, // 36: nodevault.v1.BuildService.ResolveRecipe:input_type -> nodevault.v1.ResolveRecipeRequest
-	24, // 37: nodevault.v1.ValidateService.DryRun:input_type -> nodevault.v1.DryRunRequest
-	26, // 38: nodevault.v1.ValidateService.SmokeRun:input_type -> nodevault.v1.SmokeRunRequest
-	28, // 39: nodevault.v1.ToolRegistryService.RegisterTool:input_type -> nodevault.v1.RegisterToolRequest
-	30, // 40: nodevault.v1.ToolRegistryService.GetTool:input_type -> nodevault.v1.GetToolRequest
-	31, // 41: nodevault.v1.ToolRegistryService.ListTools:input_type -> nodevault.v1.ListToolsRequest
-	34, // 42: nodevault.v1.ToolRegistryService.RetractTool:input_type -> nodevault.v1.RetractToolRequest
-	36, // 43: nodevault.v1.ToolRegistryService.DeleteTool:input_type -> nodevault.v1.DeleteToolRequest
-	38, // 44: nodevault.v1.DataRegistryService.RegisterData:input_type -> nodevault.v1.DataRegisterRequest
-	40, // 45: nodevault.v1.DataRegistryService.GetData:input_type -> nodevault.v1.GetDataRequest
-	41, // 46: nodevault.v1.DataRegistryService.ListData:input_type -> nodevault.v1.ListDataRequest
-	48, // 47: nodevault.v1.ValidationResultService.SubmitToolCheckRecord:input_type -> nodevault.v1.ToolCheckRecordRequest
-	49, // 48: nodevault.v1.ValidationResultService.SubmitToolScanRecord:input_type -> nodevault.v1.ToolScanRecordRequest
-	51, // 49: nodevault.v1.ValidationResultService.ListCertifiedTools:input_type -> nodevault.v1.ListCertifiedToolsRequest
-	54, // 50: nodevault.v1.PingService.Ping:input_type -> nodevault.v1.PingRequest
-	6,  // 51: nodevault.v1.PolicyService.GetPolicyBundle:output_type -> nodevault.v1.PolicyBundle
-	9,  // 52: nodevault.v1.PolicyService.ListPolicies:output_type -> nodevault.v1.ListPoliciesResponse
-	23, // 53: nodevault.v1.BuildService.BuildAndRegister:output_type -> nodevault.v1.BuildEvent
-	11, // 54: nodevault.v1.BuildService.ResolveToolSpec:output_type -> nodevault.v1.ResolvedToolSpecResponse
-	13, // 55: nodevault.v1.BuildService.SubmitToolBuild:output_type -> nodevault.v1.SubmitToolBuildResponse
-	23, // 56: nodevault.v1.BuildService.WatchToolBuild:output_type -> nodevault.v1.BuildEvent
-	16, // 57: nodevault.v1.BuildService.CancelToolBuild:output_type -> nodevault.v1.CancelToolBuildResponse
-	21, // 58: nodevault.v1.BuildService.ResolveRecipe:output_type -> nodevault.v1.ResolveRecipeResponse
-	25, // 59: nodevault.v1.ValidateService.DryRun:output_type -> nodevault.v1.DryRunResult
-	27, // 60: nodevault.v1.ValidateService.SmokeRun:output_type -> nodevault.v1.SmokeRunResult
-	29, // 61: nodevault.v1.ToolRegistryService.RegisterTool:output_type -> nodevault.v1.RegisterToolResponse
-	33, // 62: nodevault.v1.ToolRegistryService.GetTool:output_type -> nodevault.v1.RegisteredToolDefinition
-	32, // 63: nodevault.v1.ToolRegistryService.ListTools:output_type -> nodevault.v1.ListToolsResponse
-	35, // 64: nodevault.v1.ToolRegistryService.RetractTool:output_type -> nodevault.v1.RetractToolResponse
-	37, // 65: nodevault.v1.ToolRegistryService.DeleteTool:output_type -> nodevault.v1.DeleteToolResponse
-	39, // 66: nodevault.v1.DataRegistryService.RegisterData:output_type -> nodevault.v1.DataRegisterResponse
-	43, // 67: nodevault.v1.DataRegistryService.GetData:output_type -> nodevault.v1.RegisteredDataDefinition
-	42, // 68: nodevault.v1.DataRegistryService.ListData:output_type -> nodevault.v1.ListDataResponse
-	50, // 69: nodevault.v1.ValidationResultService.SubmitToolCheckRecord:output_type -> nodevault.v1.SubmitRecordResponse
-	50, // 70: nodevault.v1.ValidationResultService.SubmitToolScanRecord:output_type -> nodevault.v1.SubmitRecordResponse
-	53, // 71: nodevault.v1.ValidationResultService.ListCertifiedTools:output_type -> nodevault.v1.ListCertifiedToolsResponse
-	55, // 72: nodevault.v1.PingService.Ping:output_type -> nodevault.v1.PingResponse
-	51, // [51:73] is the sub-list for method output_type
-	29, // [29:51] is the sub-list for method input_type
-	29, // [29:29] is the sub-list for extension type_name
-	29, // [29:29] is the sub-list for extension extendee
-	0,  // [0:29] is the sub-list for field type_name
+	57, // 0: nodevault.v1.PortSpec.constraints:type_name -> nodevault.v1.PortSpec.ConstraintsEntry
+	9,  // 1: nodevault.v1.ListPoliciesResponse.policies:type_name -> nodevault.v1.PolicyInfo
+	19, // 2: nodevault.v1.PackageResolution.candidates:type_name -> nodevault.v1.BuildStringCandidate
+	1,  // 3: nodevault.v1.ResolveRecipeRequest.variant:type_name -> nodevault.v1.RecipeVariant
+	18, // 4: nodevault.v1.ResolveRecipeRequest.packages:type_name -> nodevault.v1.PackageSpec
+	20, // 5: nodevault.v1.ResolveRecipeResponse.packages:type_name -> nodevault.v1.PackageResolution
+	0,  // 6: nodevault.v1.BuildRequest.kind:type_name -> nodevault.v1.BuildKind
+	2,  // 7: nodevault.v1.BuildEvent.kind:type_name -> nodevault.v1.BuildEventKind
+	0,  // 8: nodevault.v1.RegisterToolRequest.build_kind:type_name -> nodevault.v1.BuildKind
+	34, // 9: nodevault.v1.RegisterToolResponse.tool:type_name -> nodevault.v1.RegisteredToolDefinition
+	34, // 10: nodevault.v1.ListToolsResponse.tools:type_name -> nodevault.v1.RegisteredToolDefinition
+	5,  // 11: nodevault.v1.RegisteredToolDefinition.validation:type_name -> nodevault.v1.ValidationStatus
+	0,  // 12: nodevault.v1.RegisteredToolDefinition.build_kind:type_name -> nodevault.v1.BuildKind
+	3,  // 13: nodevault.v1.RegisteredToolDefinition.inputs:type_name -> nodevault.v1.PortSpec
+	3,  // 14: nodevault.v1.RegisteredToolDefinition.outputs:type_name -> nodevault.v1.PortSpec
+	4,  // 15: nodevault.v1.RegisteredToolDefinition.display:type_name -> nodevault.v1.DisplaySpec
+	4,  // 16: nodevault.v1.DataRegisterRequest.display:type_name -> nodevault.v1.DisplaySpec
+	44, // 17: nodevault.v1.DataRegisterResponse.data:type_name -> nodevault.v1.RegisteredDataDefinition
+	44, // 18: nodevault.v1.ListDataResponse.data:type_name -> nodevault.v1.RegisteredDataDefinition
+	4,  // 19: nodevault.v1.RegisteredDataDefinition.display:type_name -> nodevault.v1.DisplaySpec
+	45, // 20: nodevault.v1.ObservedIoProfile.inputs:type_name -> nodevault.v1.PortObservation
+	45, // 21: nodevault.v1.ObservedIoProfile.outputs:type_name -> nodevault.v1.PortObservation
+	46, // 22: nodevault.v1.ToolCheckRecordRequest.observed_io_profile:type_name -> nodevault.v1.ObservedIoProfile
+	47, // 23: nodevault.v1.ToolCheckRecordRequest.observed_resource_profile:type_name -> nodevault.v1.ObservedResourceProfile
+	48, // 24: nodevault.v1.ToolCheckRecordRequest.contract_check:type_name -> nodevault.v1.ContractCheck
+	53, // 25: nodevault.v1.ListCertifiedToolsResponse.tools:type_name -> nodevault.v1.CertifiedToolEntry
+	6,  // 26: nodevault.v1.PolicyService.GetPolicyBundle:input_type -> nodevault.v1.GetPolicyBundleRequest
+	8,  // 27: nodevault.v1.PolicyService.ListPolicies:input_type -> nodevault.v1.ListPoliciesRequest
+	23, // 28: nodevault.v1.BuildService.BuildAndRegister:input_type -> nodevault.v1.BuildRequest
+	11, // 29: nodevault.v1.BuildService.ResolveToolSpec:input_type -> nodevault.v1.ToolSpecRequest
+	13, // 30: nodevault.v1.BuildService.SubmitToolBuild:input_type -> nodevault.v1.SubmitToolBuildRequest
+	15, // 31: nodevault.v1.BuildService.WatchToolBuild:input_type -> nodevault.v1.WatchToolBuildRequest
+	16, // 32: nodevault.v1.BuildService.CancelToolBuild:input_type -> nodevault.v1.CancelToolBuildRequest
+	21, // 33: nodevault.v1.BuildService.ResolveRecipe:input_type -> nodevault.v1.ResolveRecipeRequest
+	25, // 34: nodevault.v1.ValidateService.DryRun:input_type -> nodevault.v1.DryRunRequest
+	27, // 35: nodevault.v1.ValidateService.SmokeRun:input_type -> nodevault.v1.SmokeRunRequest
+	29, // 36: nodevault.v1.ToolRegistryService.RegisterTool:input_type -> nodevault.v1.RegisterToolRequest
+	31, // 37: nodevault.v1.ToolRegistryService.GetTool:input_type -> nodevault.v1.GetToolRequest
+	32, // 38: nodevault.v1.ToolRegistryService.ListTools:input_type -> nodevault.v1.ListToolsRequest
+	35, // 39: nodevault.v1.ToolRegistryService.RetractTool:input_type -> nodevault.v1.RetractToolRequest
+	37, // 40: nodevault.v1.ToolRegistryService.DeleteTool:input_type -> nodevault.v1.DeleteToolRequest
+	39, // 41: nodevault.v1.DataRegistryService.RegisterData:input_type -> nodevault.v1.DataRegisterRequest
+	41, // 42: nodevault.v1.DataRegistryService.GetData:input_type -> nodevault.v1.GetDataRequest
+	42, // 43: nodevault.v1.DataRegistryService.ListData:input_type -> nodevault.v1.ListDataRequest
+	49, // 44: nodevault.v1.ValidationResultService.SubmitToolCheckRecord:input_type -> nodevault.v1.ToolCheckRecordRequest
+	50, // 45: nodevault.v1.ValidationResultService.SubmitToolScanRecord:input_type -> nodevault.v1.ToolScanRecordRequest
+	52, // 46: nodevault.v1.ValidationResultService.ListCertifiedTools:input_type -> nodevault.v1.ListCertifiedToolsRequest
+	55, // 47: nodevault.v1.PingService.Ping:input_type -> nodevault.v1.PingRequest
+	7,  // 48: nodevault.v1.PolicyService.GetPolicyBundle:output_type -> nodevault.v1.PolicyBundle
+	10, // 49: nodevault.v1.PolicyService.ListPolicies:output_type -> nodevault.v1.ListPoliciesResponse
+	24, // 50: nodevault.v1.BuildService.BuildAndRegister:output_type -> nodevault.v1.BuildEvent
+	12, // 51: nodevault.v1.BuildService.ResolveToolSpec:output_type -> nodevault.v1.ResolvedToolSpecResponse
+	14, // 52: nodevault.v1.BuildService.SubmitToolBuild:output_type -> nodevault.v1.SubmitToolBuildResponse
+	24, // 53: nodevault.v1.BuildService.WatchToolBuild:output_type -> nodevault.v1.BuildEvent
+	17, // 54: nodevault.v1.BuildService.CancelToolBuild:output_type -> nodevault.v1.CancelToolBuildResponse
+	22, // 55: nodevault.v1.BuildService.ResolveRecipe:output_type -> nodevault.v1.ResolveRecipeResponse
+	26, // 56: nodevault.v1.ValidateService.DryRun:output_type -> nodevault.v1.DryRunResult
+	28, // 57: nodevault.v1.ValidateService.SmokeRun:output_type -> nodevault.v1.SmokeRunResult
+	30, // 58: nodevault.v1.ToolRegistryService.RegisterTool:output_type -> nodevault.v1.RegisterToolResponse
+	34, // 59: nodevault.v1.ToolRegistryService.GetTool:output_type -> nodevault.v1.RegisteredToolDefinition
+	33, // 60: nodevault.v1.ToolRegistryService.ListTools:output_type -> nodevault.v1.ListToolsResponse
+	36, // 61: nodevault.v1.ToolRegistryService.RetractTool:output_type -> nodevault.v1.RetractToolResponse
+	38, // 62: nodevault.v1.ToolRegistryService.DeleteTool:output_type -> nodevault.v1.DeleteToolResponse
+	40, // 63: nodevault.v1.DataRegistryService.RegisterData:output_type -> nodevault.v1.DataRegisterResponse
+	44, // 64: nodevault.v1.DataRegistryService.GetData:output_type -> nodevault.v1.RegisteredDataDefinition
+	43, // 65: nodevault.v1.DataRegistryService.ListData:output_type -> nodevault.v1.ListDataResponse
+	51, // 66: nodevault.v1.ValidationResultService.SubmitToolCheckRecord:output_type -> nodevault.v1.SubmitRecordResponse
+	51, // 67: nodevault.v1.ValidationResultService.SubmitToolScanRecord:output_type -> nodevault.v1.SubmitRecordResponse
+	54, // 68: nodevault.v1.ValidationResultService.ListCertifiedTools:output_type -> nodevault.v1.ListCertifiedToolsResponse
+	56, // 69: nodevault.v1.PingService.Ping:output_type -> nodevault.v1.PingResponse
+	48, // [48:70] is the sub-list for method output_type
+	26, // [26:48] is the sub-list for method input_type
+	26, // [26:26] is the sub-list for extension type_name
+	26, // [26:26] is the sub-list for extension extendee
+	0,  // [0:26] is the sub-list for field type_name
 }
 
 func init() { file_nodevault_v1_nodevault_proto_init() }
@@ -4389,7 +4413,7 @@ func file_nodevault_v1_nodevault_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_nodevault_v1_nodevault_proto_rawDesc), len(file_nodevault_v1_nodevault_proto_rawDesc)),
-			NumEnums:      2,
+			NumEnums:      3,
 			NumMessages:   55,
 			NumExtensions: 0,
 			NumServices:   7,

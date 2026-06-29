@@ -213,10 +213,7 @@ func (s *ToolRegistryService) RegisterTool(
 		RegisteredAt:     time.Now().Unix(),
 		Version:          req.Version,
 		StableRef:        stableRef,
-		Inputs:           req.Inputs,
-		Outputs:          req.Outputs,
-		Display:          req.Display,
-		Command:          req.Command,
+		BuildKind:        req.BuildKind,
 		LifecyclePhase:   string(index.PhaseActive),
 		IntegrityHealth:  string(index.HealthPartial), // Partial until spec referrer is pushed (pkg/oras)
 		Validation: &nfv1.ValidationStatus{

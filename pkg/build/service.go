@@ -216,10 +216,7 @@ func (s *Service) BuildAndRegister(req *nfv1.BuildRequest, stream grpc.ServerStr
 		Digest:           digest,
 		EnvironmentSpec:  req.EnvironmentSpec,
 		Version:          req.Version,
-		Inputs:           req.Inputs,
-		Outputs:          req.Outputs,
-		Display:          req.Display,
-		Command:          req.Command,
+		BuildKind:        req.Kind,
 	})
 	if regErr != nil {
 		_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_LOG, "registration warning: "+regErr.Error())

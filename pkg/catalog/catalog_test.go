@@ -126,16 +126,7 @@ func TestRegisterTool_CasHashPopulated(t *testing.T) {
 		Digest:           "sha256:abc",
 		Version:          "0.7.17",
 		EnvironmentSpec:  "name: bwa\ndependencies:\n  - bwa=0.7.17=h5bf99c6_8\n",
-		Inputs: []*nfv1.PortSpec{
-			{Name: "reads.fq", Role: "sample-fastq", Format: "fastq", Shape: "pair", Required: true},
-		},
-		Outputs: []*nfv1.PortSpec{
-			{Name: "aligned.bam", Role: "aligned-bam", Format: "bam", Shape: "single", Class: "primary"},
-		},
-		Display: &nfv1.DisplaySpec{
-			Label:    "BWA 0.7.17",
-			Category: "Alignment",
-		},
+		BuildKind:        nfv1.BuildKind_BUILD_KIND_TOOLSPEC,
 	}
 
 	resp, err := svc.RegisterTool(t.Context(), req)
@@ -205,20 +196,7 @@ func TestRegisterTool_V02RoundTrip(t *testing.T) {
 		ImageUri:         "registry.example.com/bwa-mem2:2.2.1@sha256:deadbeef",
 		Digest:           "sha256:deadbeef",
 		EnvironmentSpec:  "name: bwa\ndependencies:\n  - bwa-mem2=2.2.1\n",
-		Command:          "/usr/bin/bwa-mem2",
-		Inputs: []*nfv1.PortSpec{
-			{Name: "reads", Role: "sample-fastq", Format: "fastq", Shape: "pair", Required: true},
-		},
-		Outputs: []*nfv1.PortSpec{
-			{Name: "aligned", Role: "aligned-bam", Format: "bam", Shape: "single", Class: "primary",
-				Constraints: map[string]string{"sorted": "coordinate"}},
-		},
-		Display: &nfv1.DisplaySpec{
-			Label:       "BWA-MEM2 2.2.1",
-			Description: "Fast aligner",
-			Category:    "Alignment",
-			Tags:        []string{"wgs", "alignment"},
-		},
+		BuildKind:        nfv1.BuildKind_BUILD_KIND_TOOLSPEC,
 	}
 
 	regResp, err := svc.RegisterTool(t.Context(), req)
@@ -260,8 +238,8 @@ func TestRegisterTool_V02RoundTrip(t *testing.T) {
 	if got.EnvironmentSpec != req.EnvironmentSpec {
 		t.Errorf("EnvironmentSpec mismatch")
 	}
-	if got.Command != req.Command {
-		t.Errorf("Command: got %q want %q", got.Command, req.Command)
+	if got.BuildKind != nfv1.BuildKind_BUILD_KIND_TOOLSPEC {
+		t.Errorf("BuildKind: got %v want BUILD_KIND_TOOLSPEC", got.BuildKind)
 	}
 	if got.LifecyclePhase != "Active" {
 		t.Errorf("LifecyclePhase: got %q want Active", got.LifecyclePhase)
@@ -274,21 +252,6 @@ func TestRegisterTool_V02RoundTrip(t *testing.T) {
 	}
 	if got.Validation == nil || got.Validation.Phase != "Passed" {
 		t.Errorf("Validation.Phase: got %v want Passed", got.Validation)
-	}
-	if len(got.Inputs) != 1 || got.Inputs[0].Name != "reads" {
-		t.Errorf("Inputs mismatch")
-	}
-	if len(got.Outputs) != 1 || got.Outputs[0].Name != "aligned" {
-		t.Errorf("Outputs mismatch")
-	}
-	if got.Outputs[0].Constraints["sorted"] != "coordinate" {
-		t.Errorf("Outputs[0].Constraints[sorted] mismatch")
-	}
-	if got.Display == nil || got.Display.Label != "BWA-MEM2 2.2.1" {
-		t.Errorf("Display.Label mismatch")
-	}
-	if len(got.Display.Tags) != 2 {
-		t.Errorf("Display.Tags: got %d want 2", len(got.Display.Tags))
 	}
 }
 

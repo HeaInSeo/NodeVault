@@ -24,6 +24,7 @@ import (
 
 	"github.com/HeaInSeo/NodeVault/pkg/build"
 	"github.com/HeaInSeo/NodeVault/pkg/buildstate"
+	"github.com/HeaInSeo/NodeVault/pkg/cachegc"
 	"github.com/HeaInSeo/NodeVault/pkg/catalog"
 	"github.com/HeaInSeo/NodeVault/pkg/catalogrest"
 	"github.com/HeaInSeo/NodeVault/pkg/certification"
@@ -220,6 +221,9 @@ func run() int {
 	certSvc := certification.New(indexStore)
 
 	rec := startBackground(ctx, indexStore, cat, dataCat, certSvc, rc.webhookAddr, fastInterval, slowInterval)
+
+	// Package cache GC — evicts oldest conda/mamba packages when PVC usage exceeds watermark.
+	go cachegc.New(cachegc.DefaultConfig()).Run(ctx)
 
 	if registerErr := registerBuildService(
 		srv, &rc, validateSvc, registrySvc, indexStore, buildStateStore, rec,

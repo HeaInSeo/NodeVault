@@ -37,6 +37,7 @@
 | NodeVault | Buildah build-context/scratch dir을 `/tmp` 전체가 아닌 전용 서브트리로 스코핑 | issue [#4](https://github.com/HeaInSeo/NodeVault/issues/4) |
 | NodeVault | TODO-13 (sori 패키징 통합 경계) — `SORI_INTEGRATION_BOUNDARY.md` + `pkg/oras/referrer.go`로 기존 구현 완료 확인, 스케줄 추적 공백만 메움 | issue [#5](https://github.com/HeaInSeo/NodeVault/issues/5) (closed) |
 | NodeVault | vendor된 btrfs graphdriver 등록 제거 — bare `go test ./...`가 `<btrfs/version.h>` 헤더 부재(Rocky/RHEL 미패키지)로 실패하던 문제 해결 | `bb2b172` |
+| NodeVault | proto: `BuildKind` enum (TOOLSPEC/TOOLFUNCTIONSPEC) + `BuildRequest.kind`/`base_image_digest` 추가; `inputs/outputs/display/command` BuildRequest·RegisterToolRequest에서 reserve — ToolFunctionSpec 설계 문서 기반, 빌드 경로에서 분리 | `eedf523` |
 | NodeSentinel | L3 dry-run, L4 smoke-run | Sprint 2 |
 | NodeSentinel | L5-a functional validation + vaultclient | Sprint 3 |
 | NodeSentinel | L5-b trivy-operator scan | Sprint 3 |
@@ -177,7 +178,7 @@ v0.1.0 이후에는 `SubmitToolBuild`로 build를 제출하고 `WatchToolBuild`�
 - [x] Harbor layer cache (`NODEVAULT_BUILD_CACHE_REF` → `podbridge5.CacheRef`) 연결 — operator opt-in (2026-06-28)
 - [x] `BuildExecution.CacheRef` + `LayerCacheHit` 필드 추가 (2026-06-28)
 - [ ] 동일 ToolSpec 두 번째 빌드에서 `LayerCacheHit: true` seoy 라이브 검증
-- [ ] cache GC (high watermark 기반 eviction)
+- [x] cache GC — `pkg/cachegc`: high watermark 기반 eviction, oldest-mtime-first LRU, background loop, 9개 단위 테스트 (2026-06-29)
 
 ---
 
@@ -311,8 +312,12 @@ Phase 1 이후 병행 가능.
 
 완료 (2026-06-28)
   ├── 트랙 D: ResolveRecipe NodeVault 측 완료; NodeKit UX 진행 중
-  ├── Phase 4: 캐시 계층 (package cache PVC + Harbor layer cache; seoy 라이브 검증·GC 미완)
+  ├── Phase 4: 캐시 계층 (package cache PVC + Harbor layer cache; seoy 라이브 검증 미완)
   └── Phase 5: Record/Certification 통합 — pkg/profiler hash·classifier 구현 완료
+
+완료 (2026-06-29)
+  ├── proto: BuildKind enum + BuildRequest 재설계 (ToolSpec/ToolFunctionSpec 분리)
+  └── Phase 4: cache GC — pkg/cachegc high watermark 기반 eviction 구현 완료
 
 단기 (P2)
   └── 트랙 B: L5-a sample fixture (NodeSentinel 작업 — NodeVault 변경 없음)

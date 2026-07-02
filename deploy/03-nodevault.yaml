@@ -12,13 +12,6 @@
 #     --docker-password=<password> \
 #     -n nodevault-system
 #
-# ORAS referrer credentials (temporary compatibility until ORAS reads the
-# mounted auth.json directly):
-#   kubectl create secret generic nodevault-harbor-auth \
-#     --from-literal=username=<username> \
-#     --from-literal=password=<password> \
-#     -n nodevault-system
-#
 # Harbor CA, trusted by in-Pod Buildah pull/push (not shared with the node's
 # containerd trust config -- see docs/OVERLAY_USERNS_INVESTIGATION.md §7):
 #   kubectl create secret generic nodevault-harbor-ca \
@@ -164,19 +157,6 @@ spec:
             # build-context overlay's own merged view.
             - name: TMPDIR
               value: "/tmp/nodevault-build/scratch"
-
-            # ORAS referrer path still consumes explicit credentials. Buildah
-            # itself reads /run/containers/0/auth.json mounted below.
-            - name: HARBOR_USER
-              valueFrom:
-                secretKeyRef:
-                  name: nodevault-harbor-auth
-                  key: username
-            - name: HARBOR_PASS
-              valueFrom:
-                secretKeyRef:
-                  name: nodevault-harbor-auth
-                  key: password
 
             # podbridge5 calls containers/storage DefaultStoreOptions(). This
             # environment variable makes the mounted configuration authoritative.

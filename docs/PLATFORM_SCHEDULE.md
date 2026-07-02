@@ -263,7 +263,7 @@ Phase 1 이후 병행 가능.
 | 항목 | 내용 | 우선순위 |
 |------|------|---------|
 | ValidateService RBAC 이관 | L3/L4 Job 권한 NodeVault SA → NodeSentinel SA | ✓ |
-| Harbor 인증 Secret 통합 | buildah용 + ORAS용 분리 → 단일 정리 | P3 |
+| Harbor 인증 Secret 통합 | buildah용 + ORAS용 분리 → 단일 정리 | ✓ |
 | Data write path | DataRegisterRequest gRPC 경로 완성 | ✓ |
 | DagEdit ↔ NodePalette 연결 | GET /v1/palette/tools → casHash pin | P4 |
 
@@ -271,6 +271,7 @@ Phase 1 이후 병행 가능.
 
 - [x] DataRegisterRequest gRPC 경로 완성 — `DataRegistryService.RegisterData/GetData/ListData` + `cmd/controlplane/main.go:RegisterDataRegistryServiceServer` (2026-06-28)
 - [x] ValidateService RBAC 이관 — `BuildAndRegister` L3/L4 직접 Job 생성 제거, `02-rbac.yaml` ClusterRole/Binding 제거, NodeSentinel EnqueueValidationWork 위임 (2026-07-02, issue [#11](https://github.com/HeaInSeo/NodeVault/issues/11))
+- [x] Harbor 인증 Secret 통합 — `pkg/oras/referrer.go`가 `HARBOR_USER`/`HARBOR_PASS` 대신 auth.json(Buildah와 동일 파일) 파싱, `nodevault-harbor-auth` Secret 제거 (2026-07-02, issue [#12](https://github.com/HeaInSeo/NodeVault/issues/12))
 
 ---
 
@@ -333,7 +334,7 @@ Phase 1 이후 병행 가능.
 
 NodeVault 남은 작업
   ├── Phase 4: seoy LayerCacheHit 라이브 검증 (seoy 필요, P3, issue #13)
-  ├── 트랙 C: Harbor 인증 Secret 통합 — buildah용·ORAS용 단일 정리 (P3, issue #12)
+  ├── 트랙 C: Harbor 인증 Secret 통합 — auth.json 단일화 완료 (issue #12)
   ├── 트랙 C: DagEdit ↔ NodePalette 연결 — GET /v1/palette/tools → casHash pin (P4, 보류, issue #14)
   └── Phase 6: Legacy API 축소 (NodeKit 전환 완료 후)
 ```

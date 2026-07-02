@@ -11,9 +11,11 @@ package oras
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/HeaInSeo/sori"
 	"github.com/HeaInSeo/sori/registryutil"
@@ -153,19 +155,74 @@ func PushToolProfileReferrer(
 	return result.ReferrerDigest, nil
 }
 
-// newRemoteRepository builds a remote repository client using env-driven TLS config.
-// Uses registryutil.RemoteConfig directly to support InsecureTLS and CAFile,
-// which are not exposed through sori.NewReferrerRemoteRepository.
+// newRemoteRepository builds a remote repository client using env-driven TLS
+// config. Credentials are read from the Docker/containers auth.json file
+// (REGISTRY_AUTH_FILE env var, default /run/containers/0/auth.json) — the
+// same file Buildah uses for pull/push, so no separate Secret is required.
 func newRemoteRepository(imageRepo string) (sori.ReferrerTarget, error) {
+	registry := registryFromRepo(imageRepo)
+	username, password, err := credentialsFromAuthFile(registry)
+	if err != nil {
+		return nil, fmt.Errorf("oras: load credentials for %q: %w", registry, err)
+	}
 	cfg := registryutil.RemoteConfig{
 		InsecureTLS: os.Getenv("NODEVAULT_ORAS_INSECURE_TLS") == "true",
 		CAFile:      os.Getenv("NODEVAULT_ORAS_CA_FILE"),
-		Username:    os.Getenv("HARBOR_USER"),
-		Password:    os.Getenv("HARBOR_PASS"),
+		Username:    username,
+		Password:    password,
 	}
 	repo, err := registryutil.NewRepository(imageRepo, cfg)
 	if err != nil {
 		return nil, err
 	}
 	return repo, nil
+}
+
+// registryFromRepo extracts the registry host from an image repository reference.
+// "harbor.lab.local/library/mytool" → "harbor.lab.local"
+func registryFromRepo(imageRepo string) string {
+	if idx := strings.IndexByte(imageRepo, '/'); idx != -1 {
+		return imageRepo[:idx]
+	}
+	return imageRepo
+}
+
+// credentialsFromAuthFile reads username and password for registry from the
+// Docker/containers auth.json file. The file path is taken from the
+// REGISTRY_AUTH_FILE env var, defaulting to /run/containers/0/auth.json.
+// Returns ("", "", nil) when the file is absent or has no entry for registry.
+func credentialsFromAuthFile(registry string) (username, password string, err error) {
+	path := os.Getenv("REGISTRY_AUTH_FILE")
+	if path == "" {
+		path = "/run/containers/0/auth.json"
+	}
+	//nolint:gosec // path is operator-controlled via REGISTRY_AUTH_FILE or hardcoded default
+	data, readErr := os.ReadFile(path)
+	if os.IsNotExist(readErr) {
+		return "", "", nil
+	}
+	if readErr != nil {
+		return "", "", fmt.Errorf("read auth file %q: %w", path, readErr)
+	}
+	var cfg struct {
+		Auths map[string]struct {
+			Auth string `json:"auth"`
+		} `json:"auths"`
+	}
+	if parseErr := json.Unmarshal(data, &cfg); parseErr != nil {
+		return "", "", fmt.Errorf("parse auth file: %w", parseErr)
+	}
+	entry, ok := cfg.Auths[registry]
+	if !ok {
+		return "", "", nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(entry.Auth)
+	if err != nil {
+		return "", "", fmt.Errorf("decode auth for %q: %w", registry, err)
+	}
+	parts := strings.SplitN(string(decoded), ":", 2)
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("auth entry for %q is not user:password format", registry)
+	}
+	return parts[0], parts[1], nil
 }

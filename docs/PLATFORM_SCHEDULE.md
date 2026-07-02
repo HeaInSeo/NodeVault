@@ -262,7 +262,7 @@ Phase 1 이후 병행 가능.
 
 | 항목 | 내용 | 우선순위 |
 |------|------|---------|
-| ValidateService RBAC 이관 | L3/L4 Job 권한 NodeVault SA → NodeSentinel SA | P3 |
+| ValidateService RBAC 이관 | L3/L4 Job 권한 NodeVault SA → NodeSentinel SA | ✓ |
 | Harbor 인증 Secret 통합 | buildah용 + ORAS용 분리 → 단일 정리 | P3 |
 | Data write path | DataRegisterRequest gRPC 경로 완성 | ✓ |
 | DagEdit ↔ NodePalette 연결 | GET /v1/palette/tools → casHash pin | P4 |
@@ -270,6 +270,7 @@ Phase 1 이후 병행 가능.
 **완료 판정**
 
 - [x] DataRegisterRequest gRPC 경로 완성 — `DataRegistryService.RegisterData/GetData/ListData` + `cmd/controlplane/main.go:RegisterDataRegistryServiceServer` (2026-06-28)
+- [x] ValidateService RBAC 이관 — `BuildAndRegister` L3/L4 직접 Job 생성 제거, `02-rbac.yaml` ClusterRole/Binding 제거, NodeSentinel EnqueueValidationWork 위임 (2026-07-02, issue [#11](https://github.com/HeaInSeo/NodeVault/issues/11))
 
 ---
 
@@ -325,13 +326,15 @@ Phase 1 이후 병행 가능.
   └── Phase 4: cache GC 버그 수정 (watermark≤0 가드, sub-MiB truncation)
 
 완료 (2026-07-02)
-  └── 트랙 D: ResolveRecipe NodeKit UX 확인 완료 (PackageCandidatePresenter + RecipeCreateFlow Step 7)
+  ├── 트랙 D: ResolveRecipe NodeKit UX 확인 완료 (PackageCandidatePresenter + RecipeCreateFlow Step 7)
+  ├── fix(build): postBuildRegistration shared helper — SubmitToolBuild 경로 RegisterTool 누락 수정 (issue #10)
+  ├── 트랙 C: ValidateService RBAC 이관 — BuildAndRegister L3/L4 직접 Job 생성 제거, 02-rbac.yaml 정리 (issue #11)
+  └── deploy: kube-linter 6개 오류 해소 + CI hard gate 적용
 
-NodeKit 집중 기간 중 NodeVault 대기 작업 (2026-07-02 기준)
-  ├── Phase 4: seoy LayerCacheHit 라이브 검증 (seoy 필요, P3)
-  ├── 트랙 C: ValidateService RBAC 이관 — L3/L4 Job 권한 NodeSentinel SA로 이전 (P3)
-  ├── 트랙 C: Harbor 인증 Secret 통합 — buildah용·ORAS용 단일 정리 (P3)
-  ├── 트랙 C: DagEdit ↔ NodePalette 연결 — GET /v1/palette/tools → casHash pin (P4)
+NodeVault 남은 작업
+  ├── Phase 4: seoy LayerCacheHit 라이브 검증 (seoy 필요, P3, issue #13)
+  ├── 트랙 C: Harbor 인증 Secret 통합 — buildah용·ORAS용 단일 정리 (P3, issue #12)
+  ├── 트랙 C: DagEdit ↔ NodePalette 연결 — GET /v1/palette/tools → casHash pin (P4, 보류, issue #14)
   └── Phase 6: Legacy API 축소 (NodeKit 전환 완료 후)
 ```
 

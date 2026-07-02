@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"google.golang.org/grpc"
@@ -216,6 +217,10 @@ func (s *Service) runSubmittedBuild(
 		return
 	}
 	s.recordBuildSuccess(rec.BuildID, rec.RequestedAt, digest, destination)
+
+	logFn := func(msg string) { slog.Info("submitted build", "build_id", rec.BuildID, "msg", msg) }
+	s.postBuildRegistration(ctx, req, destination, digest, logFn)
+
 	_, _ = s.buildState.Transition(rec.BuildID, buildstate.StatusSucceeded, "", time.Now().UTC())
 }
 

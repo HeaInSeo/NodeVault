@@ -206,79 +206,9 @@ func (s *Service) BuildAndRegister(req *nfv1.BuildRequest, stream grpc.ServerStr
 	}
 	_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_LOG, "L4 smoke run passed")
 
-	// ── 등록 ─────────────────────────────────────────────────────────────────────
-
-	regResp, regErr := s.registry.RegisterTool(ctx, &nfv1.RegisterToolRequest{
-		RequestId:        req.RequestId,
-		ToolDefinitionId: req.ToolDefinitionId,
-		ToolName:         req.ToolName,
-		ImageUri:         destination,
-		Digest:           digest,
-		EnvironmentSpec:  req.EnvironmentSpec,
-		Version:          req.Version,
-		BuildKind:        req.Kind,
-	})
-	if regErr != nil {
-		_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_LOG, "registration warning: "+regErr.Error())
-	} else {
-		_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_LOG, "tool registered: cas="+regResp.CasHash)
-	}
-
-	// ── spec referrer push (TODO-07) ─────────────────────────────────────────────
-	// Non-fatal: if push fails, integrity_health stays Partial and reconcile retries.
-	// integrity_health is updated ONLY via ReconcileOne (reconcile axis — authority map).
-	if regErr == nil && s.indexStore != nil {
-		imageRepo := fmt.Sprintf("%s/library/%s", registryAddr(), sanitizeName(req.ToolName))
-		referrerDigest, refErr := oras.PushToolSpecReferrer(ctx, imageRepo, digest, regResp.Tool)
-		if refErr != nil {
-			slog.Warn("spec referrer push failed (integrity_health=Partial)", "err", refErr)
-			_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_LOG, "spec referrer push failed: "+refErr.Error())
-		} else {
-			slog.Info("spec referrer attached", "referrer", referrerDigest)
-			_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_LOG, "spec referrer attached: "+referrerDigest)
-			if idxErr := s.indexStore.SetSpecReferrerDigest(regResp.CasHash, referrerDigest); idxErr != nil {
-				slog.Warn("index spec referrer digest update failed", "err", idxErr)
-			}
-			// Delegate integrity_health update to reconciler (authority map: reconcile axis only).
-			if s.reconciler != nil {
-				if recErr := s.reconciler.ReconcileOne(ctx, regResp.CasHash); recErr != nil {
-					slog.Warn("eager reconcile after referrer push failed", "err", recErr)
-				}
-			}
-		}
-	}
-
-	// ── NodeSentinel: enqueue L3/L4 validation work ──────────────────────────────
-	// Non-fatal: build+registration already succeeded; enqueue failure is logged
-	// but does not fail the RPC. NodeSentinel handles its own L3/L4 asynchronously.
-	if s.sentinel != nil {
-		casHash := ""
-		if regErr == nil {
-			casHash = regResp.CasHash
-		}
-		imageRepo := destination
-		if idx := strings.LastIndex(destination, "@"); idx != -1 {
-			imageRepo = destination[:idx]
-		}
-		enqReq := &nsv1.EnqueueValidationWorkRequest{
-			ArtifactKind:     "tool",
-			ImageRepository:  imageRepo,
-			ImageDigest:      digest,
-			ToolName:         req.ToolName,
-			Version:          req.Version,
-			CasHash:          casHash,
-			RequestedActions: []string{"smoke_run"},
-		}
-		enqCtx, enqCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer enqCancel()
-		if enqResp, enqErr := s.sentinel.EnqueueValidationWork(enqCtx, enqReq); enqErr != nil {
-			slog.Warn("NodeSentinel EnqueueValidationWork failed (validation deferred)", "err", enqErr)
-			_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_LOG, "sentinel enqueue failed: "+enqErr.Error())
-		} else {
-			slog.Info("NodeSentinel job enqueued", "job_id", enqResp.JobId, "status", enqResp.Status)
-			_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_LOG, "sentinel job enqueued: "+enqResp.JobId)
-		}
-	}
+	// ── 등록 + spec referrer + NodeSentinel ──────────────────────────────────────
+	logSend := func(msg string) { _ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_LOG, msg) }
+	s.postBuildRegistration(ctx, req, destination, digest, logSend)
 
 	_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_SUCCEEDED,
 		fmt.Sprintf("build+register complete: %s@%s", destination, digest))
@@ -334,6 +264,90 @@ func (s *Service) recordBuildSuccess(buildID string, startedAt time.Time, digest
 	}
 	if err := s.indexStore.AppendToolImageRecord(img); err != nil {
 		slog.Warn("index: failed to record ToolImageRecord", "build_id", buildID, "image_digest", digest, "err", err)
+	}
+}
+
+// postBuildRegistration performs tool registration, spec referrer push, and
+// NodeSentinel enqueueing after a successful L2 image build. It is shared by
+// BuildAndRegister (streaming RPC) and runSubmittedBuild (async goroutine).
+// logFn receives informational messages for the caller's output channel; it
+// must not be nil.
+func (s *Service) postBuildRegistration(
+	ctx context.Context,
+	req *nfv1.BuildRequest,
+	destination, digest string,
+	logFn func(string),
+) {
+	if s.registry == nil {
+		logFn("registration skipped: no registry configured")
+		return
+	}
+	regResp, regErr := s.registry.RegisterTool(ctx, &nfv1.RegisterToolRequest{
+		RequestId:        req.GetRequestId(),
+		ToolDefinitionId: req.GetToolDefinitionId(),
+		ToolName:         req.GetToolName(),
+		ImageUri:         destination,
+		Digest:           digest,
+		EnvironmentSpec:  req.GetEnvironmentSpec(),
+		Version:          req.GetVersion(),
+		BuildKind:        req.GetKind(),
+	})
+	if regErr != nil {
+		logFn("registration warning: " + regErr.Error())
+	} else {
+		logFn("tool registered: cas=" + regResp.CasHash)
+	}
+
+	// spec referrer push — non-fatal; integrity_health reconcile retries on failure.
+	// integrity_health is updated ONLY via ReconcileOne (reconcile axis — authority map).
+	if regErr == nil && s.indexStore != nil {
+		imageRepo := fmt.Sprintf("%s/library/%s", registryAddr(), sanitizeName(req.GetToolName()))
+		referrerDigest, refErr := oras.PushToolSpecReferrer(ctx, imageRepo, digest, regResp.Tool)
+		if refErr != nil {
+			slog.Warn("spec referrer push failed (integrity_health=Partial)", "err", refErr)
+			logFn("spec referrer push failed: " + refErr.Error())
+		} else {
+			slog.Info("spec referrer attached", "referrer", referrerDigest)
+			logFn("spec referrer attached: " + referrerDigest)
+			if idxErr := s.indexStore.SetSpecReferrerDigest(regResp.CasHash, referrerDigest); idxErr != nil {
+				slog.Warn("index spec referrer digest update failed", "err", idxErr)
+			}
+			if s.reconciler != nil {
+				if recErr := s.reconciler.ReconcileOne(ctx, regResp.CasHash); recErr != nil {
+					slog.Warn("eager reconcile after referrer push failed", "err", recErr)
+				}
+			}
+		}
+	}
+
+	// NodeSentinel enqueue — non-fatal; validation is deferred if enqueue fails.
+	if s.sentinel != nil {
+		casHash := ""
+		if regErr == nil {
+			casHash = regResp.CasHash
+		}
+		imageRepo := destination
+		if idx := strings.LastIndex(destination, "@"); idx != -1 {
+			imageRepo = destination[:idx]
+		}
+		enqReq := &nsv1.EnqueueValidationWorkRequest{
+			ArtifactKind:     "tool",
+			ImageRepository:  imageRepo,
+			ImageDigest:      digest,
+			ToolName:         req.GetToolName(),
+			Version:          req.GetVersion(),
+			CasHash:          casHash,
+			RequestedActions: []string{"smoke_run"},
+		}
+		enqCtx, enqCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer enqCancel()
+		if enqResp, enqErr := s.sentinel.EnqueueValidationWork(enqCtx, enqReq); enqErr != nil {
+			slog.Warn("NodeSentinel EnqueueValidationWork failed (validation deferred)", "err", enqErr)
+			logFn("sentinel enqueue failed: " + enqErr.Error())
+		} else {
+			slog.Info("NodeSentinel job enqueued", "job_id", enqResp.JobId, "status", enqResp.Status)
+			logFn("sentinel job enqueued: " + enqResp.JobId)
+		}
 	}
 }
 

@@ -293,7 +293,7 @@ Phase 1 이후 병행 가능.
 - [x] `bwa=0.7.17` 입력 → Harbor 캐시 명중 시 build string 1개 반환 (2026-06-28)
 - [x] Harbor 미존재 + 열린망 → conda 채널에서 build string 후보 목록 반환 (2026-06-28)
 - [x] Harbor 미존재 + 폐쇄망 → `InvalidArgument` 반환 (2026-06-28)
-- [ ] candidates 복수 시 NodeKit이 목록 표시 → 사용자 선택 → BuildRequest 고정 확인 (NodeKit 담당)
+- [x] candidates 복수 시 NodeKit이 목록 표시 → 사용자 선택 → BuildRequest 고정 확인 — `PackageCandidatePresenter` + `RecipeCreateFlow` Step 7 구현 완료 (2026-07-02)
 - [x] NodeKit `PackageVersionValidator` 테스트: `=version` 통과, 버전 미고정 거부 ✓
 
 ---
@@ -324,7 +324,10 @@ Phase 1 이후 병행 가능.
 완료 (2026-06-30)
   └── Phase 4: cache GC 버그 수정 (watermark≤0 가드, sub-MiB truncation)
 
-NodeKit 집중 기간 중 NodeVault 대기 작업 (2026-06-30 기준)
+완료 (2026-07-02)
+  └── 트랙 D: ResolveRecipe NodeKit UX 확인 완료 (PackageCandidatePresenter + RecipeCreateFlow Step 7)
+
+NodeKit 집중 기간 중 NodeVault 대기 작업 (2026-07-02 기준)
   ├── Phase 4: seoy LayerCacheHit 라이브 검증 (seoy 필요, P3)
   ├── 트랙 C: ValidateService RBAC 이관 — L3/L4 Job 권한 NodeSentinel SA로 이전 (P3)
   ├── 트랙 C: Harbor 인증 Secret 통합 — buildah용·ORAS용 단일 정리 (P3)

@@ -5,3 +5,16 @@ checks:
     # deploy/03-nodevault.yaml and CLAUDE.md §5. run-as-non-root only checks
     # the in-container UID, so it cannot see the remap and always flags this.
     - "run-as-non-root"
+
+    # podbridge5 hardcodes IsolationChroot, which requires unshare(CLONE_NEWUSER)
+    # per RUN step. NET_RAW is part of the minimum capability set that makes
+    # Buildah's setcap() calls succeed inside the user namespace. Removing it
+    # causes EPERM on RUN steps. See deploy/03-nodevault.yaml securityContext and
+    # docs/OVERLAY_USERNS_INVESTIGATION.md for the full analysis.
+    - "drop-net-raw-capability"
+
+    # SYS_ADMIN is required for the in-Pod overlay storage driver
+    # (mount(MS_PRIVATE) inside the user namespace) and for podbridge5's
+    # IsolationChroot path. This is a verified, intentional capability —
+    # see the same investigation document above.
+    - "privilege-escalation-container"

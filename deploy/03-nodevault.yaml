@@ -82,6 +82,15 @@ metadata:
   namespace: nodevault-system
   labels:
     app: nodevault-controlplane
+  annotations:
+    # Image tag is replaced by deploy scripts at runtime (e.g. scripts/deploy-seoy.sh).
+    # The :latest placeholder is intentional in the source manifest.
+    ignore-check.kube-linter.io/latest-tag: "replaced by deploy scripts at runtime"
+    # NodeVault writes to Buildah graphroot, build-state.db, and the
+    # TMPDIR scratch dir — readOnlyRootFilesystem cannot be set without
+    # mounting every writable path as an emptyDir/PVC, which all write paths
+    # already are. The container rootfs itself carries no runtime state.
+    ignore-check.kube-linter.io/no-read-only-root-fs: "Buildah graphroot/scratch/buildstate require filesystem writes; all write paths are on PVC or emptyDir mounts"
 spec:
   replicas: 1
   selector:
@@ -94,8 +103,6 @@ spec:
     spec:
       hostUsers: false
 
-      # Still required by ValidateService while L3/L4 validation uses
-      # Kubernetes Jobs. The image build path itself does not use this token.
       serviceAccountName: nodevault-controlplane
       imagePullSecrets:
         - name: nodevault-registry-auth

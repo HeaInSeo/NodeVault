@@ -256,13 +256,5 @@ jobs:
       - name: Install kube-linter
         run: make kube-linter
 
-      # continue-on-error: deploy/03-nodevault.yaml, deploy/05-nodepalette.yaml에
-      # 기존부터 있던 latest-tag / no-read-only-root-fs finding이 아직 해소되지
-      # 않았다 (별도 작업 필요). drop-net-raw-capability / privilege-escalation-container도
-      # docs/OVERLAY_USERNS_INVESTIGATION.md에 기록된, podbridge5의 chroot isolation
-      # 경로가 요구하는 capability set(NET_RAW, SYS_ADMIN 포함)에 따른 의도된 결과다.
-      # run-as-non-root는 hostUsers:false userns remap 설계이므로 .kube-linter.yaml에서
-      # 명시적으로 제외됨 (CLAUDE.md §5 참조).
       - name: kube-linter
-        continue-on-error: true
         run: make kube-lint

@@ -18,6 +18,8 @@ metadata:
   namespace: nodepalette-system
   labels:
     app: nodepalette
+  annotations:
+    ignore-check.kube-linter.io/latest-tag: "replaced by deploy scripts at runtime"
 spec:
   replicas: 1
   selector:
@@ -39,6 +41,12 @@ spec:
           env:
             - name: NODEPALETTE_ADDR
               value: ":8080"
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           resources:
             requests:
               cpu: 50m
@@ -52,6 +60,9 @@ spec:
               port: 8080
             initialDelaySeconds: 3
             periodSeconds: 10
+      volumes:
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

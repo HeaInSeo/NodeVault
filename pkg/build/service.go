@@ -23,7 +23,6 @@ import (
 	"github.com/HeaInSeo/NodeVault/pkg/index"
 	"github.com/HeaInSeo/NodeVault/pkg/metrics"
 	"github.com/HeaInSeo/NodeVault/pkg/oras"
-	"github.com/HeaInSeo/NodeVault/pkg/validate"
 )
 
 // SentinelEnqueuer enqueues post-build L3/L4 validation work with NodeSentinel.
@@ -58,7 +57,6 @@ func registryAddr() string {
 type Service struct {
 	nfv1.UnimplementedBuildServiceServer
 	builder           Builder
-	validator         *validate.Service
 	registry          *catalog.ToolRegistryService
 	indexStore        *index.Store
 	buildState        *buildstate.Store
@@ -73,15 +71,11 @@ type Service struct {
 // reconciler may be nil; when non-nil it is called after successful referrer push
 // so integrity_health transitions to Healthy without waiting for the next reconcile tick.
 func NewService(
-	validator *validate.Service,
 	registry *catalog.ToolRegistryService,
 	store *index.Store,
 	stateStore *buildstate.Store,
 	reconciler ReconcileTriggerer,
 ) (*Service, error) {
-	if validator == nil {
-		return nil, fmt.Errorf("build service init: validator must not be nil")
-	}
 	if registry == nil {
 		return nil, fmt.Errorf("build service init: registry must not be nil")
 	}
@@ -97,7 +91,7 @@ func NewService(
 		return nil, fmt.Errorf("build service init: %w", err)
 	}
 	return &Service{
-		builder: builder, validator: validator, registry: registry,
+		builder: builder, registry: registry,
 		indexStore: store, buildState: stateStore, active: make(map[string]context.CancelFunc), reconciler: reconciler,
 	}, nil
 }
@@ -172,41 +166,9 @@ func (s *Service) BuildAndRegister(req *nfv1.BuildRequest, stream grpc.ServerStr
 		Timestamp: time.Now().UnixMilli(),
 	})
 
-	// ── L3: dry-run ──────────────────────────────────────────────────────────────
-
-	reqID := req.RequestId
-	if len(reqID) > 8 {
-		reqID = reqID[:8]
-	}
-	jobSuffix := sanitizeName(reqID)
-	if jobSuffix == "" {
-		jobSuffix = fmt.Sprintf("%04x", time.Now().UnixMilli()%0xFFFF)
-	}
-	smokeJob := validate.SmokeJobSpec("nfsmoke-"+jobSuffix, imageWithDigest)
-	_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_LOG, "L3: submitting dry-run...")
-
-	dryResult := s.validator.DryRunJob(ctx, smokeJob)
-	if !dryResult.Success {
-		_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_FAILED, "L3 dry-run failed: "+dryResult.ErrorMessage)
-		return fmt.Errorf("L3 dry-run failed: %s", dryResult.ErrorMessage)
-	}
-	_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_LOG, "L3 dry-run passed")
-
-	// ── L4: smoke run ────────────────────────────────────────────────────────────
-
-	_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_LOG, "L4: starting smoke run...")
-
-	smokeResult := s.validator.SmokeRunJob(ctx, smokeJob)
-	if !smokeResult.Success {
-		_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_FAILED, "L4 smoke run failed: "+smokeResult.ErrorMessage)
-		return fmt.Errorf("L4 smoke run failed: %s", smokeResult.ErrorMessage)
-	}
-	if smokeResult.LogOutput != "" {
-		_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_LOG, "smoke log: "+strings.TrimSpace(smokeResult.LogOutput))
-	}
-	_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_LOG, "L4 smoke run passed")
-
 	// ── 등록 + spec referrer + NodeSentinel ──────────────────────────────────────
+	// L3/L4 validation is delegated to NodeSentinel via EnqueueValidationWork inside
+	// postBuildRegistration. NodeVault no longer creates K8s Jobs directly.
 	logSend := func(msg string) { _ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_LOG, msg) }
 	s.postBuildRegistration(ctx, req, destination, digest, logSend)
 

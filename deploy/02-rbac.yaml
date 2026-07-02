@@ -1,40 +1,10 @@
 ---
-# ServiceAccount used only by ValidateService while L3/L4 validation still
-# creates short-lived Kubernetes Jobs. The NodeVault image build path does not
-# call the Kubernetes API and does not create builder Jobs.
+# ServiceAccount for the NodeVault control plane Pod.
+# NodeVault no longer creates K8s Jobs directly — L3/L4 validation is
+# delegated to NodeSentinel via EnqueueValidationWork (gRPC). No
+# ClusterRole or ClusterRoleBinding is required.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: nodevault-controlplane
   namespace: nodevault-system
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: nodevault-validation-runner
-rules:
-  # ValidateService creates the validation namespace when it is absent.
-  - apiGroups: [""]
-    resources: ["namespaces"]
-    verbs: ["get", "list", "create"]
-  # L3 dry-run and L4 smoke validation Jobs.
-  - apiGroups: ["batch"]
-    resources: ["jobs"]
-    verbs: ["get", "list", "create", "delete", "watch"]
-  # Validation result and smoke logs.
-  - apiGroups: [""]
-    resources: ["pods", "pods/log"]
-    verbs: ["get", "list", "watch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: nodevault-validation-runner
-subjects:
-  - kind: ServiceAccount
-    name: nodevault-controlplane
-    namespace: nodevault-system
-roleRef:
-  kind: ClusterRole
-  name: nodevault-validation-runner
-  apiGroup: rbac.authorization.k8s.io

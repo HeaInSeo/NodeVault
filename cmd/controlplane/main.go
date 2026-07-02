@@ -207,7 +207,7 @@ func run() int {
 	// PolicyService — serves dockguard.wasm bundle to NodeKit.
 	nfv1.RegisterPolicyServiceServer(srv, policy.NewService())
 
-	validateSvc := initValidateService(srv, &rc)
+	initValidateService(srv, &rc)
 	registrySvc := registerCatalogServices(srv, cat, dataCat, indexStore)
 
 	// Reconcile loops + webhook + validation REST
@@ -226,7 +226,7 @@ func run() int {
 	go cachegc.New(cachegc.DefaultConfig()).Run(ctx)
 
 	if registerErr := registerBuildService(
-		srv, &rc, validateSvc, registrySvc, indexStore, buildStateStore, rec,
+		srv, &rc, registrySvc, indexStore, buildStateStore, rec,
 	); registerErr != nil {
 		slog.Error("failed to register BuildService", "err", registerErr)
 		return 1
@@ -305,7 +305,6 @@ func logStartupConfig(rc runtimeConfig) {
 func registerBuildService(
 	srv *grpc.Server,
 	rc *runtimeConfig,
-	validateSvc *validate.Service,
 	registrySvc *catalog.ToolRegistryService,
 	indexStore *index.Store,
 	buildStateStore *buildstate.Store,
@@ -317,7 +316,7 @@ func registerBuildService(
 		slog.Info("BuildService registered with disabled backend")
 		return nil
 	case buildBackendInPodBuildah:
-		buildSvc, buildErr := build.NewService(validateSvc, registrySvc, indexStore, buildStateStore, rec)
+		buildSvc, buildErr := build.NewService(registrySvc, indexStore, buildStateStore, rec)
 		if buildErr != nil {
 			return fmt.Errorf("initialize in-pod podbridge5/Buildah builder: %w", buildErr)
 		}

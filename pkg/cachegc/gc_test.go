@@ -147,6 +147,66 @@ func TestRunOnce_NoopWhenDisabled(_ *testing.T) {
 	_ = gc.RunOnce() // no assertion — just must not panic or block
 }
 
+// TestRunOnce_ZeroWatermark does not evict anything (disabled config guard).
+func TestRunOnce_ZeroWatermark(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	writeFakePackage(t, dir, "pkg-a", 3*1024*1024, now, true)
+
+	gc := cachegc.New(cachegc.Config{
+		Dir:              dir,
+		HighWatermarkMiB: 0, // invalid — must be treated as disabled
+		Interval:         time.Hour,
+	})
+	if err := gc.RunOnce(); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "pkg-a")); err != nil {
+		t.Errorf("pkg-a should not have been evicted with zero watermark: %v", err)
+	}
+}
+
+// TestRunOnce_SubMiBEntries evicts only enough sub-MiB files to reach target.
+// Regression for the sizeMiB=0 truncation bug where all entries were deleted.
+func TestRunOnce_SubMiBEntries(t *testing.T) {
+	dir := t.TempDir()
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Five 700 KiB files: total ~3.4 MiB. Watermark = 2 MiB → target = 1.6 MiB.
+	// Expect: oldest files evicted until remaining ≤ target; newest must survive.
+	for i, name := range []string{"p1", "p2", "p3", "p4", "p5"} {
+		writeFakePackage(t, dir, name, 700*1024, base.Add(time.Duration(i)*time.Hour), false)
+	}
+
+	gc := cachegc.New(cachegc.Config{
+		Dir:              dir,
+		HighWatermarkMiB: 2,
+		Interval:         time.Hour,
+	})
+	if err := gc.RunOnce(); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	// p5 (newest) must survive — it should never be touched.
+	if _, err := os.Stat(filepath.Join(dir, "p5")); err != nil {
+		t.Errorf("p5 (newest) should survive: %v", err)
+	}
+	// At least one file must have been evicted (usage was over watermark).
+	evicted := 0
+	for _, name := range []string{"p1", "p2", "p3", "p4"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); os.IsNotExist(err) {
+			evicted++
+		}
+	}
+	if evicted == 0 {
+		t.Error("expected at least one file to be evicted, got none")
+	}
+	// Not all files should be evicted (regression check).
+	if evicted == 5 {
+		t.Error("all 5 files were evicted — sub-MiB truncation bug may have recurred")
+	}
+}
+
 // TestDefaultConfig_Fallback returns the compiled-in defaults when no env is set.
 func TestDefaultConfig_Fallback(t *testing.T) {
 	t.Setenv("NODEVAULT_PKG_CACHE_DIR", "")

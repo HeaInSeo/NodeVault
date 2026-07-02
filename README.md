@@ -5,6 +5,7 @@ NodeVault는 장기 실행 Pod로 배포되며, 같은 Pod 안에서 podbridge5�
 현재 infra-lab 기준 production 배포는 Kubernetes User Namespace(`hostUsers:false`)와 `crun` 기반의 non-privileged Buildah 경로를 사용한다.
 
 → 전체 플랫폼 구성 및 end-to-end 흐름: [docs/PLATFORM_MAP.md](docs/PLATFORM_MAP.md)
+→ 개발 스프린트 현황 및 남은 작업: [docs/PLATFORM_SCHEDULE.md](docs/PLATFORM_SCHEDULE.md)
 → TrueNAS/iLO/NFS 운영 메모: [docs/TRUENAS_NFS_RUNBOOK.md](docs/TRUENAS_NFS_RUNBOOK.md)
 
 ---
@@ -168,6 +169,9 @@ SQLite 파일 포맷은 플랫폼 외부 계약이 아니다. 장기적으로 No
 | `NODEVAULT_ORAS_INSECURE_TLS` | `false` | ORAS referrer push TLS 검증 비활성화 |
 | `NODESENTINEL_GRPC_ADDR` | `nodesentinel.nodevault-system.svc.cluster.local:50052` | NodeSentinel EnqueueValidationWork 엔드포인트 |
 | `HARBOR_USER` / `HARBOR_PASS` | — | ORAS referrer 호환용 Harbor 인증 정보; Buildah push는 mounted auth.json 사용 |
+| `NODEVAULT_PKG_CACHE_DIR` | `/var/cache/nodevault/packages/conda` | conda/mamba 패키지 캐시 루트 (`CONDA_PKGS_DIRS` fallback) |
+| `NODEVAULT_PKG_CACHE_HIGH_WATERMARK_MIB` | `10240` (10 GiB) | 패키지 캐시 eviction 임계값 (MiB) |
+| `NODEVAULT_PKG_CACHE_GC_INTERVAL` | `30m` | 패키지 캐시 GC 주기 (Go duration 형식) |
 | `CATALOG_DIR` | `assets/catalog` | tool CAS 파일 저장 디렉토리 |
 | `DATA_CATALOG_DIR` | `assets/data-catalog` | data CAS 파일 저장 디렉토리 |
 | `INDEX_DIR` | `assets/index` | vault-index.json 저장 디렉토리 |
@@ -230,6 +234,8 @@ make vuln
 cmd/controlplane/     — gRPC + REST 서버 진입점 (main.go)
 pkg/
   build/              — BuildService: in-Pod podbridge5/Buildah 빌드 + 등록
+  buildstate/         — SubmitToolBuild 비동기 빌드 실행 상태 (SQLite WAL durable state)
+  cachegc/            — conda/mamba 패키지 캐시 PVC high-watermark GC
   catalog/            — ToolRegistryService / DataRegistryService: CAS 저장/조회
   catalogrest/        — Catalog REST API + Validation REST + Harbor webhook
   certification/      — CertifiedToolImageRecord + ToolFunctionCatalogEntry 생성
@@ -238,14 +244,16 @@ pkg/
   oras/               — OCI spec referrer push (sori wrapping)
   ping/               — PingService: 헬스체크
   policy/             — PolicyService: DockGuard .wasm 번들 제공
+  profiler/           — validationHash 계산 (환경 독립 SHA256) + 실패 분류기
   reconcile/          — Harbor 현실 대조 → integrity_health 갱신 (FastRun / SlowRun)
   registry/           — OCI 레지스트리 클라이언트
+  resolve/            — ResolveRecipe: Harbor 캐시 우선 조회 + conda 채널 fallback
   sentinelclient/     — NodeSentinel EnqueueValidationWork gRPC 클라이언트
   validate/           — ValidateService: L3 dry-run / L4 smoke run
   validation/         — ValidationResultService: L5-a/b 결과 수신 + certification 트리거
 test/
   slint/              — kube-slint gate 테스트 (build tag: slint)
-protos/nodevault/v1/  — NodeVault gRPC proto 정의
+protos/nodevault/v1/  — NodeVault gRPC proto 정의 (BuildKind enum 포함)
 protos/nodesentinel/v1/ — NodeSentinel IngressService proto (EnqueueValidationWork)
 deploy/               — K8s 매니페스트 (namespaces, RBAC, Deployment)
 .slint/               — kube-slint policy.yaml (슬린트 게이트 임계값)

@@ -81,13 +81,15 @@ func (g *GC) Run(ctx context.Context) {
 
 // RunOnce performs a single GC pass. Exported for testing and operator triggers.
 func (g *GC) RunOnce() error {
+	if g.cfg.Dir == "" || g.cfg.HighWatermarkMiB <= 0 {
+		return nil
+	}
+
 	usageMiB, err := DirUsageMiB(g.cfg.Dir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil // cache dir not yet created — nothing to do
-		}
 		return err
 	}
+	// DirUsageMiB returns (0, nil) for non-existent directories.
 
 	if usageMiB <= g.cfg.HighWatermarkMiB {
 		slog.Debug("package cache under watermark", "usage_mib", usageMiB, "watermark_mib", g.cfg.HighWatermarkMiB)
@@ -107,31 +109,42 @@ func (g *GC) RunOnce() error {
 		return entries[i].modTime.Before(entries[j].modTime)
 	})
 
-	targetMiB := g.cfg.HighWatermarkMiB * evictToFraction / 100
-	freed := int64(0)
+	// Track freed space in bytes so sub-MiB entries are counted correctly.
+	// usageMiB is already truncated; convert back to bytes as an approximation
+	// for the loop bound (conservative: may stop slightly early, never over-evicts).
+	targetBytes := g.cfg.HighWatermarkMiB * (1024 * 1024) * evictToFraction / 100
+	approxTotalBytes := usageMiB * (1024 * 1024)
+	freedBytes := int64(0)
 	evicted := 0
 
 	for _, e := range entries {
-		if usageMiB-freed <= targetMiB {
+		if approxTotalBytes-freedBytes <= targetBytes {
 			break
 		}
 		if err := os.RemoveAll(e.path); err != nil {
 			slog.Warn("failed to evict cache entry", "path", e.path, "err", err)
 			continue
 		}
-		freed += e.sizeMiB
+		freedBytes += e.sizeBytes
 		evicted++
-		slog.Info("evicted package cache entry", "path", filepath.Base(e.path), "size_mib", e.sizeMiB)
+		slog.Info("evicted package cache entry", "path", filepath.Base(e.path), "size_mib", e.sizeBytes/(1024*1024))
 	}
 
 	slog.Info("package cache GC complete",
-		"evicted", evicted, "freed_mib", freed, "remaining_mib", usageMiB-freed)
+		"evicted", evicted, "freed_mib", freedBytes/(1024*1024), "remaining_mib", usageMiB-freedBytes/(1024*1024))
 	return nil
 }
 
 // DirUsageMiB returns the total disk usage of dir in MiB (rounds down).
 // Returns 0 and a nil error when dir does not exist.
 func DirUsageMiB(dir string) (int64, error) {
+	b, err := dirWalkBytes(dir)
+	return b / (1024 * 1024), err
+}
+
+// dirWalkBytes sums the sizes of all regular files under dir recursively.
+// Returns (0, nil) if dir does not exist.
+func dirWalkBytes(dir string) (int64, error) {
 	var totalBytes int64
 	err := filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -150,16 +163,16 @@ func DirUsageMiB(dir string) (int64, error) {
 	if os.IsNotExist(err) {
 		return 0, nil
 	}
-	return totalBytes / (1024 * 1024), err
+	return totalBytes, err
 }
 
 type entry struct {
-	path    string
-	sizeMiB int64
-	modTime time.Time
+	path      string
+	sizeBytes int64
+	modTime   time.Time
 }
 
-// topLevelEntries lists the immediate children of dir with their sizes.
+// topLevelEntries lists the immediate children of dir with their sizes in bytes.
 // Directories are measured recursively; files are measured directly.
 func topLevelEntries(dir string) ([]entry, error) {
 	des, err := os.ReadDir(dir)
@@ -173,16 +186,16 @@ func topLevelEntries(dir string) ([]entry, error) {
 		if err != nil {
 			continue
 		}
-		sizeMiB := int64(0)
+		sizeBytes := int64(0)
 		if de.IsDir() {
-			sizeMiB, _ = DirUsageMiB(path)
+			sizeBytes, _ = dirWalkBytes(path)
 		} else {
-			sizeMiB = info.Size() / (1024 * 1024)
+			sizeBytes = info.Size()
 		}
 		result = append(result, entry{
-			path:    path,
-			sizeMiB: sizeMiB,
-			modTime: info.ModTime(),
+			path:      path,
+			sizeBytes: sizeBytes,
+			modTime:   info.ModTime(),
 		})
 	}
 	return result, nil

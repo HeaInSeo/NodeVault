@@ -178,7 +178,9 @@ v0.1.0 이후에는 `SubmitToolBuild`로 build를 제출하고 `WatchToolBuild`�
 - [x] Harbor layer cache (`NODEVAULT_BUILD_CACHE_REF` → `podbridge5.CacheRef`) 연결 — operator opt-in (2026-06-28)
 - [x] `BuildExecution.CacheRef` + `LayerCacheHit` 필드 추가 (2026-06-28)
 - [ ] 동일 ToolSpec 두 번째 빌드에서 `LayerCacheHit: true` seoy 라이브 검증
-- [x] cache GC — `pkg/cachegc`: high watermark 기반 eviction, oldest-mtime-first LRU, background loop, 9개 단위 테스트 (2026-06-29)
+- [x] cache GC — `pkg/cachegc`: high watermark 기반 eviction, oldest-mtime-first LRU, background loop, 11개 단위 테스트 (2026-06-29)
+  - bug fix: `RunOnce()` watermark ≤ 0 가드 누락 → 전체 캐시 삭제 위험 (2026-06-30)
+  - bug fix: sub-MiB 엔트리 `sizeMiB=0` truncation → eviction 루프가 목표 달성 불가로 전체 삭제 (2026-06-30)
 
 ---
 
@@ -319,14 +321,15 @@ Phase 1 이후 병행 가능.
   ├── proto: BuildKind enum + BuildRequest 재설계 (ToolSpec/ToolFunctionSpec 분리)
   └── Phase 4: cache GC — pkg/cachegc high watermark 기반 eviction 구현 완료
 
-단기 (P2)
-  └── 트랙 B: L5-a sample fixture (NodeSentinel 작업 — NodeVault 변경 없음)
+완료 (2026-06-30)
+  └── Phase 4: cache GC 버그 수정 (watermark≤0 가드, sub-MiB truncation)
 
-중기 (P3)
-  └── 트랙 C: 운영 안정화 (Data write path 완료; RBAC·Secret·DagEdit 미완)
-
-장기 (P4)
-  └── Phase 6: Legacy API 축소
+NodeKit 집중 기간 중 NodeVault 대기 작업 (2026-06-30 기준)
+  ├── Phase 4: seoy LayerCacheHit 라이브 검증 (seoy 필요, P3)
+  ├── 트랙 C: ValidateService RBAC 이관 — L3/L4 Job 권한 NodeSentinel SA로 이전 (P3)
+  ├── 트랙 C: Harbor 인증 Secret 통합 — buildah용·ORAS용 단일 정리 (P3)
+  ├── 트랙 C: DagEdit ↔ NodePalette 연결 — GET /v1/palette/tools → casHash pin (P4)
+  └── Phase 6: Legacy API 축소 (NodeKit 전환 완료 후)
 ```
 
 ---

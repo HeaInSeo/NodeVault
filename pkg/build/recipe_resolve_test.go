@@ -2,6 +2,7 @@ package build
 
 import (
 	"context"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -232,6 +233,32 @@ func TestFetchAnacondaChannel_ParsesBuilds(t *testing.T) {
 		if c.Channel == "" {
 			t.Errorf("channel must be set")
 		}
+	}
+}
+
+// Issue #9 회귀 테스트: 모든 채널에 실제로 연결이 안 되면(진짜 네트워크 실패),
+// "후보 0개"로 조용히 성공 반환하지 않고 명확한 gRPC 에러를 반환해야 한다 —
+// 이래야 "그 버전이 진짜 없음"과 "네트워크가 막힘"을 클라이언트가 구분할 수 있다.
+func TestResolveRecipe_AllChannelsUnreachable_ReturnsUnavailable(t *testing.T) {
+	unreachable := httptest.NewServer(nil)
+	unreachable.Close() // 닫힌 서버 주소 = 연결 즉시 거부됨
+
+	original := anacondaAPIBase
+	anacondaAPIBase = unreachable.URL
+	defer func() { anacondaAPIBase = original }()
+
+	svc := newMinimalService()
+	_, err := svc.ResolveRecipe(context.Background(), &nfv1.ResolveRecipeRequest{
+		ToolName: "samtools",
+		Version:  "99.99.99-unreachable-test",
+		Variant:  nfv1.RecipeVariant_RECIPE_VARIANT_CONDA,
+		Packages: []*nfv1.PackageSpec{{Name: "samtools", Version: "99.99.99-unreachable-test"}},
+		Channels: []string{"bioconda-unreachable-test-channel"},
+	})
+
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.Unavailable {
+		t.Fatalf("expected Unavailable when all channels are unreachable, got err=%v", err)
 	}
 }
 

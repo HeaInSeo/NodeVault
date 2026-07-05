@@ -17,10 +17,11 @@ import (
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
-const (
-	anacondaAPIBase = "https://api.anaconda.org/package"
-	channelCacheTTL = 30 * time.Minute
-)
+// anacondaAPIBase is a var (not const) so tests can point it at a fake/closed
+// server to simulate a real network failure — see recipe_resolve_test.go.
+var anacondaAPIBase = "https://api.anaconda.org/package"
+
+const channelCacheTTL = 30 * time.Minute
 
 // channelCacheKey identifies a cached resolution: "channel/name/version".
 type channelCacheEntry struct {
@@ -183,7 +184,16 @@ func resolveCondaPackages(
 		if pkg == nil {
 			continue
 		}
-		candidates := queryAnacondaOrg(ctx, pkg.GetName(), pkg.GetVersion(), channels)
+		candidates, allChannelsUnreachable := queryAnacondaOrg(ctx, pkg.GetName(), pkg.GetVersion(), channels)
+		if len(candidates) == 0 && allChannelsUnreachable {
+			// 채널이 없어서(404) 못 찾은 게 아니라, 시도한 채널 전부에 실제로
+			// 연결이 안 된 경우다. 이걸 "후보 0개"로 조용히 반환하면 클라이언트
+			// 입장에서 "그 버전이 진짜 없다"와 구분이 안 된다 — 명확한 에러로
+			// 알린다.
+			return nil, status.Errorf(codes.Unavailable,
+				"패키지 '%s=%s' 조회에 필요한 외부 conda 채널(%s)에 전부 연결할 수 없습니다. 네트워크 상태를 확인하세요",
+				pkg.GetName(), pkg.GetVersion(), strings.Join(channels, ", "))
+		}
 		resolutions = append(resolutions, &nfv1.PackageResolution{
 			Name:       pkg.GetName(),
 			Version:    pkg.GetVersion(),
@@ -240,11 +250,16 @@ type anacondaPackageResp struct {
 
 // queryAnacondaOrg queries Anaconda.org for build string candidates, trying channels
 // in order. Results are cached per (channel, name, version) for channelCacheTTL.
+// The second return value is true only if every channel query failed with a real
+// error (network/HTTP failure) rather than a clean "not found in this channel" —
+// callers use this to distinguish "genuinely no build for this version" from
+// "could not reach any channel to check".
 func queryAnacondaOrg(
 	ctx context.Context, name, version string, channels []string,
-) []*nfv1.BuildStringCandidate {
+) ([]*nfv1.BuildStringCandidate, bool) {
 	var all []*nfv1.BuildStringCandidate
 	seen := map[string]bool{}
+	failedChannels := 0
 
 	for _, ch := range channels {
 		cacheKey := fmt.Sprintf("%s/%s/%s", ch, name, version)
@@ -266,7 +281,9 @@ func queryAnacondaOrg(
 
 		candidates, err := fetchAnacondaChannel(ctx, name, version, ch)
 		if err != nil {
-			// Non-fatal per channel; skip and try next.
+			// Real failure (network/HTTP) for this channel — distinct from a
+			// clean 404, which fetchAnacondaChannel reports as (nil, nil).
+			failedChannels++
 			continue
 		}
 
@@ -283,7 +300,8 @@ func queryAnacondaOrg(
 		}
 	}
 
-	return all
+	allChannelsUnreachable := len(channels) > 0 && failedChannels == len(channels)
+	return all, allChannelsUnreachable
 }
 
 func fetchAnacondaChannel(

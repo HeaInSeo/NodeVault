@@ -141,7 +141,7 @@ deploy-infralab:
 	@echo "==> NodeVault namespaces + validation RBAC 적용..."
 	KUBECONFIG=$(INFRALAB_KUBECONFIG) kubectl apply -f deploy/00-namespaces.yaml
 	KUBECONFIG=$(INFRALAB_KUBECONFIG) kubectl apply -f deploy/02-rbac.yaml
-	@for secret in nodevault-registry-auth nodevault-harbor-auth; do \
+	@for secret in nodevault-registry-auth; do \
 	    if ! KUBECONFIG=$(INFRALAB_KUBECONFIG) kubectl -n nodevault-system get secret $$secret >/dev/null 2>&1; then \
 	        echo "ERROR: nodevault-system/$$secret is required before deploying NodeVault." >&2; \
 	        exit 1; \

@@ -43,8 +43,8 @@ overlay storage driver와 podbridge5 chroot-isolation 빌드 경로에 필요한
 
 - NodeVault 이미지를 `harbor.lab.local/nodevault/controlplane:latest`에 push
 - infra-lab Harbor CA 배포 완료 (`~/.config/infra-lab/install-guide.md`의 Harbor 설치 절차)
-- image pull과 Buildah push에 공통으로 사용하는 `nodevault-registry-auth` 생성
-- ORAS referrer 호환용 username/password secret 생성
+- image pull, Buildah push, ORAS referrer push에 공통으로 사용하는 `nodevault-registry-auth` 생성 (auth.json 형식, ORAS도 이 파일을 파싱)
+- in-Pod Buildah가 Harbor CA를 신뢰하도록 `nodevault-harbor-ca` 생성
 
 ```bash
 kubectl apply -f deploy/00-namespaces.yaml
@@ -55,9 +55,8 @@ kubectl create secret docker-registry nodevault-registry-auth \
   --docker-password=<password> \
   -n nodevault-system
 
-kubectl create secret generic nodevault-harbor-auth \
-  --from-literal=username=<username> \
-  --from-literal=password=<password> \
+kubectl create secret generic nodevault-harbor-ca \
+  --from-file=ca.crt="$HOME/.config/infra-lab/certs/harbor-ca.crt" \
   -n nodevault-system
 ```
 

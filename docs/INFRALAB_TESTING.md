@@ -37,9 +37,11 @@ kubectl create secret docker-registry nodevault-registry-auth \
   --docker-password=<password> \
   -n nodevault-system
 
-kubectl create secret generic nodevault-harbor-auth \
-  --from-literal=username=<username> \
-  --from-literal=password=<password> \
+# in-Pod Buildah가 Harbor의 자체서명 CA를 신뢰하도록 마운트하는 Secret.
+# 인증서(공개키)일 뿐 비밀정보가 아니다 — Harbor를 재설치하면 CA도 새로
+# 생성되므로 이 Secret도 다시 만들어야 한다.
+kubectl create secret generic nodevault-harbor-ca \
+  --from-file=ca.crt="$HOME/.config/infra-lab/certs/harbor-ca.crt" \
   -n nodevault-system
 ```
 

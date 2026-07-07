@@ -221,6 +221,9 @@ func (s *ToolRegistryService) RegisterTool(
 			LastValidatedAt: time.Now().Unix(),
 		},
 	}
+	// Build-time RegisterTool intentionally stores ToolSpec image/environment
+	// metadata only. ToolFunctionSpec metadata (command, inputs, outputs,
+	// display) is populated by the function/validation path, not by L2 build.
 
 	hash, err := s.catalog.SaveWithCasHash(tool)
 	if err != nil {

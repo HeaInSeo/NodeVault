@@ -253,6 +253,9 @@ func TestRegisterTool_V02RoundTrip(t *testing.T) {
 	if got.Validation == nil || got.Validation.Phase != "Passed" {
 		t.Errorf("Validation.Phase: got %v want Passed", got.Validation)
 	}
+	if got.Command != "" || len(got.Inputs) != 0 || len(got.Outputs) != 0 || got.Display != nil {
+		t.Fatalf("ToolFunctionSpec metadata should not be populated by build-time RegisterTool: %+v", got)
+	}
 }
 
 // TestRegisterTool_SingleFilePerRegistration verifies SaveWithCasHash writes

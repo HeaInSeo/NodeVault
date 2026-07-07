@@ -2,6 +2,7 @@ package build
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -33,7 +34,7 @@ func newSubmitTestService(t *testing.T) *Service {
 		ToolSpecDigest: "spec-123",
 		ToolName:       "bwa-mem2",
 		Version:        "2.2.1",
-		RawSpec:        `{"tool_name":"bwa-mem2","version":"2.2.1","dockerfile_content":"FROM alpine:3.20@sha256:abc123\nRUN true"}`,
+		RawSpec:        `{"tool_name":"bwa-mem2","version":"2.2.1","dockerfile_content":"FROM alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nRUN true"}`,
 		ResolvedAt:     time.Unix(100, 0).UTC(),
 	}); err != nil {
 		t.Fatalf("AppendResolvedToolSpec: %v", err)
@@ -83,6 +84,33 @@ func TestSubmitToolBuild_UnknownToolSpec_NotFound(t *testing.T) {
 	}
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("status got %v want NotFound", status.Code(err))
+	}
+}
+
+func TestSubmitToolBuild_InvalidDockerfileRejectedBeforeBuildState(t *testing.T) {
+	svc := newSubmitTestService(t)
+	if err := svc.indexStore.AppendResolvedToolSpec(index.ResolvedToolSpec{
+		ToolSpecDigest: "spec-invalid",
+		ToolName:       "bwa-mem2",
+		Version:        "2.2.1",
+		RawSpec:        `{"tool_name":"bwa-mem2","version":"2.2.1","dockerfile_content":"FROM alpine:latest\nRUN true"}`,
+		ResolvedAt:     time.Unix(101, 0).UTC(),
+	}); err != nil {
+		t.Fatalf("AppendResolvedToolSpec invalid: %v", err)
+	}
+
+	_, err := svc.SubmitToolBuild(context.Background(), &nfv1.SubmitToolBuildRequest{
+		RequestId:      "build-invalid",
+		ToolSpecDigest: "spec-invalid",
+	})
+	if err == nil {
+		t.Fatal("expected invalid Dockerfile to be rejected")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("status got %v want InvalidArgument", status.Code(err))
+	}
+	if _, getErr := svc.buildState.Get("build-invalid"); !errors.Is(getErr, buildstate.ErrNotFound) {
+		t.Fatalf("build state should not be created, got err %v", getErr)
 	}
 }
 

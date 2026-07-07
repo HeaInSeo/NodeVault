@@ -22,10 +22,10 @@
     │ Tool 정의 + L1 검증
     ▼
 [NodeKit]  ── C#/Avalonia 데스크톱 클라이언트
-    │ BuildRequest (gRPC)          AdminToolList (REST)
+    │ ToolSpecRequest/BuildRequest (gRPC)          AdminToolList (REST)
     ▼                                     ▲
 [NodeVault Pod]  ── Kubernetes data-plane app │
-    ├── BuildService     L2→L3→L4 + 등록   │
+    ├── BuildService     final build gate + L2→L3→L4 + 등록   │
     ├── podbridge5       Buildah Go API wrapper
     ├── pkg/index        artifact 상태 원장 (이중 축)
     └── pkg/catalogrest  Catalog/Validation REST
@@ -38,6 +38,8 @@
 [DockGuard]  ── OPA/Rego 정책 (.wasm 번들)
     └── NodeKit WasmPolicyChecker가 로컬 실행
     └── NodeVault PolicyService가 번들 배포
+
+NodeKit의 L1 검증은 authoring UX를 위한 1차 피드백이다. NodeVault는 `SubmitToolBuild`/legacy `BuildAndRegister`에서 `builder.Build()` 전에 Go native Dockerfile validator를 실행하는 최종 신뢰 경계다. DockGuard WASM 직접 실행은 아직 NodeVault build path에 연결되지 않았고, 정책 drift 축소를 위한 후속 작업으로 추적한다.
 
 [DagEdit]  ── C#/Avalonia 파이프라인 빌더
     └── NodePalette와 연결 없음 ← P5 이후 과제

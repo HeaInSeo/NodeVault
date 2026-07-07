@@ -244,6 +244,28 @@ func TestToolItem_IntegrityHealth_Default(t *testing.T) {
 	}
 }
 
+func TestPaletteToolsAlias_IncludesCasHash(t *testing.T) {
+	ts, svc := newServer(t)
+	hash := registerTool(t, svc, "bwa", "1.0")
+
+	resp := doGet(t, ts, ts.URL+"/v1/palette/tools")
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: got %d want 200", resp.StatusCode)
+	}
+
+	var body catalogrest.ListToolsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Tools) != 1 {
+		t.Fatalf("tools len got %d want 1", len(body.Tools))
+	}
+	if body.Tools[0].CasHash != hash {
+		t.Fatalf("CasHash got %q want %q", body.Tools[0].CasHash, hash)
+	}
+}
+
 // ── fakeCertSvc for catalogrest tests ────────────────────────────────────────
 
 type fakeCertSvc struct {

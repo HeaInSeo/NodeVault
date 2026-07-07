@@ -76,6 +76,9 @@ enum BuildKind {
 // ─────────────────────────────────────────────────────────────────────────────
 
 service BuildService {
+  // Deprecated: use ResolveToolSpec + SubmitToolBuild + WatchToolBuild.
+  // BuildAndRegister stays available only while NodeKit UI/library callers
+  // still submit legacy BuildRequest messages.
   rpc BuildAndRegister(BuildRequest) returns (stream BuildEvent);
   rpc ResolveToolSpec(ToolSpecRequest) returns (ResolvedToolSpecResponse);
   rpc SubmitToolBuild(SubmitToolBuildRequest) returns (SubmitToolBuildResponse);
@@ -126,6 +129,11 @@ message CancelToolBuildResponse {
 }
 
 // ── ResolveRecipe — 빌드 전 artifact 후보 조회 ──────────────────────────────
+// ResolveRecipe returns candidate artifact pins. It does not rewrite raw_spec
+// or create a canonical build request; callers must reflect a selected candidate
+// into dockerfile_content/environment_spec before SubmitToolBuild. NodeVault's
+// build gate validates that submitted conda/mamba package specs are fully pinned
+// as name=version=build.
 
 enum RecipeVariant {
   RECIPE_VARIANT_UNSPECIFIED = 0;
@@ -172,6 +180,10 @@ message ResolveRecipeResponse {
   repeated PackageResolution packages = 2;
 }
 
+// BuildRequest is consumed by NodeVault's build path after server-side policy validation.
+// Current implementation supports BUILD_KIND_UNSPECIFIED as legacy TOOLSPEC and
+// BUILD_KIND_TOOLSPEC. BUILD_KIND_TOOLFUNCTIONSPEC is modeled in the API but is
+// rejected by the Dockerfile build path until the function-image builder exists.
 message BuildRequest {
   string request_id = 1;
   string tool_definition_id = 2;
@@ -180,11 +192,13 @@ message BuildRequest {
   string version = 10;
   BuildKind kind = 16;
 
-  // BUILD_KIND_TOOLSPEC: base image from build recipe
+  // BUILD_KIND_TOOLSPEC: base image from build recipe. NodeVault does not rewrite
+  // this Dockerfile; it validates policy and passes the content to the builder.
   string dockerfile_content = 5;
   string environment_spec = 9;
 
-  // BUILD_KIND_TOOLFUNCTIONSPEC: function image on top of base image
+  // BUILD_KIND_TOOLFUNCTIONSPEC: function image on top of base image. Reserved
+  // for the future function-image builder, not accepted by today's Dockerfile path.
   string script = 6;
   string base_image_digest = 17;
 
@@ -266,6 +280,9 @@ message RegisterToolRequest {
   string stable_ref = 10;
   BuildKind build_kind = 15;
 
+  // Build-time registration stores ToolSpec image/environment metadata only.
+  // ToolFunctionSpec metadata is not accepted on this request; command,
+  // inputs, outputs, and display are populated by the function/validation path.
   reserved 6, 7, 11, 12, 13, 14;
   reserved "input_names", "output_names", "inputs", "outputs", "display", "command";
 }
@@ -303,7 +320,7 @@ message RegisteredToolDefinition {
   string integrity_health = 18;
   BuildKind build_kind = 19;
 
-  // ToolFunctionSpec fields — populated after dry-run validation, not at build time.
+  // ToolFunctionSpec fields — populated by the function/validation path, not at L2 build time.
   // inputs (12), outputs (13), display (14), command (17) are reserved for ToolFunctionSpec.
   repeated PortSpec inputs = 12;
   repeated PortSpec outputs = 13;

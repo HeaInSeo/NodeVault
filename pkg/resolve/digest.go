@@ -6,12 +6,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
 const (
 	defaultBuilderIdentity = "nodevault:in-pod-buildah:podbridge5"
 )
+
+var sha256DigestRE = regexp.MustCompile(`^sha256:[0-9a-fA-F]{64}$`)
 
 // Request is the NodeVault-internal representation of a ToolSpecRequest.
 // RawSpec is preserved verbatim for audit, but digests use a canonical JSON
@@ -91,6 +94,9 @@ func Resolve(req Request, ctx Context) (Resolved, error) {
 	}
 	if baseImageDigest == "" {
 		return Resolved{}, fmt.Errorf("base image must be pinned with @sha256 digest")
+	}
+	if !IsSHA256Digest(baseImageDigest) {
+		return Resolved{}, fmt.Errorf("base image digest must match sha256:<64 hex chars>")
 	}
 
 	ctx.BaseImageDigest = baseImageDigest
@@ -181,10 +187,15 @@ func digestFromImageRef(ref string) string {
 		return ""
 	}
 	digest := strings.TrimSpace(ref[idx+1:])
-	if strings.HasPrefix(digest, "sha256:") {
+	if IsSHA256Digest(digest) {
 		return digest
 	}
 	return ""
+}
+
+// IsSHA256Digest reports whether digest is exactly sha256:<64 hex chars>.
+func IsSHA256Digest(digest string) bool {
+	return sha256DigestRE.MatchString(strings.TrimSpace(digest))
 }
 
 func sha256Hex(payload []byte) string {

@@ -14,6 +14,8 @@ import (
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
+const validPolicyDockerfile = "FROM alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nRUN true"
+
 // ─── fakeStream — minimal grpc.ServerStreamingServer[nfv1.BuildEvent] mock ───
 
 type fakeStream struct {
@@ -131,10 +133,9 @@ func TestBuildAndRegister_BuilderError(t *testing.T) {
 	}
 	stream := newFakeStream()
 	req := &nfv1.BuildRequest{
-		RequestId: "req-001",
-		ToolName:  "test-tool",
-		DockerfileContent: `FROM alpine:3.19
-RUN echo hello`,
+		RequestId:         "req-001",
+		ToolName:          "test-tool",
+		DockerfileContent: validPolicyDockerfile,
 	}
 
 	err := svc.BuildAndRegister(req, stream)
@@ -157,6 +158,32 @@ RUN echo hello`,
 	}
 }
 
+func TestBuildAndRegister_InvalidDockerfileRejectedBeforeBuilder(t *testing.T) {
+	buildCalls := 0
+	svc := &Service{
+		builder: &countCallBuilder{inner: &mockBuilder{}, calls: &buildCalls},
+	}
+	stream := newFakeStream()
+	req := &nfv1.BuildRequest{
+		RequestId:         "req-policy-001",
+		ToolName:          "test-tool",
+		DockerfileContent: "FROM alpine:latest\nRUN true",
+	}
+
+	err := svc.BuildAndRegister(req, stream)
+	if err == nil || !strings.Contains(err.Error(), "build request policy") {
+		t.Fatalf("BuildAndRegister error got %v, want policy rejection", err)
+	}
+	if buildCalls != 0 {
+		t.Fatalf("Build called %d times, want 0", buildCalls)
+	}
+
+	kinds := stream.kindsSent()
+	if len(kinds) != 1 || kinds[0] != nfv1.BuildEventKind_BUILD_EVENT_KIND_FAILED {
+		t.Fatalf("events got %v, want exactly FAILED", kinds)
+	}
+}
+
 // TestBuildAndRegister_RootlessFailure_NoPrivilegedFallback verifies that a
 // rootless Buildah error (e.g. mknod EPERM in user namespace) emits
 // BUILD_EVENT_KIND_FAILED and does not fall back to a privileged build path.
@@ -176,7 +203,7 @@ func TestBuildAndRegister_RootlessFailure_NoPrivilegedFallback(t *testing.T) {
 	req := &nfv1.BuildRequest{
 		RequestId:         "req-rootless-01",
 		ToolName:          "test-tool",
-		DockerfileContent: "FROM alpine:3.20\nRUN mknod /dev/test c 1 3",
+		DockerfileContent: "FROM alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nRUN mknod /dev/test c 1 3",
 	}
 
 	if err := svc.BuildAndRegister(req, stream); err == nil {
@@ -224,7 +251,7 @@ func TestBuildAndRegister_BuilderError_NoSucceededEvent(t *testing.T) {
 		builder: &mockBuilder{err: fmt.Errorf("layer not found")},
 	}
 	stream := newFakeStream()
-	req := &nfv1.BuildRequest{RequestId: "req-002", ToolName: "bwa"}
+	req := &nfv1.BuildRequest{RequestId: "req-002", ToolName: "bwa", DockerfileContent: validPolicyDockerfile}
 
 	_ = svc.BuildAndRegister(req, stream)
 
@@ -242,7 +269,7 @@ func TestBuildAndRegister_BuilderError_JobCreatedFirst(t *testing.T) {
 		builder: &mockBuilder{err: fmt.Errorf("context deadline exceeded")},
 	}
 	stream := newFakeStream()
-	req := &nfv1.BuildRequest{RequestId: "req-003", ToolName: "samtools"}
+	req := &nfv1.BuildRequest{RequestId: "req-003", ToolName: "samtools", DockerfileContent: validPolicyDockerfile}
 
 	_ = svc.BuildAndRegister(req, stream)
 
@@ -271,7 +298,7 @@ func TestBuildAndRegister_BuilderError_RecordsFailedToolBuildRecord(t *testing.T
 		indexStore: store,
 	}
 	stream := newFakeStream()
-	req := &nfv1.BuildRequest{RequestId: "req-fail-001", ToolName: "test-tool"}
+	req := &nfv1.BuildRequest{RequestId: "req-fail-001", ToolName: "test-tool", DockerfileContent: validPolicyDockerfile}
 
 	if err := svc.BuildAndRegister(req, stream); err == nil {
 		t.Fatal("expected error from BuildAndRegister")
@@ -388,7 +415,7 @@ func mustParseTime(t *testing.T) time.Time {
 func TestNewDisabledService_ReturnsDisabledBackendError(t *testing.T) {
 	svc := NewDisabledService()
 	stream := newFakeStream()
-	req := &nfv1.BuildRequest{RequestId: "req-disabled-01", ToolName: "bwa"}
+	req := &nfv1.BuildRequest{RequestId: "req-disabled-01", ToolName: "bwa", DockerfileContent: validPolicyDockerfile}
 
 	err := svc.BuildAndRegister(req, stream)
 	if err == nil {
@@ -404,7 +431,7 @@ func TestNewDisabledService_ReturnsDisabledBackendError(t *testing.T) {
 func TestNewDisabledService_EmitsFAILEDEvent(t *testing.T) {
 	svc := NewDisabledService()
 	stream := newFakeStream()
-	req := &nfv1.BuildRequest{RequestId: "req-disabled-02", ToolName: "samtools"}
+	req := &nfv1.BuildRequest{RequestId: "req-disabled-02", ToolName: "samtools", DockerfileContent: validPolicyDockerfile}
 
 	_ = svc.BuildAndRegister(req, stream)
 
@@ -423,7 +450,7 @@ func TestNewDisabledService_EmitsFAILEDEvent(t *testing.T) {
 func TestNewDisabledService_NoSUCCEEDEDEvent(t *testing.T) {
 	svc := NewDisabledService()
 	stream := newFakeStream()
-	req := &nfv1.BuildRequest{RequestId: "req-disabled-03", ToolName: "gatk"}
+	req := &nfv1.BuildRequest{RequestId: "req-disabled-03", ToolName: "gatk", DockerfileContent: validPolicyDockerfile}
 
 	_ = svc.BuildAndRegister(req, stream)
 

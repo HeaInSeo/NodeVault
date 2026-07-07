@@ -29,7 +29,7 @@ func TestResolveToolSpec_FirstRequest_Succeeds(t *testing.T) {
 	resp, err := s.ResolveToolSpec(context.Background(), &nfv1.ToolSpecRequest{
 		ToolName: resolveTestToolName,
 		Version:  "2.2.1",
-		RawSpec:  `{"image_uri":"alpine:3.20@sha256:abc123","tool_name":"bwa-mem2"}`,
+		RawSpec:  `{"image_uri":"alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tool_name":"bwa-mem2"}`,
 	})
 	if err != nil {
 		t.Fatalf("ResolveToolSpec: %v", err)
@@ -61,7 +61,7 @@ func TestResolveToolSpec_IdenticalRequest_IsIdempotent(t *testing.T) {
 	req := &nfv1.ToolSpecRequest{
 		ToolName: resolveTestToolName,
 		Version:  "2.2.1",
-		RawSpec:  `{"image_uri":"alpine:3.20@sha256:abc123","tool_name":"bwa-mem2"}`,
+		RawSpec:  `{"image_uri":"alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tool_name":"bwa-mem2"}`,
 	}
 
 	first, err := s.ResolveToolSpec(context.Background(), req)
@@ -93,7 +93,7 @@ func TestResolveToolSpec_StoresInIndex(t *testing.T) {
 	resp, err := s.ResolveToolSpec(context.Background(), &nfv1.ToolSpecRequest{
 		ToolName: resolveTestToolName,
 		Version:  "2.2.1",
-		RawSpec:  `{"base_image":"alpine:3.20@sha256:abc123","tool_name":"bwa-mem2","version":"2.2.1"}`,
+		RawSpec:  `{"base_image":"alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tool_name":"bwa-mem2","version":"2.2.1"}`,
 	})
 	if err != nil {
 		t.Fatalf("ResolveToolSpec: %v", err)
@@ -103,7 +103,7 @@ func TestResolveToolSpec_StoresInIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetResolvedToolSpecByDigest: %v", err)
 	}
-	if got.RawSpec != `{"base_image":"alpine:3.20@sha256:abc123","tool_name":"bwa-mem2","version":"2.2.1"}` {
+	if got.RawSpec != `{"base_image":"alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tool_name":"bwa-mem2","version":"2.2.1"}` {
 		t.Fatalf("RawSpec not preserved: %q", got.RawSpec)
 	}
 	if got.ToolName != resolveTestToolName || got.Version != "2.2.1" {
@@ -112,7 +112,7 @@ func TestResolveToolSpec_StoresInIndex(t *testing.T) {
 	if got.RecipeInputsDigest == "" || got.BuildPlanDigest == "" || got.BuilderIdentity == "" {
 		t.Fatalf("expected resolved digests and builder identity: %+v", got)
 	}
-	if got.BaseImageRef != "alpine:3.20@sha256:abc123" || got.BaseImageDigest != "sha256:abc123" {
+	if got.BaseImageRef != "alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" || got.BaseImageDigest != "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
 		t.Fatalf("unexpected base image pin: %+v", got)
 	}
 }
@@ -123,7 +123,7 @@ func TestResolveToolSpec_CanonicalJSON_IsDeterministic(t *testing.T) {
 	first, err := s.ResolveToolSpec(context.Background(), &nfv1.ToolSpecRequest{
 		ToolName: resolveTestToolName,
 		Version:  "2.2.1",
-		RawSpec:  `{"image_uri":"alpine:3.20@sha256:abc123","tool_name":"bwa-mem2","version":"2.2.1"}`,
+		RawSpec:  `{"image_uri":"alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tool_name":"bwa-mem2","version":"2.2.1"}`,
 	})
 	if err != nil {
 		t.Fatalf("first ResolveToolSpec: %v", err)
@@ -132,7 +132,7 @@ func TestResolveToolSpec_CanonicalJSON_IsDeterministic(t *testing.T) {
 		ToolName: resolveTestToolName,
 		Version:  "2.2.1",
 		RawSpec: `{
-			"image_uri": "alpine:3.20@sha256:abc123",
+			"image_uri": "alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			"version": "2.2.1",
 			"tool_name": "bwa-mem2"
 		}`,
@@ -173,7 +173,7 @@ func TestResolveToolSpec_EmptyToolName_InvalidArgument(t *testing.T) {
 
 	_, err := s.ResolveToolSpec(context.Background(), &nfv1.ToolSpecRequest{
 		ToolName: "",
-		RawSpec:  `{"image_uri":"alpine:3.20@sha256:abc123","tool_name":"bwa-mem2"}`,
+		RawSpec:  `{"image_uri":"alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tool_name":"bwa-mem2"}`,
 	})
 	if err == nil {
 		t.Fatal("expected error for empty tool_name")
@@ -188,7 +188,7 @@ func TestResolveToolSpec_DifferentRawSpec_DifferentDigest(t *testing.T) {
 
 	first, err := s.ResolveToolSpec(context.Background(), &nfv1.ToolSpecRequest{
 		ToolName: "bwa-mem2",
-		RawSpec:  `{"image_uri":"alpine:3.20@sha256:abc123","tool_name":"bwa-mem2","version":"1"}`,
+		RawSpec:  `{"image_uri":"alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tool_name":"bwa-mem2","version":"1"}`,
 	})
 	if err != nil {
 		t.Fatalf("first ResolveToolSpec: %v", err)
@@ -196,7 +196,7 @@ func TestResolveToolSpec_DifferentRawSpec_DifferentDigest(t *testing.T) {
 
 	second, err := s.ResolveToolSpec(context.Background(), &nfv1.ToolSpecRequest{
 		ToolName: "bwa-mem2",
-		RawSpec:  `{"image_uri":"alpine:3.20@sha256:abc123","tool_name":"bwa-mem2","version":"2"}`,
+		RawSpec:  `{"image_uri":"alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tool_name":"bwa-mem2","version":"2"}`,
 	})
 	if err != nil {
 		t.Fatalf("second ResolveToolSpec: %v", err)
@@ -220,7 +220,7 @@ func TestResolveToolSpec_NilIndexStore_Unavailable(t *testing.T) {
 
 	_, err := s.ResolveToolSpec(context.Background(), &nfv1.ToolSpecRequest{
 		ToolName: "bwa-mem2",
-		RawSpec:  `{"image_uri":"alpine:3.20@sha256:abc123","tool_name":"bwa-mem2"}`,
+		RawSpec:  `{"image_uri":"alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tool_name":"bwa-mem2"}`,
 	})
 	if err == nil {
 		t.Fatal("expected error when indexStore is nil")
@@ -245,6 +245,21 @@ func TestResolveToolSpec_UnpinnedBaseImage_InvalidArgument(t *testing.T) {
 	}
 }
 
+func TestResolveToolSpec_ShortBaseImageDigest_InvalidArgument(t *testing.T) {
+	s := newResolveTestService(t)
+
+	_, err := s.ResolveToolSpec(context.Background(), &nfv1.ToolSpecRequest{
+		ToolName: resolveTestToolName,
+		RawSpec:  `{"image_uri":"alpine:3.20@sha256:abc123","tool_name":"bwa-mem2"}`,
+	})
+	if err == nil {
+		t.Fatal("expected error for short image_uri digest")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v", status.Code(err))
+	}
+}
+
 // ─── unpinned base image auto-resolution (NODEVAULT_RESOLVE_UNPINNED_BASE_IMAGE) ───
 
 type fakeBaseImageResolver struct {
@@ -260,7 +275,7 @@ func (f *fakeBaseImageResolver) ResolveTagDigest(_ context.Context, ref string) 
 
 func TestResolveToolSpec_UnpinnedBaseImage_FlagOff_StillRejects(t *testing.T) {
 	s := newResolveTestService(t)
-	s.baseImageResolver = &fakeBaseImageResolver{digest: "sha256:shouldnotbeused"}
+	s.baseImageResolver = &fakeBaseImageResolver{digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}
 
 	_, err := s.ResolveToolSpec(context.Background(), &nfv1.ToolSpecRequest{
 		ToolName: resolveTestToolName,
@@ -277,7 +292,7 @@ func TestResolveToolSpec_UnpinnedBaseImage_FlagOff_StillRejects(t *testing.T) {
 func TestResolveToolSpec_UnpinnedBaseImage_FlagOn_ResolvesDigest(t *testing.T) {
 	t.Setenv("NODEVAULT_RESOLVE_UNPINNED_BASE_IMAGE", "true")
 	s := newResolveTestService(t)
-	resolver := &fakeBaseImageResolver{digest: "sha256:resolved123"}
+	resolver := &fakeBaseImageResolver{digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
 	s.baseImageResolver = resolver
 
 	resp, err := s.ResolveToolSpec(context.Background(), &nfv1.ToolSpecRequest{
@@ -295,8 +310,8 @@ func TestResolveToolSpec_UnpinnedBaseImage_FlagOn_ResolvesDigest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetResolvedToolSpecByDigest: %v", err)
 	}
-	if got.BaseImageDigest != "sha256:resolved123" {
-		t.Errorf("BaseImageDigest: got %q, want %q", got.BaseImageDigest, "sha256:resolved123")
+	if got.BaseImageDigest != "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
+		t.Errorf("BaseImageDigest: got %q, want %q", got.BaseImageDigest, "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 	}
 }
 
@@ -320,12 +335,12 @@ func TestResolveToolSpec_UnpinnedBaseImage_FlagOn_ResolverError_FailedPreconditi
 func TestResolveToolSpec_UnpinnedBaseImage_FlagOn_AlreadyPinned_ResolverNotCalled(t *testing.T) {
 	t.Setenv("NODEVAULT_RESOLVE_UNPINNED_BASE_IMAGE", "true")
 	s := newResolveTestService(t)
-	resolver := &fakeBaseImageResolver{digest: "sha256:shouldnotbeused"}
+	resolver := &fakeBaseImageResolver{digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}
 	s.baseImageResolver = resolver
 
 	_, err := s.ResolveToolSpec(context.Background(), &nfv1.ToolSpecRequest{
 		ToolName: resolveTestToolName,
-		RawSpec:  `{"image_uri":"alpine:3.20@sha256:abc123","tool_name":"bwa-mem2"}`,
+		RawSpec:  `{"image_uri":"alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tool_name":"bwa-mem2"}`,
 	})
 	if err != nil {
 		t.Fatalf("ResolveToolSpec: %v", err)

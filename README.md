@@ -18,6 +18,7 @@ NodeKit (외부 C# authoring/admin tool)
     ▼
 NodeVault (이 프로젝트 — K8s data-plane Go gRPC + REST app)
     │
+    ├── final build gate: Dockerfile/base image 정책 재검증
     ├── L2: in-pod-buildah (production)
     │       NodeVault process → podbridge5 wrapper → Buildah Go API
     │       hostUsers:false Pod 안에서 container-root를 host 비특권 UID로 매핑
@@ -53,7 +54,7 @@ CertifiedToolImageRecord + ToolFunctionCatalogEntry 생성
 |--------|--------|------|
 | `PingService` | `pkg/ping` | 연결 확인 |
 | `PolicyService` | `pkg/policy` | DockGuard `.wasm` 번들 제공 (NodeKit L1 정책 평가) |
-| `BuildService` | `pkg/build` | L2 빌드 + 등록 + NodeSentinel enqueue; BuildEvent 스트림 |
+| `BuildService` | `pkg/build` | NodeVault final build gate + L2 빌드 + 등록 + NodeSentinel enqueue; BuildEvent 스트림 |
 | `ValidateService` | `pkg/validate` | L3 dry-run / L4 smoke run (BuildService 내부 호출) |
 | `ToolRegistryService` | `pkg/catalog` | ToolDefinition CAS 저장 (gRPC write path) |
 | `DataRegistryService` | `pkg/catalog` | DataDefinition CAS 저장 (gRPC write path) |
@@ -317,6 +318,8 @@ deploy/               — K8s 매니페스트 (namespaces, RBAC, Deployment)
 ## DockGuard 정책
 
 NodeKit L1 정책 평가에 사용되는 `.wasm` 번들은 [`DockGuard`](https://github.com/HeaInSeo/DockGuard) 레포에서 빌드.
+NodeVault는 이 번들을 `PolicyService`로 배포하지만, 현재 build path에서 DockGuard WASM을 직접 실행하지는 않는다.
+NodeVault의 authoritative build gate는 `pkg/build.ValidateBuildRequest`의 Go native validator이며, DockGuard WASM 직접 실행은 정책 drift 축소를 위한 후속 작업으로 추적한다.
 
 | 패키지 | 규칙 | 설명 |
 |--------|------|------|

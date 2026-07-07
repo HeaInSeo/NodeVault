@@ -6,6 +6,8 @@
 //	GET /v1/catalog/tools/{cas_hash}          — get single tool by CAS hash
 //	GET /v1/catalog/data                      — list active data artifacts (query: stable_ref)
 //	GET /v1/catalog/data/{cas_hash}           — get single data artifact by CAS hash
+//	GET /v1/palette/tools                     — alias for /v1/catalog/tools
+//	GET /v1/palette/data                      — alias for /v1/catalog/data
 //	GET /v1/gc/toolprofile-candidates         — list toolprofile referrers marked GC_CANDIDATE
 //	                                             (query: subject_digest, optional)
 //
@@ -104,6 +106,10 @@ func NewMuxWithCert(
 	mux.HandleFunc("GET /v1/catalog/tools/{cas_hash}", s.handleGetTool)
 	mux.HandleFunc("GET /v1/catalog/data", s.handleListData)
 	mux.HandleFunc("GET /v1/catalog/data/{cas_hash}", s.handleGetData)
+	// NodePalette aliases for pipeline builders. The response schema is
+	// identical to the catalog endpoints and includes cas_hash for execution pinning.
+	mux.HandleFunc("GET /v1/palette/tools", s.handleListTools)
+	mux.HandleFunc("GET /v1/palette/data", s.handleListData)
 	// Sprint 4: certified tool catalog (NodePalette primary source)
 	mux.HandleFunc("GET /v1/catalog/certified-tools", s.handleListCertifiedTools)
 	mux.HandleFunc("GET /v1/catalog/certified-tools/{cas_hash}", s.handleGetCertifiedTool)

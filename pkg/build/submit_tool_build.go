@@ -37,6 +37,9 @@ func (s *Service) SubmitToolBuild(
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "resolved tool spec is not buildable: %v", err)
 	}
+	if err := ValidateBuildRequest(buildReq); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "resolved tool spec failed build policy: %v", err)
+	}
 
 	now := time.Now().UTC()
 	rec, created, err := s.buildState.CreateOrGet(req.GetRequestId(), req.GetToolSpecDigest(), now)

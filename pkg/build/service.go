@@ -118,6 +118,8 @@ func (s *Service) Close() error {
 }
 
 // BuildAndRegister implements BuildServiceServer.
+// Deprecated: use ResolveToolSpec + SubmitToolBuild + WatchToolBuild.
+// Kept until NodeKit UI/library callers stop using the legacy BuildRequest path.
 // Full orchestration: L2 (image build+push) → L3 (dry-run) → L4 (smoke run) → registration.
 //
 //nolint:funlen // orchestration function — extracting sub-steps would obscure the L2→L3→L4 sequence.
@@ -131,6 +133,16 @@ func (s *Service) BuildAndRegister(req *nfv1.BuildRequest, stream grpc.ServerStr
 			Timestamp: time.Now().UnixMilli(),
 		})
 	}
+
+	if err := ValidateBuildRequest(req); err != nil {
+		_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_FAILED, err.Error())
+		return fmt.Errorf("build request policy: %w", err)
+	}
+
+	slog.Warn("deprecated BuildAndRegister called",
+		"request_id", req.GetRequestId(),
+		"tool_name", req.GetToolName(),
+	)
 
 	destination := fmt.Sprintf("%s/library/%s:latest", registryAddr(), sanitizeName(req.ToolName))
 

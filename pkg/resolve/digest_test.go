@@ -60,7 +60,7 @@ func TestToolSpecDigest_Stability(t *testing.T) {
 	req := Request{
 		ToolName: "bwa",
 		Version:  "1.0.0",
-		RawSpec:  `{"image_uri":"alpine:3.20@sha256:abc123","version":"1.0.0","tool_name":"bwa"}`,
+		RawSpec:  `{"image_uri":"alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","version":"1.0.0","tool_name":"bwa"}`,
 	}
 	first, err := ToolSpecDigest(req, Context{})
 	if err != nil {
@@ -76,11 +76,11 @@ func TestToolSpecDigest_Stability(t *testing.T) {
 }
 
 func TestToolSpecDigest_IndependentFromLegacyCasHash(t *testing.T) {
-	got, err := ToolSpecDigest(Request{ToolName: "bwa", RawSpec: `{"cas_hash":"legacy","image_uri":"alpine:3.20@sha256:abc123","tool_name":"bwa"}`}, Context{})
+	got, err := ToolSpecDigest(Request{ToolName: "bwa", RawSpec: `{"cas_hash":"legacy","image_uri":"alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tool_name":"bwa"}`}, Context{})
 	if err != nil {
 		t.Fatalf("ToolSpecDigest: %v", err)
 	}
-	withoutLegacyCas, err := ToolSpecDigest(Request{ToolName: "bwa", RawSpec: `{"image_uri":"alpine:3.20@sha256:abc123","tool_name":"bwa"}`}, Context{})
+	withoutLegacyCas, err := ToolSpecDigest(Request{ToolName: "bwa", RawSpec: `{"image_uri":"alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tool_name":"bwa"}`}, Context{})
 	if err != nil {
 		t.Fatalf("ToolSpecDigest without cas_hash: %v", err)
 	}
@@ -95,15 +95,15 @@ func TestToolSpecDigest_IndependentFromLegacyCasHash(t *testing.T) {
 func TestResolve_ExtractsPinnedBaseImage(t *testing.T) {
 	resolved, err := Resolve(Request{
 		ToolName: "bwa",
-		RawSpec:  `{"base_image":"alpine:3.20@sha256:abc123","tool_name":"bwa"}`,
+		RawSpec:  `{"base_image":"alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tool_name":"bwa"}`,
 	}, Context{})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if resolved.BaseImageRef != "alpine:3.20@sha256:abc123" {
+	if resolved.BaseImageRef != "alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
 		t.Fatalf("BaseImageRef got %q", resolved.BaseImageRef)
 	}
-	if resolved.BaseImageDigest != "sha256:abc123" {
+	if resolved.BaseImageDigest != "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
 		t.Fatalf("BaseImageDigest got %q", resolved.BaseImageDigest)
 	}
 	if resolved.RecipeInputsDigest == "" || resolved.BuildPlanDigest == "" || resolved.ToolSpecDigest == "" {
@@ -128,6 +128,16 @@ func TestResolve_UnpinnedBaseImageRejected(t *testing.T) {
 	}, Context{})
 	if err == nil {
 		t.Fatal("expected unpinned base image to be rejected")
+	}
+}
+
+func TestResolve_ShortBaseImageDigestRejected(t *testing.T) {
+	_, err := Resolve(Request{
+		ToolName: "bwa",
+		RawSpec:  `{"image_uri":"alpine:3.20@sha256:abc123","tool_name":"bwa"}`,
+	}, Context{})
+	if err == nil {
+		t.Fatal("expected short base image digest to be rejected")
 	}
 }
 

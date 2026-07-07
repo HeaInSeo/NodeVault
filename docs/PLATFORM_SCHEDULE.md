@@ -1,7 +1,7 @@
 # Platform Schedule
 
-버전: 3.2
-갱신: 2026-06-23
+버전: 3.3
+갱신: 2026-07-07
 기준 문서:
 - `docs/ARCHITECTURE_V01.md` (NodeVault Kubernetes In-Pod 재현 가능 이미지 빌드 아키텍처 v0.1.0)
 - `docs/OBSERVED_PROFILE_SPEC.md`, `docs/SECURITY_SCAN_SPEC.md`, `docs/RUNNER_NODE_SPEC.md`
@@ -48,6 +48,152 @@
 ## 다음 작업: v0.1.0 아키텍처 구현
 
 아키텍처 v0.1.0은 현재 `legacy BuildRequest` 경로를 `ToolSpecRequest → ResolvedToolSpec → SubmitToolBuild` 경로로 전환하는 것이 핵심이다. 섹션 16의 마이그레이션 단계를 기준으로 한다.
+
+### Sprint 0 — NodeVault final build gate (issue #16)
+
+**목표**: NodeKit L1 검증을 우회한 직접 gRPC 호출도 NodeVault에서 최종 차단한다. NodeKit은 authoring/UX 1차 gate이고, NodeVault는 raw spec을 실제 Buildah에 넘기기 전 authoritative build gate다.
+
+**원칙**
+
+- `ResolveToolSpec`은 digest/index 생성 단계이며 Dockerfile rewrite 단계가 아니다.
+- NodeVault는 NodeKit이 보낸 `dockerfile_content`를 그대로 빌드하되, `builder.Build()` 전에 서버 쪽 정책 검증을 다시 실행한다.
+- legacy `BuildAndRegister`가 열려 있는 동안에는 `SubmitToolBuild`와 동일한 build gate를 적용한다.
+
+**주요 작업**
+
+| 파일 | 변경 |
+|------|------|
+| `pkg/resolve/digest.go` | base image digest를 `^sha256:[0-9a-fA-F]{64}$`로 검증 |
+| `pkg/build/validate.go` | NodeVault final build gate 추가 |
+| `pkg/build/submit_tool_build.go` | `buildRequestFromResolved` 이후, build state 생성 전 `ValidateBuildRequest` 실행 |
+| `pkg/build/service.go` | legacy `BuildAndRegister`도 builder 호출 전 동일 정책 검증 |
+
+**최소 Dockerfile 정책**
+
+- 모든 `FROM`은 `@sha256:<64 hex>` digest pin 필수
+- `latest` 태그 금지
+- 모든 `FROM` digest 형식 검증
+- `USER root`, `USER 0`, `USER 0:0`, `USER root:root`, root group, 변수 기반 `USER` 차단
+
+**완료 판정**
+
+- [x] 짧은 base image digest가 `ResolveToolSpec`에서 `InvalidArgument`로 거부됨
+- [x] `SubmitToolBuild`가 invalid Dockerfile을 build state 생성 전 거부
+- [x] `BuildAndRegister`가 invalid Dockerfile을 builder 호출 전 거부
+- [x] `go test -tags "$(BUILDTAGS)" ./pkg/resolve ./pkg/build` 통과
+- [x] `go test -tags "$(BUILDTAGS)" ./...` 통과
+
+### Sprint 1 — Build gate contract formalization
+
+**목표**: Sprint 0에서 추가한 final build gate를 NodeKit/NodeVault 사이의 공식 계약으로 고정한다.
+
+**결정**
+
+- 현재 NodeVault Dockerfile build path는 `BUILD_KIND_UNSPECIFIED`(legacy compatibility)와 `BUILD_KIND_TOOLSPEC`만 지원한다.
+- `BUILD_KIND_TOOLFUNCTIONSPEC`은 proto/API 모델에는 존재하지만, function-image builder가 생기기 전까지 `ValidateBuildRequest`에서 명시적으로 거부한다.
+- `ResolveToolSpec`은 raw spec digest/index 생성 단계다. Dockerfile rewrite, package pin rewrite, base image ref rewrite를 수행하지 않는다.
+- NodeVault final gate는 Go native validator를 기준 구현으로 유지한다. DockGuard WASM 직접 실행은 정책 drift를 줄이기 위한 별도 후속 이슈 [#17](https://github.com/HeaInSeo/NodeVault/issues/17)로 분리한다.
+
+**주요 작업**
+
+| 파일 | 변경 |
+|------|------|
+| `pkg/build/validate.go` | `BuildKind`별 gate 계약 명시 (`UNSPECIFIED`/`TOOLSPEC` 허용, `TOOLFUNCTIONSPEC` 거부) |
+| `protos/nodevault/v1/nodevault.proto` | BuildRequest 주석으로 현 build path 지원 범위 명시 |
+| `docs/TOOL_NODE_SPEC.md` | NodeKit L1 / NodeVault final gate / ResolveToolSpec 역할 분리 |
+| `docs/PLATFORM_MAP.md` | DockGuard와 NodeVault native final gate의 현재 관계 명시 |
+
+**완료 판정**
+
+- [x] `TOOLFUNCTIONSPEC`이 현재 Dockerfile build path에서 명시적으로 거부됨
+- [x] `UNSPECIFIED` legacy request는 `TOOLSPEC`으로 취급됨
+- [x] proto/doc/code가 `ResolveToolSpec != Dockerfile rewrite` 계약을 동일하게 설명
+- [x] DockGuard WASM 직접 실행 후속 이슈 생성 또는 기존 이슈에 추적 항목 추가 — issue [#17](https://github.com/HeaInSeo/NodeVault/issues/17)
+- [x] `go test -tags "$(BUILDTAGS)" ./...` 통과
+
+### Sprint 2 — ResolveRecipe / Submit reproducibility contract
+
+**목표**: `ResolveRecipe`와 `SubmitToolBuild` 사이의 package pinning 책임을 명확히 한다.
+
+**결정**
+
+- `ResolveRecipe`는 candidate lookup API다. Harbor cache 또는 외부 source에서 `BuildStringCandidate`를 반환하지만 `raw_spec`이나 Dockerfile을 rewrite하지 않는다.
+- NodeKit은 사용자 선택 결과를 `dockerfile_content` 또는 `environment_spec`에 반영해 `ResolveToolSpec`/`SubmitToolBuild` 경로로 제출한다.
+- NodeVault는 Submit/Build gate에서 실제 제출된 spec이 재현 가능한 full pin인지 검증한다.
+- conda/mamba/micromamba 패키지는 `name=version=build` 형식을 요구한다. NodeKit L1의 `name=version` 허용은 UX 단계의 최소 입력 검증이며, NodeVault final gate를 대체하지 않는다.
+- NodeVault가 canonical resolved spec을 생성하는 API는 현재 범위 밖이다. 필요해지면 별도 API/이슈 [#18](https://github.com/HeaInSeo/NodeVault/issues/18)로 분리한다.
+
+**주요 작업**
+
+| 파일 | 변경 |
+|------|------|
+| `pkg/build/validate.go` | Dockerfile `RUN conda/mamba/micromamba install` 및 `environment_spec` package full pin 검증 |
+| `protos/nodevault/v1/nodevault.proto` | `ResolveRecipe`가 candidate lookup이고 rewrite가 아님을 주석화 |
+| `docs/PLATFORM_SCHEDULE.md` | ResolveRecipe/Submit 책임 분리 기록 |
+
+**완료 판정**
+
+- [x] Dockerfile 내 `conda install bwa=0.7.17` 같은 version-only pin이 build gate에서 거부됨
+- [x] Dockerfile 내 `micromamba install bwa=0.7.17=h5bf99c6_8` 같은 full pin이 허용됨
+- [x] `environment_spec` 내 version-only conda pin이 거부됨
+- [x] `ResolveRecipe`는 rewrite/canonical spec 생성 API가 아님을 proto/doc에 명시
+- [x] canonical resolved spec 생성 필요 여부를 후속 이슈로 추적 — issue [#18](https://github.com/HeaInSeo/NodeVault/issues/18)
+- [x] `go test -tags "$(BUILDTAGS)" ./...` 통과
+
+### Sprint 3 — ToolSpec / ToolFunctionSpec metadata contract
+
+**목표**: NodeKit recipe/function metadata(`command`, `inputs`, `outputs`, `display`)가 build/register 경로에서 어디에 저장되는지 명확히 한다.
+
+**결정**
+
+- L2 build/register 경로는 ToolSpec image/environment metadata만 저장한다.
+- `BuildRequest`와 `RegisterToolRequest`는 `inputs`, `outputs`, `display`, `command`를 받지 않는다. 해당 이름은 proto에서 reserved 상태다.
+- `RegisteredToolDefinition`의 `inputs`, `outputs`, `display`, `command` 필드는 ToolFunctionSpec/function-validation path에서 populate될 필드이며 L2 build 시점에는 비워둔다.
+- `toolspec` OCI referrer도 build-time ToolSpec metadata만 포함한다. function metadata를 이 referrer에 섞지 않는다.
+- ToolFunctionSpec metadata 등록/검증 경로는 후속 이슈 [#19](https://github.com/HeaInSeo/NodeVault/issues/19)로 분리한다.
+
+**주요 작업**
+
+| 파일 | 변경 |
+|------|------|
+| `pkg/catalog/catalog.go` | build-time RegisterTool이 ToolSpec metadata만 저장한다는 주석 추가 |
+| `pkg/catalog/catalog_test.go` | build-time RegisterTool이 function metadata를 populate하지 않음을 테스트 |
+| `pkg/oras/referrer.go` | toolspec referrer payload 범위 주석 명시 |
+| `protos/nodevault/v1/nodevault.proto` | RegisterToolRequest/RegisteredToolDefinition metadata 계약 주석 보강 |
+
+**완료 판정**
+
+- [x] build/register 경로에 저장되는 metadata 범위가 문서화됨
+- [x] `command`, `inputs`, `outputs`, `display`가 L2 build-time RegisterTool에서 비어 있음을 테스트
+- [x] ToolFunctionSpec metadata 후속 이슈 생성 — issue [#19](https://github.com/HeaInSeo/NodeVault/issues/19)
+- [x] `go test -tags "$(BUILDTAGS)" ./...` 통과
+
+### Sprint 4 — Operational leftovers
+
+**목표**: 남은 운영 이슈 중 NodeVault 저장소 안에서 처리 가능한 부분을 닫고, 외부 의존 항목을 명확히 분리한다.
+
+**결정**
+
+- issue #14의 NodeVault 측 책임은 NodePalette REST에서 `cas_hash`가 포함된 tool 목록을 제공하는 것이다. 실제 DagEdit 클라이언트가 이 값을 RunnerNode에 기록하는 작업은 DagEdit 쪽 소비자 구현이다.
+- issue #13은 seoy live cluster 접근과 실제 동일 ToolSpec 2회 빌드가 필요하므로 코드 변경이 아니라 운영 검증 항목이다. 현재 세션에서는 `../infra-lab/kubeconfig`가 존재하지만 API server `192.168.122.99:6443`에 `no route to host`로 접근할 수 없어 라이브 검증을 보류한다.
+- issue #6은 NodeKit UI revision 정책 합의가 필요한 설계 결정 항목이다. NodeVault index에는 아직 `stableRef -> current active casHash` 단수 포인터를 추가하지 않는다.
+
+**주요 작업**
+
+| 파일 | 변경 |
+|------|------|
+| `pkg/catalogrest/server.go` | `/v1/palette/tools`, `/v1/palette/data` aliases 추가 |
+| `pkg/catalogrest/server_test.go` | `/v1/palette/tools` 응답에 `cas_hash` 포함 테스트 |
+| `docs/NODEPALETTE_DESIGN.md` | palette alias endpoint 문서화 |
+| `docs/PLATFORM_SCHEDULE.md` | 운영 잔여 이슈 상태 정리 |
+
+**완료 판정**
+
+- [x] `GET /v1/palette/tools`가 active tool 목록을 반환함
+- [x] `GET /v1/palette/tools` 응답에 `cas_hash` 포함
+- [x] `GET /v1/palette/data` alias 추가
+- [x] issue #13 라이브 검증 블로커 확인 — kubeconfig 있음, 현재 네트워크 `no route to host`
+- [x] `go test -tags "$(BUILDTAGS)" ./...` 통과
 
 ### NodeKit 연동 gate (2026-06-19)
 
@@ -212,7 +358,7 @@ v0.1.0 이후에는 `SubmitToolBuild`로 build를 제출하고 `WatchToolBuild`�
 
 **목표**: `BuildRequest / BuildAndRegister`를 deprecate하고 신규 경로로 전환한다. (아키텍처 v0.1.0 §10.3)
 
-이 단계는 NodeKit이 `ToolSpecRequest` 경로를 완전히 채용한 이후에 진행한다.
+이 단계는 NodeKit이 `ToolSpecRequest` 경로를 완전히 채용한 이후에 진행한다. 2026-07-07 확인 기준으로 NodeKit CLI는 `ResolveToolSpec` → `SubmitToolBuild` → `WatchToolBuild` 경로를 사용하지만, NodeKit UI와 `GrpcBuildClient`/테스트에는 아직 `BuildAndRegister` 호출이 남아 있다. 따라서 NodeVault는 현재 RPC 제거 대신 deprecated 표시와 호출 로그를 먼저 적용한다.
 
 **전환 원칙**
 
@@ -226,7 +372,8 @@ Legacy BuildRequest
 **완료 판정**
 
 - [ ] NodeKit legacy BuildRequest usage 0
-- [ ] `BuildAndRegister` RPC가 deprecated 표시 상태
+- [x] `BuildAndRegister` RPC가 deprecated 표시 상태
+- [x] legacy `BuildAndRegister` 호출 시 warning 로그 기록
 - [ ] legacy usage 0 확인 후 제거 ADR 작성
 
 ---
@@ -265,19 +412,20 @@ Phase 1 이후 병행 가능.
 | ValidateService RBAC 이관 | L3/L4 Job 권한 NodeVault SA → NodeSentinel SA | ✓ |
 | Harbor 인증 Secret 통합 | buildah용 + ORAS용 분리 → 단일 정리 | ✓ |
 | Data write path | DataRegisterRequest gRPC 경로 완성 | ✓ |
-| DagEdit ↔ NodePalette 연결 | GET /v1/palette/tools → casHash pin | P4 |
+| DagEdit ↔ NodePalette 연결 | GET /v1/palette/tools → casHash pin | NodeVault alias 완료, DagEdit 소비자 연결은 외부 후속 |
 
 **완료 판정**
 
 - [x] DataRegisterRequest gRPC 경로 완성 — `DataRegistryService.RegisterData/GetData/ListData` + `cmd/controlplane/main.go:RegisterDataRegistryServiceServer` (2026-06-28)
 - [x] ValidateService RBAC 이관 — `BuildAndRegister` L3/L4 직접 Job 생성 제거, `02-rbac.yaml` ClusterRole/Binding 제거, NodeSentinel EnqueueValidationWork 위임 (2026-07-02, issue [#11](https://github.com/HeaInSeo/NodeVault/issues/11))
 - [x] Harbor 인증 Secret 통합 — `pkg/oras/referrer.go`가 `HARBOR_USER`/`HARBOR_PASS` 대신 auth.json(Buildah와 동일 파일) 파싱, `nodevault-harbor-auth` Secret 제거 (2026-07-02, issue [#12](https://github.com/HeaInSeo/NodeVault/issues/12))
+- [x] NodePalette alias — `GET /v1/palette/tools`가 `GET /v1/catalog/tools`와 동일 schema를 반환하며 `cas_hash`를 포함 (NodeVault 측 issue #14 범위)
 
 ---
 
 ### 병렬 트랙 D — Recipe 재현성 해소 (ResolveRecipe)
 
-**배경**: 사용자는 툴 이름과 버전만 입력한다. recipe variant에 따라 conda build string, BioContainer 이미지 후보 등 결정이 필요한 artifact가 다르다. Dockerfile fallback(사용자 직접 작성)과 source build(checksum 고정)를 제외한 4개 variant가 대상이다. NodeVault `ResolveRecipe` RPC가 Harbor 우선 조회로 담당한다.
+**배경**: 사용자는 툴 이름과 버전만 입력한다. recipe variant에 따라 conda build string, BioContainer 이미지 후보 등 결정이 필요한 artifact가 다르다. Dockerfile fallback(사용자 직접 작성)과 source build(checksum 고정)를 제외한 4개 variant가 대상이다. NodeVault `ResolveRecipe` RPC가 Harbor 우선 조회로 후보를 반환한다. 이 RPC는 raw spec rewrite가 아니며, 최종 제출물의 package full pin 검증은 `SubmitToolBuild`/`BuildAndRegister` build gate가 담당한다.
 
 | 항목 | 내용 | 우선순위 |
 |------|------|---------|
@@ -334,8 +482,8 @@ Phase 1 이후 병행 가능.
 
 NodeVault 남은 작업
   ├── Phase 4: seoy LayerCacheHit 라이브 검증 (seoy 필요, P3, issue #13)
-  ├── 트랙 C: Harbor 인증 Secret 통합 — auth.json 단일화 완료 (issue #12)
-  ├── 트랙 C: DagEdit ↔ NodePalette 연결 — GET /v1/palette/tools → casHash pin (P4, 보류, issue #14)
+  ├── TODO-16b: stableRef 재사용 UI 정책 합의 (NodeKit 조율 필요, issue #6)
+  ├── 트랙 C: DagEdit ↔ NodePalette 연결 — NodeVault `/v1/palette/tools` alias 완료, DagEdit 소비자 연결은 외부 후속 (issue #14)
   └── Phase 6: Legacy API 축소 (NodeKit 전환 완료 후)
 ```
 

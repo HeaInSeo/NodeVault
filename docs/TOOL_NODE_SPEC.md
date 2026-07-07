@@ -44,12 +44,14 @@ message BuildRequest {
 }
 ```
 
-NodeVault가 받아서 podbridge5 in-process 빌드로 전달한다.
+NodeVault가 받아서 서버 쪽 final build gate를 통과한 뒤 podbridge5 in-process 빌드로 전달한다.
 
 ### 현재 상태: 동작 중
 
-- `pkg/build/service.go:BuildAndRegister` 가 `req.DockerfileContent` 를 그대로 podbridge5에 전달
-- L1 검증(NodeKit): `latest` 태그, digest 미고정, 버전 미고정 패키지 → 차단
+- `pkg/build/service.go:BuildAndRegister` 와 `pkg/build/submit_tool_build.go:SubmitToolBuild` 는 `req.DockerfileContent` 를 rewrite하지 않는다.
+- 현재 Dockerfile build path는 `BUILD_KIND_UNSPECIFIED`(legacy compatibility)와 `BUILD_KIND_TOOLSPEC`만 지원한다. `BUILD_KIND_TOOLFUNCTIONSPEC`은 API 모델에는 있지만 function-image builder가 생기기 전까지 build gate에서 거부한다.
+- NodeVault final build gate: `builder.Build()` 전에 Dockerfile 정책을 재검증한다. 최소 정책은 모든 `FROM` digest pin, `latest` 금지, digest 형식(`sha256:<64 hex>`) 검증, root/변수 기반 `USER` 차단이다.
+- L1 검증(NodeKit): 사용자 친화적 authoring 피드백. NodeVault final gate를 대체하지 않는다.
 - L2(podbridge5): 이미지 빌드 + Harbor push + digest 획득
 - L3: K8s dry-run
 - L4: smoke run
@@ -60,6 +62,12 @@ Dockerfile 원본은 빌드 후 **어디에도 보존되지 않는다**.
 `BuildRequest` 메시지가 gRPC 스트림으로 전송되고 소모되면 끝이다.
 빌드 이력 재현을 위해서는 buildContextRef 또는 sourceDraftRef 저장이 필요하지만
 현재 범위에서 의도적으로 제외됐다 (`REGISTERED_TOOL_V0_2_DESIGN.md` 의도적 제외 항목 참조).
+
+`ResolveToolSpec`은 `raw_spec`의 digest/index 생성을 담당한다. Dockerfile, package pin, base image ref를 rewrite하는 단계가 아니므로, 실제 빌드 직전 보안/재현성 검증은 NodeVault build gate가 담당한다.
+
+`ResolveRecipe`는 conda/micromamba build string 후보 조회 API다. NodeVault가 canonical Dockerfile이나 canonical raw_spec을 생성하지 않으므로, NodeKit이 선택된 candidate를 `environment_spec` 또는 Dockerfile install line에 반영해야 한다. NodeVault build gate는 제출된 conda/mamba/micromamba package pin이 `name=version=build` 형식인지 최종 확인한다.
+
+L2 build/register 경로는 ToolSpec image/environment metadata만 저장한다. `command`, `inputs`, `outputs`, `display`는 ToolFunctionSpec metadata이며, 현재 `BuildRequest`/`RegisterToolRequest`에서는 reserved 상태다. 이 metadata는 function/validation path에서 별도로 populate되어야 하며, build-time `toolspec` referrer에는 포함하지 않는다.
 
 ---
 

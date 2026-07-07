@@ -90,6 +90,8 @@ NodeVault가 index를 변경하면 NodePalette는 다음 요청 시 반영된 �
 | `GET /v1/catalog/tools/{cas_hash}` | tool 단건 조회 |
 | `GET /v1/catalog/data` | lifecycle_phase=Active data 목록 |
 | `GET /v1/catalog/data/{cas_hash}` | data 단건 조회 |
+| `GET /v1/palette/tools` | `GET /v1/catalog/tools` alias. DagEdit/NodePalette 소비자용, 응답에 `cas_hash` 포함 |
+| `GET /v1/palette/data` | `GET /v1/catalog/data` alias. 응답에 `cas_hash` 포함 |
 
 노출 기준: `lifecycle_phase = Active`만. `integrity_health`는 무관.
 

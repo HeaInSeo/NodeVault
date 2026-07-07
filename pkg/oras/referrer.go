@@ -26,6 +26,9 @@ import (
 
 // toolSpec is the JSON payload written as an OCI referrer artifact.
 // mediaType: application/vnd.nodevault.toolspec.v1+json
+// This is build-time ToolSpec metadata only. ToolFunctionSpec metadata such as
+// command, inputs, outputs, and display is intentionally excluded from this
+// referrer and belongs to the function/validation profile path.
 type toolSpec struct {
 	ToolName  string `json:"tool_name"`
 	Version   string `json:"version,omitempty"`

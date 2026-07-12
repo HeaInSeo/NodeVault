@@ -4,8 +4,6 @@
 package registry
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -31,51 +29,6 @@ func NewClient() *Client {
 // newClientWithHTTP creates a registry Client with a custom HTTP client (for testing).
 func newClientWithHTTP(h *http.Client) *Client {
 	return &Client{http: h}
-}
-
-// GetDigest queries the registry manifest endpoint for the image digest.
-// destination must be in the form "host:port/name:tag".
-// It first checks the Docker-Content-Digest response header, then falls
-// back to parsing config.digest from the manifest JSON body.
-func (c *Client) GetDigest(ctx context.Context, destination string) (string, error) {
-	host, name, tag, err := parseDestination(destination)
-	if err != nil {
-		return "", err
-	}
-
-	url := fmt.Sprintf("http://%s/v2/%s/manifests/%s", host, name, tag)
-
-	for _, accept := range acceptHeaders {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
-		if err != nil {
-			return "", fmt.Errorf("build request: %w", err)
-		}
-		req.Header.Set("Accept", accept)
-
-		resp, err := c.http.Do(req)
-		if err != nil {
-			return "", fmt.Errorf("registry GET %s: %w", url, err)
-		}
-		//nolint:gocritic // deferInLoop: body is closed at function return; loop is bounded to 3 iterations.
-		defer func() {
-			_ = resp.Body.Close()
-		}()
-
-		if d := resp.Header.Get("Docker-Content-Digest"); d != "" {
-			return d, nil
-		}
-
-		var m struct {
-			Config struct {
-				Digest string `json:"digest"`
-			} `json:"config"`
-		}
-		if jerr := json.NewDecoder(resp.Body).Decode(&m); jerr == nil && m.Config.Digest != "" {
-			return m.Config.Digest, nil
-		}
-	}
-
-	return "", fmt.Errorf("digest not found in registry response for %s", destination)
 }
 
 // parseDestination splits "host/name:tag" into its three components.

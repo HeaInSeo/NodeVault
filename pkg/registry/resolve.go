@@ -13,13 +13,12 @@ import (
 // ResolveTagDigest resolves a "host/name:tag" image reference to its manifest
 // digest via the OCI Distribution Spec API.
 //
-// Unlike GetDigest (internal Harbor only: plain HTTP, no auth), ResolveTagDigest
-// is built to reach both an internal Harbor and public registries (docker.io,
-// ghcr.io, quay.io) through one code path: it tries HTTPS first, transparently
-// performs the standard WWW-Authenticate: Bearer 401 challenge -> anonymous
-// token -> retry flow when challenged, and falls back to plain HTTP only when
-// the HTTPS connection itself cannot be established (matching the no-TLS
-// internal Harbor convention used elsewhere in this package).
+// It is built to reach both an internal Harbor and public registries
+// (docker.io, ghcr.io, quay.io) through one code path: it tries HTTPS first,
+// transparently performs the standard WWW-Authenticate: Bearer 401 challenge
+// -> anonymous token -> retry flow when challenged, and falls back to plain
+// HTTP only when the HTTPS connection itself cannot be established. The same
+// challenge/retry flow is reused by HarborChecker in checker.go.
 func (c *Client) ResolveTagDigest(ctx context.Context, ref string) (string, error) {
 	host, name, tag, err := parseDestination(ref)
 	if err != nil {

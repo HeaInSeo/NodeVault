@@ -10,6 +10,7 @@ import (
 
 	"google.golang.org/grpc/metadata"
 
+	"github.com/HeaInSeo/NodeVault/pkg/catalog"
 	"github.com/HeaInSeo/NodeVault/pkg/index"
 	"github.com/HeaInSeo/NodeVault/pkg/registryconfig"
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
@@ -406,6 +407,66 @@ func mustParseTime(t *testing.T) time.Time {
 		t.Fatalf("time.Parse: %v", err)
 	}
 	return parsed
+}
+
+// ─── postBuildRegistration (AC-REG-04) ────────────────────────────────────────
+
+type fakeReconciler struct {
+	calledWith []string
+}
+
+func (f *fakeReconciler) ReconcileOne(_ context.Context, casHash string) error {
+	f.calledWith = append(f.calledWith, casHash)
+	return nil
+}
+
+// TestPostBuildRegistration_ReferrerPushFailure_TriggersReconcile verifies
+// AC-REG-04: even when spec referrer push fails (here, deterministically, by
+// pointing the registry at a closed local port so PushToolSpecReferrer fails
+// fast), ReconcileOne must still be called so integrity_health converges
+// toward Partial without waiting for the next reconcile tick — and
+// lifecycle_phase must stay Active regardless of referrer push outcome.
+func TestPostBuildRegistration_ReferrerPushFailure_TriggersReconcile(t *testing.T) {
+	t.Setenv("NODEVAULT_REGISTRY_ADDR", "127.0.0.1:1") // connection refused, fails fast
+
+	store, err := index.NewAt(t.TempDir())
+	if err != nil {
+		t.Fatalf("index.NewAt: %v", err)
+	}
+	cat := catalog.NewCatalogAt(t.TempDir())
+	registrySvc := catalog.NewToolRegistryService(cat, store)
+	rec := &fakeReconciler{}
+	svc := &Service{registry: registrySvc, indexStore: store, reconciler: rec}
+
+	var logs []string
+	req := &nfv1.BuildRequest{RequestId: "req-1", ToolName: "test-tool", Version: "1.0.0"}
+	svc.postBuildRegistration(context.Background(), req, "harbor.example.com/library/test-tool@sha256:deadbeef", "sha256:deadbeef",
+		func(msg string) { logs = append(logs, msg) })
+
+	if len(rec.calledWith) != 1 {
+		t.Fatalf("expected ReconcileOne called once despite referrer push failure, got %d calls: %v", len(rec.calledWith), rec.calledWith)
+	}
+
+	foundFailureLog := false
+	for _, l := range logs {
+		if strings.Contains(l, "spec referrer push failed") {
+			foundFailureLog = true
+		}
+	}
+	if !foundFailureLog {
+		t.Errorf("expected a %q log line, got %v", "spec referrer push failed", logs)
+	}
+
+	entries, lerr := store.All()
+	if lerr != nil {
+		t.Fatalf("store.All: %v", lerr)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 index entry, got %d", len(entries))
+	}
+	if entries[0].LifecyclePhase != index.PhaseActive {
+		t.Errorf("LifecyclePhase: got %q, want Active (referrer push failure must not affect lifecycle_phase)", entries[0].LifecyclePhase)
+	}
 }
 
 // ─── disabled backend ─────────────────────────────────────────────────────────

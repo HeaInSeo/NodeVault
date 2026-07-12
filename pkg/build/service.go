@@ -280,10 +280,15 @@ func (s *Service) postBuildRegistration(
 			if idxErr := s.indexStore.SetSpecReferrerDigest(regResp.CasHash, referrerDigest); idxErr != nil {
 				slog.Warn("index spec referrer digest update failed", "err", idxErr)
 			}
-			if s.reconciler != nil {
-				if recErr := s.reconciler.ReconcileOne(ctx, regResp.CasHash); recErr != nil {
-					slog.Warn("eager reconcile after referrer push failed", "err", recErr)
-				}
+		}
+		// AC-REG-04: trigger reconcile regardless of referrer push outcome so
+		// integrity_health reflects reality quickly either way — on success it
+		// converges toward Healthy, on failure toward Partial. This only
+		// recomputes the reconcile axis; lifecycle_phase (already set Active by
+		// RegisterTool above) is untouched here.
+		if s.reconciler != nil {
+			if recErr := s.reconciler.ReconcileOne(ctx, regResp.CasHash); recErr != nil {
+				slog.Warn("eager reconcile after referrer push failed", "err", recErr)
 			}
 		}
 	}

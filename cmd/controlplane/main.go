@@ -34,6 +34,7 @@ import (
 	"github.com/HeaInSeo/NodeVault/pkg/policy"
 	"github.com/HeaInSeo/NodeVault/pkg/reconcile"
 	"github.com/HeaInSeo/NodeVault/pkg/registry"
+	"github.com/HeaInSeo/NodeVault/pkg/registryconfig"
 	"github.com/HeaInSeo/NodeVault/pkg/validate"
 	"github.com/HeaInSeo/NodeVault/pkg/validation"
 )
@@ -220,7 +221,11 @@ func run() int {
 	// Certification service — shared between gRPC and REST validation paths.
 	certSvc := certification.New(indexStore)
 
-	rec := startBackground(ctx, indexStore, cat, dataCat, certSvc, rc.webhookAddr, fastInterval, slowInterval)
+	rec, err := startBackground(ctx, indexStore, cat, dataCat, certSvc, rc.webhookAddr, fastInterval, slowInterval)
+	if err != nil {
+		slog.Error("failed to start background services", "err", err)
+		return 1
+	}
 
 	// Package cache GC — evicts oldest conda/mamba packages when PVC usage exceeds watermark.
 	go cachegc.New(cachegc.DefaultConfig()).Run(ctx)
@@ -339,8 +344,12 @@ func startBackground(
 	certSvc *certification.Service,
 	webhookAddr string,
 	fastInterval, slowInterval time.Duration,
-) *reconcile.Reconciler {
-	rec := reconcile.New(store, registry.NewHarborChecker())
+) (*reconcile.Reconciler, error) {
+	checker, err := registry.NewHarborChecker(registryconfig.FromEnv())
+	if err != nil {
+		return nil, fmt.Errorf("build harbor checker: %w", err)
+	}
+	rec := reconcile.New(store, checker)
 	rec.RunFastLoop(ctx, fastInterval)
 	rec.RunSlowLoop(ctx, slowInterval)
 	slog.Info("reconcile loops started", "fast", fastInterval, "slow", slowInterval)
@@ -362,7 +371,7 @@ func startBackground(
 			slog.Error("webhook server exited", "err", err)
 		}
 	}()
-	return rec
+	return rec, nil
 }
 
 func sanitizeLogValue(v string) string {

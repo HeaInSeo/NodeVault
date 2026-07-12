@@ -1,11 +1,7 @@
 package registry
 
 import (
-	"context"
-	"fmt"
 	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
@@ -38,102 +34,6 @@ func TestParseDestination_NoColon(t *testing.T) {
 	_, _, _, err := parseDestination("host/imagewithoutcolontag")
 	if err == nil {
 		t.Fatal("expected error")
-	}
-}
-
-// ─── GetDigest ───────────────────────────────────────────────────────────────
-
-func TestGetDigest_DockerContentDigestHeader(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Docker-Content-Digest", "sha256:headerhash")
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer ts.Close()
-
-	c := newClientWithHTTP(ts.Client())
-	host := strings.TrimPrefix(ts.URL, "http://")
-
-	digest, err := c.GetDigest(context.Background(), host+"/img:latest")
-	if err != nil {
-		t.Fatalf("GetDigest: %v", err)
-	}
-	if digest != "sha256:headerhash" {
-		t.Errorf("got %q, want %q", digest, "sha256:headerhash")
-	}
-}
-
-func TestGetDigest_DigestFromJSONBody(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = fmt.Fprintln(w, `{"config":{"digest":"sha256:bodyhash"}}`)
-	}))
-	defer ts.Close()
-
-	c := newClientWithHTTP(ts.Client())
-	host := strings.TrimPrefix(ts.URL, "http://")
-
-	digest, err := c.GetDigest(context.Background(), host+"/img:v1")
-	if err != nil {
-		t.Fatalf("GetDigest: %v", err)
-	}
-	if digest != "sha256:bodyhash" {
-		t.Errorf("got %q", digest)
-	}
-}
-
-func TestGetDigest_NoDigest_ReturnsError(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = fmt.Fprintln(w, `{}`)
-	}))
-	defer ts.Close()
-
-	c := newClientWithHTTP(ts.Client())
-	host := strings.TrimPrefix(ts.URL, "http://")
-
-	_, err := c.GetDigest(context.Background(), host+"/img:v1")
-	if err == nil {
-		t.Fatal("expected error when no digest found")
-	}
-}
-
-func TestGetDigest_ServerError(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer ts.Close()
-
-	c := newClientWithHTTP(ts.Client())
-	host := strings.TrimPrefix(ts.URL, "http://")
-
-	_, err := c.GetDigest(context.Background(), host+"/img:v1")
-	if err == nil {
-		t.Fatal("expected error for 500 response with no digest")
-	}
-}
-
-func TestGetDigest_InvalidDestination(t *testing.T) {
-	c := NewClient()
-	_, err := c.GetDigest(context.Background(), "nodestination")
-	if err == nil {
-		t.Fatal("expected error")
-	}
-}
-
-func TestGetDigest_ContextCancelled(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		// This handler should never be reached.
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer ts.Close()
-
-	c := newClientWithHTTP(ts.Client())
-	host := strings.TrimPrefix(ts.URL, "http://")
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // cancel immediately
-
-	_, err := c.GetDigest(ctx, host+"/img:v1")
-	if err == nil {
-		t.Fatal("expected error for canceled context")
 	}
 }
 

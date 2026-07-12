@@ -227,11 +227,11 @@ NodeKit→NodeVault 라이브 재현성 테스트(`docs/NODEKIT_LIVE_RECIPE_REPR
 
 **완료 판정**
 
-- [ ] `TestRegistryConfig_FromEnv_Defaults`
-- [ ] `TestRegistryConfig_DiscoverCAFile`
-- [ ] `TestRegistryConfig_ORASCAFileFallback`
-- [ ] `pkg/oras` 기존 테스트 전부 통과(회귀 없음)
-- [ ] `go test -tags "$(BUILDTAGS)" ./...` 통과, `make lint` 경고 없음
+- [x] `TestRegistryConfig_FromEnv_Defaults`
+- [x] `TestRegistryConfig_DiscoverCAFile`
+- [x] `TestRegistryConfig_ORASCAFileFallback`
+- [x] `pkg/oras` 기존 테스트 전부 통과(회귀 없음)
+- [x] `go test -tags "$(BUILDTAGS)" ./...` 통과, `make lint` 경고 없음(신규 코드 0경고 — 이번 스프린트 이전부터 있던 사전 존재 경고 2건은 범위 밖)
 
 ### Sprint 6 — P0b: reconcile HTTPS 전환 + 401/타임아웃 구분 + AC-REG-04
 
@@ -239,7 +239,7 @@ NodeKit→NodeVault 라이브 재현성 테스트(`docs/NODEKIT_LIVE_RECIPE_REPR
 
 **결정**
 
-- `HarborChecker`는 `NewHarborChecker(cfg registryconfig.Config)`로 변경(유일한 프로덕션 호출부는 `cmd/controlplane/main.go`). URL 조립을 `cfg.Scheme`로, `cfg.HTTPClient()`로 CA-신뢰 클라이언트 사용.
+- `HarborChecker`는 `NewHarborChecker(cfg registryconfig.Config) (*HarborChecker, error)`로 변경(CA 파일을 못 읽으면 생성 시점에 실패 — 유일한 프로덕션 호출부는 `cmd/controlplane/main.go`의 `startBackground`, 실패 시 `run()`이 종료 코드 1 반환). URL 조립을 `cfg.Scheme`로, `cfg.HTTPClient()`로 CA-신뢰 클라이언트 사용.
 - Outcome 분류는 기존 `(bool, error)` 시그니처 유지: `200`→`(true,nil)`, `404`→`(false,nil)`(확정 not-found), 그 외(401/403/5xx/타임아웃/TLS 실패)→`(false, err)`(indeterminate, `SetIntegrityHealth` 호출 안 함 — 기존 보수적 에러 경로 재사용).
 - 401은 `pkg/registry/resolve.go`의 기존 `parseBearerChallenge`/`anonymousToken`을 재사용해 익명 토큰 1회 재시도 후에도 실패하면 명시적 에러 반환.
 - AC-REG-04: `pkg/build/service.go`의 `postBuildRegistration`에서 `ReconcileOne` 호출을 referrer push 성공/실패 공통 경로로 이동. 이는 reconcile의 기존 계산 경로를 조기 트리거하는 것이지 `pkg/build`가 `integrity_health`를 직접 쓰는 게 아니다 — CLAUDE.md 이중 축 규칙 위반 아님.
@@ -258,11 +258,12 @@ NodeKit→NodeVault 라이브 재현성 테스트(`docs/NODEKIT_LIVE_RECIPE_REPR
 
 **완료 판정**
 
-- [ ] `TestHarborChecker_ImageExists_404_NotFound`
-- [ ] `TestHarborChecker_ImageExists_401_IsNotNotFound`
-- [ ] `TestHarborChecker_UsesConfiguredScheme`
-- [ ] `TestPostBuildRegistration_ReferrerPushFailure_TriggersReconcile`
-- [ ] `go test -tags "$(BUILDTAGS)" ./...` 통과, `make lint` 경고 없음
+- [x] `TestHarborChecker_ImageExists_404_NotFound`
+- [x] `TestHarborChecker_ImageExists_401_IsNotNotFound`
+- [x] `TestHarborChecker_ImageExists_401WithChallenge_RetriesWithAnonymousToken`(익명 토큰 재시도 경로 자체도 검증)
+- [x] `TestHarborChecker_UsesConfiguredScheme`
+- [x] `TestPostBuildRegistration_ReferrerPushFailure_TriggersReconcile`
+- [x] `go test -tags "$(BUILDTAGS)" ./...` 통과, `make lint` 경고 없음(신규 코드 0경고 — 사전 존재 경고 2건은 범위 밖)
 
 ### Sprint 7 — P1a: build_state 아티팩트 메타데이터 브릿지
 
@@ -718,7 +719,7 @@ NodeVault 남은 작업
   ├── TODO-16b: stableRef 재사용 UI 정책 합의 (NodeKit 조율 필요, issue #6)
   ├── 트랙 C: DagEdit ↔ NodePalette 연결 — NodeVault `/v1/palette/tools` alias 완료, DagEdit 소비자 연결은 외부 후속 (issue #14)
   ├── Phase 6: Legacy API 축소 (NodeKit 전환 완료 후)
-  └── 재현성 개선 Sprint 5~11 (P0~P3) — Sprint 5(RegistryConfig 통합)부터 순차 착수, Sprint 10은 podbridge5 issue #2 선행 필요, Sprint 11 loose mode는 NodeKit 합의 필요
+  └── 재현성 개선 Sprint 5~11 (P0~P3) — Sprint 5·6(P0 RegistryConfig 통합 + reconcile HTTPS/401) 완료, Sprint 7(P1a build_state 브릿지)부터 계속, Sprint 10은 podbridge5 issue #2 선행 필요, Sprint 11 loose mode는 NodeKit 합의 필요
 ```
 
 ---

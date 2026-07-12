@@ -287,10 +287,11 @@ NodeKit→NodeVault 라이브 재현성 테스트(`docs/NODEKIT_LIVE_RECIPE_REPR
 
 **완료 판정**
 
-- [ ] `TestBuildStateStore_SetArtifact_PersistsImageRefDigest`
-- [ ] `TestBuildStateStore_EnsureColumn_MigratesExistingDB`
-- [ ] `TestWatchToolBuild_ExposesImageDigest`(AC-EVT-02)
-- [ ] `go test -tags "$(BUILDTAGS)" ./...` 통과, `make lint` 경고 없음
+- [x] `TestBuildStateStore_SetArtifact_PersistsImageRefDigest`
+- [x] `TestBuildStateStore_SetReferrer_PersistsReferrerAndIntegrityHealth`
+- [x] `TestBuildStateStore_EnsureColumn_MigratesExistingDB`(구 스키마 DB 파일을 직접 만들어 `Open()`이 in-place 마이그레이션하는지 확인)
+- [x] `TestWatchToolBuild_ExposesImageDigest`(AC-EVT-02)
+- [x] `go test -tags "$(BUILDTAGS)" ./...` 통과, `make lint` 경고 없음(신규 코드 0경고 — 사전 존재 경고 2건은 범위 밖)
 
 ### Sprint 8 — P1b: durable build_events 테이블 + 이벤트 종류 확장
 
@@ -719,7 +720,7 @@ NodeVault 남은 작업
   ├── TODO-16b: stableRef 재사용 UI 정책 합의 (NodeKit 조율 필요, issue #6)
   ├── 트랙 C: DagEdit ↔ NodePalette 연결 — NodeVault `/v1/palette/tools` alias 완료, DagEdit 소비자 연결은 외부 후속 (issue #14)
   ├── Phase 6: Legacy API 축소 (NodeKit 전환 완료 후)
-  └── 재현성 개선 Sprint 5~11 (P0~P3) — Sprint 5·6(P0 RegistryConfig 통합 + reconcile HTTPS/401) 완료, Sprint 7(P1a build_state 브릿지)부터 계속, Sprint 10은 podbridge5 issue #2 선행 필요, Sprint 11 loose mode는 NodeKit 합의 필요
+  └── 재현성 개선 Sprint 5~11 (P0~P3) — Sprint 5~7(P0 RegistryConfig 통합, reconcile HTTPS/401, P1a build_state 브릿지) 완료, Sprint 8(P1b durable build_events)부터 계속, Sprint 10은 podbridge5 issue #2 선행 필요, Sprint 11 loose mode는 NodeKit 합의 필요
 ```
 
 ---

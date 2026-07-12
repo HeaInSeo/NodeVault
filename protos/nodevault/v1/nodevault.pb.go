@@ -1404,6 +1404,10 @@ func (x *ResolveRecipeResponse) GetPackages() []*PackageResolution {
 	return nil
 }
 
+// BuildRequest is consumed by NodeVault's build path after server-side policy validation.
+// Current implementation supports BUILD_KIND_UNSPECIFIED as legacy TOOLSPEC and
+// BUILD_KIND_TOOLSPEC. BUILD_KIND_TOOLFUNCTIONSPEC is modeled in the API but is
+// rejected by the Dockerfile build path until the function-image builder exists.
 type BuildRequest struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	RequestId        string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
@@ -1412,10 +1416,12 @@ type BuildRequest struct {
 	ImageUri         string                 `protobuf:"bytes,4,opt,name=image_uri,json=imageUri,proto3" json:"image_uri,omitempty"`
 	Version          string                 `protobuf:"bytes,10,opt,name=version,proto3" json:"version,omitempty"`
 	Kind             BuildKind              `protobuf:"varint,16,opt,name=kind,proto3,enum=nodevault.v1.BuildKind" json:"kind,omitempty"`
-	// BUILD_KIND_TOOLSPEC: base image from build recipe
+	// BUILD_KIND_TOOLSPEC: base image from build recipe. NodeVault does not rewrite
+	// this Dockerfile; it validates policy and passes the content to the builder.
 	DockerfileContent string `protobuf:"bytes,5,opt,name=dockerfile_content,json=dockerfileContent,proto3" json:"dockerfile_content,omitempty"`
 	EnvironmentSpec   string `protobuf:"bytes,9,opt,name=environment_spec,json=environmentSpec,proto3" json:"environment_spec,omitempty"`
-	// BUILD_KIND_TOOLFUNCTIONSPEC: function image on top of base image
+	// BUILD_KIND_TOOLFUNCTIONSPEC: function image on top of base image. Reserved
+	// for the future function-image builder, not accepted by today's Dockerfile path.
 	Script          string `protobuf:"bytes,6,opt,name=script,proto3" json:"script,omitempty"`
 	BaseImageDigest string `protobuf:"bytes,17,opt,name=base_image_digest,json=baseImageDigest,proto3" json:"base_image_digest,omitempty"`
 	unknownFields   protoimpl.UnknownFields
@@ -1523,15 +1529,24 @@ func (x *BuildRequest) GetBaseImageDigest() string {
 }
 
 type BuildEvent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Kind          BuildEventKind         `protobuf:"varint,1,opt,name=kind,proto3,enum=nodevault.v1.BuildEventKind" json:"kind,omitempty"`
-	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
-	Timestamp     int64                  `protobuf:"varint,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
-	Digest        string                 `protobuf:"bytes,4,opt,name=digest,proto3" json:"digest,omitempty"`
-	BuildId       string                 `protobuf:"bytes,5,opt,name=build_id,json=buildId,proto3" json:"build_id,omitempty"`
-	Status        string                 `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Kind      BuildEventKind         `protobuf:"varint,1,opt,name=kind,proto3,enum=nodevault.v1.BuildEventKind" json:"kind,omitempty"`
+	Message   string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	Timestamp int64                  `protobuf:"varint,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	Digest    string                 `protobuf:"bytes,4,opt,name=digest,proto3" json:"digest,omitempty"`
+	BuildId   string                 `protobuf:"bytes,5,opt,name=build_id,json=buildId,proto3" json:"build_id,omitempty"`
+	Status    string                 `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`
+	// image_ref, image_digest, spec_referrer_digest, integrity_health mirror
+	// pkg/buildstate.Record's artifact fields (Sprint 7 bridge) so NodeKit can
+	// read them from WatchToolBuild without scraping logs or reading index
+	// state directly. integrity_health here is a read-through snapshot of the
+	// reconcile axis at Record.SetReferrer time, not written by pkg/build.
+	ImageRef           string `protobuf:"bytes,7,opt,name=image_ref,json=imageRef,proto3" json:"image_ref,omitempty"`
+	ImageDigest        string `protobuf:"bytes,8,opt,name=image_digest,json=imageDigest,proto3" json:"image_digest,omitempty"`
+	SpecReferrerDigest string `protobuf:"bytes,9,opt,name=spec_referrer_digest,json=specReferrerDigest,proto3" json:"spec_referrer_digest,omitempty"`
+	IntegrityHealth    string `protobuf:"bytes,10,opt,name=integrity_health,json=integrityHealth,proto3" json:"integrity_health,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *BuildEvent) Reset() {
@@ -1602,6 +1617,34 @@ func (x *BuildEvent) GetBuildId() string {
 func (x *BuildEvent) GetStatus() string {
 	if x != nil {
 		return x.Status
+	}
+	return ""
+}
+
+func (x *BuildEvent) GetImageRef() string {
+	if x != nil {
+		return x.ImageRef
+	}
+	return ""
+}
+
+func (x *BuildEvent) GetImageDigest() string {
+	if x != nil {
+		return x.ImageDigest
+	}
+	return ""
+}
+
+func (x *BuildEvent) GetSpecReferrerDigest() string {
+	if x != nil {
+		return x.SpecReferrerDigest
+	}
+	return ""
+}
+
+func (x *BuildEvent) GetIntegrityHealth() string {
+	if x != nil {
+		return x.IntegrityHealth
 	}
 	return ""
 }
@@ -2145,7 +2188,7 @@ type RegisteredToolDefinition struct {
 	Validation       *ValidationStatus      `protobuf:"bytes,16,opt,name=validation,proto3" json:"validation,omitempty"`
 	IntegrityHealth  string                 `protobuf:"bytes,18,opt,name=integrity_health,json=integrityHealth,proto3" json:"integrity_health,omitempty"`
 	BuildKind        BuildKind              `protobuf:"varint,19,opt,name=build_kind,json=buildKind,proto3,enum=nodevault.v1.BuildKind" json:"build_kind,omitempty"`
-	// ToolFunctionSpec fields — populated after dry-run validation, not at build time.
+	// ToolFunctionSpec fields — populated by the function/validation path, not at L2 build time.
 	// inputs (12), outputs (13), display (14), command (17) are reserved for ToolFunctionSpec.
 	Inputs        []*PortSpec  `protobuf:"bytes,12,rep,name=inputs,proto3" json:"inputs,omitempty"`
 	Outputs       []*PortSpec  `protobuf:"bytes,13,rep,name=outputs,proto3" json:"outputs,omitempty"`
@@ -3988,7 +4031,7 @@ const file_nodevault_v1_nodevault_proto_rawDesc = "" +
 	"\x12dockerfile_content\x18\x05 \x01(\tR\x11dockerfileContent\x12)\n" +
 	"\x10environment_spec\x18\t \x01(\tR\x0fenvironmentSpec\x12\x16\n" +
 	"\x06script\x18\x06 \x01(\tR\x06script\x12*\n" +
-	"\x11base_image_digest\x18\x11 \x01(\tR\x0fbaseImageDigestJ\x04\b\a\x10\bJ\x04\b\b\x10\tJ\x04\b\f\x10\rJ\x04\b\r\x10\x0eJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10R\vinput_namesR\foutput_namesR\x06inputsR\aoutputsR\adisplayR\acommand\"\xc1\x01\n" +
+	"\x11base_image_digest\x18\x11 \x01(\tR\x0fbaseImageDigestJ\x04\b\a\x10\bJ\x04\b\b\x10\tJ\x04\b\f\x10\rJ\x04\b\r\x10\x0eJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10R\vinput_namesR\foutput_namesR\x06inputsR\aoutputsR\adisplayR\acommand\"\xde\x02\n" +
 	"\n" +
 	"BuildEvent\x120\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x1c.nodevault.v1.BuildEventKindR\x04kind\x12\x18\n" +
@@ -3996,7 +4039,12 @@ const file_nodevault_v1_nodevault_proto_rawDesc = "" +
 	"\ttimestamp\x18\x03 \x01(\x03R\ttimestamp\x12\x16\n" +
 	"\x06digest\x18\x04 \x01(\tR\x06digest\x12\x19\n" +
 	"\bbuild_id\x18\x05 \x01(\tR\abuildId\x12\x16\n" +
-	"\x06status\x18\x06 \x01(\tR\x06status\"S\n" +
+	"\x06status\x18\x06 \x01(\tR\x06status\x12\x1b\n" +
+	"\timage_ref\x18\a \x01(\tR\bimageRef\x12!\n" +
+	"\fimage_digest\x18\b \x01(\tR\vimageDigest\x120\n" +
+	"\x14spec_referrer_digest\x18\t \x01(\tR\x12specReferrerDigest\x12)\n" +
+	"\x10integrity_health\x18\n" +
+	" \x01(\tR\x0fintegrityHealth\"S\n" +
 	"\rDryRunRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12#\n" +

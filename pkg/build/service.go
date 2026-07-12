@@ -6,6 +6,7 @@ package build
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -286,9 +287,28 @@ func (s *Service) postBuildRegistration(
 		// converges toward Healthy, on failure toward Partial. This only
 		// recomputes the reconcile axis; lifecycle_phase (already set Active by
 		// RegisterTool above) is untouched here.
+		integrityHealth := ""
 		if s.reconciler != nil {
 			if recErr := s.reconciler.ReconcileOne(ctx, regResp.CasHash); recErr != nil {
 				slog.Warn("eager reconcile after referrer push failed", "err", recErr)
+			}
+		}
+		// Read-through snapshot for the buildstate bridge (Sprint 7, AC-EVT-02) —
+		// this reads the value ReconcileOne just computed; it does not compute or
+		// write integrity_health itself.
+		if entry, getErr := s.indexStore.GetByCasHash(regResp.CasHash); getErr == nil {
+			integrityHealth = string(entry.IntegrityHealth)
+		}
+		// req.GetRequestId() equals the buildstate build_id for the async
+		// SubmitToolBuild path (buildRequestFromResolved sets req.RequestId to
+		// the build_id). The legacy BuildAndRegister path has no buildstate row
+		// for its request_id, so SetReferrer's ErrNotFound there is expected —
+		// not logged as a warning.
+		if s.buildState != nil {
+			buildID := req.GetRequestId()
+			_, bsErr := s.buildState.SetReferrer(buildID, referrerDigest, integrityHealth, time.Now().UTC())
+			if bsErr != nil && !errors.Is(bsErr, buildstate.ErrNotFound) {
+				slog.Warn("buildstate set referrer failed", "build_id", buildID, "err", bsErr)
 			}
 		}
 	}

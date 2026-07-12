@@ -171,6 +171,9 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type BuildServiceClient interface {
+	// Deprecated: use ResolveToolSpec + SubmitToolBuild + WatchToolBuild.
+	// BuildAndRegister stays available only while NodeKit UI/library callers
+	// still submit legacy BuildRequest messages.
 	BuildAndRegister(ctx context.Context, in *BuildRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BuildEvent], error)
 	ResolveToolSpec(ctx context.Context, in *ToolSpecRequest, opts ...grpc.CallOption) (*ResolvedToolSpecResponse, error)
 	SubmitToolBuild(ctx context.Context, in *SubmitToolBuildRequest, opts ...grpc.CallOption) (*SubmitToolBuildResponse, error)
@@ -269,6 +272,9 @@ func (c *buildServiceClient) ResolveRecipe(ctx context.Context, in *ResolveRecip
 // All implementations must embed UnimplementedBuildServiceServer
 // for forward compatibility.
 type BuildServiceServer interface {
+	// Deprecated: use ResolveToolSpec + SubmitToolBuild + WatchToolBuild.
+	// BuildAndRegister stays available only while NodeKit UI/library callers
+	// still submit legacy BuildRequest messages.
 	BuildAndRegister(*BuildRequest, grpc.ServerStreamingServer[BuildEvent]) error
 	ResolveToolSpec(context.Context, *ToolSpecRequest) (*ResolvedToolSpecResponse, error)
 	SubmitToolBuild(context.Context, *SubmitToolBuildRequest) (*SubmitToolBuildResponse, error)

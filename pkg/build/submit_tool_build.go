@@ -219,6 +219,9 @@ func (s *Service) runSubmittedBuild(
 	if _, err := s.buildState.Transition(rec.BuildID, buildstate.StatusPushing, "", time.Now().UTC()); err != nil {
 		return
 	}
+	if _, err := s.buildState.SetArtifact(rec.BuildID, destination, digest, time.Now().UTC()); err != nil {
+		slog.Warn("buildstate set artifact failed", "build_id", rec.BuildID, "err", err)
+	}
 	s.recordBuildSuccess(rec.BuildID, rec.RequestedAt, digest, destination)
 
 	logFn := func(msg string) { slog.Info("submitted build", "build_id", rec.BuildID, "msg", msg) }
@@ -240,10 +243,14 @@ func (s *Service) failSubmittedBuild(rec buildstate.Record, buildErr error) {
 //nolint:gocritic // hugeParam: by-value snapshot is intentional — read-only helper, no pointer lifetime risk.
 func buildStateEvent(rec buildstate.Record) *nfv1.BuildEvent {
 	return &nfv1.BuildEvent{
-		Kind:      nfv1.BuildEventKind_BUILD_EVENT_KIND_LOG,
-		Message:   fmt.Sprintf("build state: %s", rec.Status),
-		Timestamp: rec.UpdatedAt.UnixMilli(),
-		BuildId:   rec.BuildID,
-		Status:    string(rec.Status),
+		Kind:               nfv1.BuildEventKind_BUILD_EVENT_KIND_LOG,
+		Message:            fmt.Sprintf("build state: %s", rec.Status),
+		Timestamp:          rec.UpdatedAt.UnixMilli(),
+		BuildId:            rec.BuildID,
+		Status:             string(rec.Status),
+		ImageRef:           rec.ImageRef,
+		ImageDigest:        rec.ImageDigest,
+		SpecReferrerDigest: rec.SpecReferrerDigest,
+		IntegrityHealth:    rec.IntegrityHealth,
 	}
 }

@@ -224,6 +224,15 @@ message BuildEvent {
   string digest = 4;
   string build_id = 5;
   string status = 6;
+  // image_ref, image_digest, spec_referrer_digest, integrity_health mirror
+  // pkg/buildstate.Record's artifact fields (Sprint 7 bridge) so NodeKit can
+  // read them from WatchToolBuild without scraping logs or reading index
+  // state directly. integrity_health here is a read-through snapshot of the
+  // reconcile axis at Record.SetReferrer time, not written by pkg/build.
+  string image_ref = 7;
+  string image_digest = 8;
+  string spec_referrer_digest = 9;
+  string integrity_health = 10;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -27,13 +27,23 @@ const (
 )
 
 // Record is the persisted state of one submitted build.
+//
+// ImageRef, ImageDigest, and SpecReferrerDigest are set by SetArtifact/
+// SetReferrer as the build progresses. IntegrityHealth is a read-through
+// snapshot of the reconcile axis (pkg/index.Entry.IntegrityHealth) taken at
+// SetReferrer time — this package never computes or writes integrity_health
+// itself; only the reconcile loop's SetIntegrityHealth is authoritative.
 type Record struct {
-	BuildID        string
-	ToolSpecDigest string
-	Status         Status
-	FailureReason  string
-	RequestedAt    time.Time
-	UpdatedAt      time.Time
+	BuildID            string
+	ToolSpecDigest     string
+	Status             Status
+	FailureReason      string
+	ImageRef           string
+	ImageDigest        string
+	SpecReferrerDigest string
+	IntegrityHealth    string
+	RequestedAt        time.Time
+	UpdatedAt          time.Time
 }
 
 // Store persists build state in SQLite.
@@ -70,6 +80,11 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// buildStateArtifactColumns are the columns added in Sprint 7. They're listed
+// in CREATE TABLE for fresh databases and individually migrated via
+// ensureColumn for databases created before this sprint.
+var buildStateArtifactColumns = []string{"image_ref", "image_digest", "spec_referrer_digest", "integrity_health"}
+
 func (s *Store) init() error {
 	ctx := context.Background()
 	if _, err := s.db.ExecContext(ctx, `PRAGMA journal_mode=WAL`); err != nil {
@@ -81,10 +96,56 @@ CREATE TABLE IF NOT EXISTS build_state (
 	tool_spec_digest TEXT NOT NULL,
 	status TEXT NOT NULL,
 	failure_reason TEXT NOT NULL DEFAULT '',
+	image_ref TEXT NOT NULL DEFAULT '',
+	image_digest TEXT NOT NULL DEFAULT '',
+	spec_referrer_digest TEXT NOT NULL DEFAULT '',
+	integrity_health TEXT NOT NULL DEFAULT '',
 	requested_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL
 )`); err != nil {
 		return fmt.Errorf("buildstate migrate: %w", err)
+	}
+	for _, column := range buildStateArtifactColumns {
+		if err := s.ensureColumn(ctx, column); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ensureColumn adds column as a TEXT NOT NULL column (default empty string)
+// to build_state if it doesn't already exist. This is a minimal, idempotent
+// migration path for
+// databases created before Sprint 7 — every column added this way is
+// additive and default-safe, so no separate schema-version table is needed.
+func (s *Store) ensureColumn(ctx context.Context, column string) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(build_state)`)
+	if err != nil {
+		return fmt.Errorf("buildstate ensure column %q: table_info: %w", column, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, colType string
+		var dflt sql.NullString
+		if scanErr := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); scanErr != nil {
+			return fmt.Errorf("buildstate ensure column %q: scan table_info: %w", column, scanErr)
+		}
+		if name == column {
+			return nil // already present
+		}
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return fmt.Errorf("buildstate ensure column %q: iterate table_info: %w", column, rowsErr)
+	}
+
+	// column always comes from the fixed buildStateArtifactColumns list above,
+	// never from external input, so building the DDL string is safe here.
+	if _, err := s.db.ExecContext(ctx,
+		fmt.Sprintf(`ALTER TABLE build_state ADD COLUMN %s TEXT NOT NULL DEFAULT ''`, column),
+	); err != nil {
+		return fmt.Errorf("buildstate ensure column %q: alter table: %w", column, err)
 	}
 	return nil
 }
@@ -180,6 +241,44 @@ func (s *Store) Transition(buildID string, next Status, failureReason string, no
 	return rec, nil
 }
 
+// setColumns runs an UPDATE against build_state for buildID and returns the
+// refreshed record, or ErrNotFound if buildID doesn't exist. Shared by
+// SetArtifact and SetReferrer.
+func (s *Store) setColumns(buildID, query string, args ...any) (Record, error) {
+	if buildID == "" {
+		return Record{}, errors.New("buildstate: buildID must not be empty")
+	}
+	res, err := s.db.ExecContext(context.Background(), query, args...)
+	if err != nil {
+		return Record{}, fmt.Errorf("buildstate update %q: %w", buildID, err)
+	}
+	if n, aerr := res.RowsAffected(); aerr == nil && n == 0 {
+		return Record{}, ErrNotFound
+	}
+	return s.Get(buildID)
+}
+
+// SetArtifact records the pushed image's ref and digest once known — called
+// after a successful build/push, before the spec referrer push attempt.
+func (s *Store) SetArtifact(buildID, imageRef, imageDigest string, now time.Time) (Record, error) {
+	return s.setColumns(buildID,
+		`UPDATE build_state SET image_ref = ?, image_digest = ?, updated_at = ? WHERE build_id = ?`,
+		imageRef, imageDigest, now.UTC().UnixMilli(), buildID,
+	)
+}
+
+// SetReferrer records the spec referrer digest (empty on push failure) and a
+// read-through snapshot of integrity_health. It does not compute or write
+// integrity_health anywhere else — the value passed in must already have
+// been produced by the reconcile loop's SetIntegrityHealth (the sole
+// authority for that axis); this method only mirrors it for WatchToolBuild.
+func (s *Store) SetReferrer(buildID, specReferrerDigest, integrityHealth string, now time.Time) (Record, error) {
+	return s.setColumns(buildID,
+		`UPDATE build_state SET spec_referrer_digest = ?, integrity_health = ?, updated_at = ? WHERE build_id = ?`,
+		specReferrerDigest, integrityHealth, now.UTC().UnixMilli(), buildID,
+	)
+}
+
 // RecoverInterrupted marks non-terminal builds as Interrupted after process restart.
 func (s *Store) RecoverInterrupted(now time.Time) (int, error) {
 	now = now.UTC()
@@ -206,17 +305,18 @@ func (s *Store) Get(buildID string) (Record, error) {
 	return getInDB(context.Background(), s.db, buildID)
 }
 
+const recordColumns = `build_id, tool_spec_digest, status, failure_reason,
+	image_ref, image_digest, spec_referrer_digest, integrity_health, requested_at, updated_at`
+
 func getInDB(ctx context.Context, db *sql.DB, buildID string) (Record, error) {
 	return scanRecord(db.QueryRowContext(ctx,
-		`SELECT build_id, tool_spec_digest, status, failure_reason, requested_at, updated_at
-FROM build_state WHERE build_id = ?`, buildID,
+		`SELECT `+recordColumns+` FROM build_state WHERE build_id = ?`, buildID,
 	))
 }
 
 func getInTx(ctx context.Context, tx *sql.Tx, buildID string) (Record, error) {
 	return scanRecord(tx.QueryRowContext(ctx,
-		`SELECT build_id, tool_spec_digest, status, failure_reason, requested_at, updated_at
-FROM build_state WHERE build_id = ?`, buildID,
+		`SELECT `+recordColumns+` FROM build_state WHERE build_id = ?`, buildID,
 	))
 }
 
@@ -230,7 +330,9 @@ func scanRecord(row rowScanner) (Record, error) {
 	var requestedAt int64
 	var updatedAt int64
 	if err := row.Scan(
-		&rec.BuildID, &rec.ToolSpecDigest, &status, &rec.FailureReason, &requestedAt, &updatedAt,
+		&rec.BuildID, &rec.ToolSpecDigest, &status, &rec.FailureReason,
+		&rec.ImageRef, &rec.ImageDigest, &rec.SpecReferrerDigest, &rec.IntegrityHealth,
+		&requestedAt, &updatedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Record{}, ErrNotFound

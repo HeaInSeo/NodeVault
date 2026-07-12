@@ -1,6 +1,8 @@
 package buildstate
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -42,6 +44,129 @@ func TestBuildState_CreateAndGet(t *testing.T) {
 	}
 	if !got.RequestedAt.Equal(now) || !got.UpdatedAt.Equal(now) {
 		t.Fatalf("unexpected timestamps: %+v", got)
+	}
+}
+
+func TestBuildStateStore_SetArtifact_PersistsImageRefDigest(t *testing.T) {
+	store := newStore(t)
+	now := time.Unix(100, 0).UTC()
+	if _, err := store.Create("build-artifact", "spec-1", now); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	later := time.Unix(200, 0).UTC()
+	updated, err := store.SetArtifact("build-artifact", "harbor.example.com/library/tool:latest", "sha256:deadbeef", later)
+	if err != nil {
+		t.Fatalf("SetArtifact: %v", err)
+	}
+	if updated.ImageRef != "harbor.example.com/library/tool:latest" || updated.ImageDigest != "sha256:deadbeef" {
+		t.Fatalf("unexpected record after SetArtifact: %+v", updated)
+	}
+	if !updated.UpdatedAt.Equal(later) {
+		t.Fatalf("UpdatedAt not bumped: got %v want %v", updated.UpdatedAt, later)
+	}
+
+	got, err := store.Get("build-artifact")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.ImageRef != "harbor.example.com/library/tool:latest" || got.ImageDigest != "sha256:deadbeef" {
+		t.Fatalf("SetArtifact did not persist: %+v", got)
+	}
+}
+
+func TestBuildStateStore_SetArtifact_NotFound(t *testing.T) {
+	store := newStore(t)
+	if _, err := store.SetArtifact("missing-build", "ref", "digest", time.Unix(100, 0).UTC()); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestBuildStateStore_SetReferrer_PersistsReferrerAndIntegrityHealth(t *testing.T) {
+	store := newStore(t)
+	now := time.Unix(100, 0).UTC()
+	if _, err := store.Create("build-referrer", "spec-1", now); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	later := time.Unix(200, 0).UTC()
+	updated, err := store.SetReferrer("build-referrer", "sha256:referrerdigest", "Healthy", later)
+	if err != nil {
+		t.Fatalf("SetReferrer: %v", err)
+	}
+	if updated.SpecReferrerDigest != "sha256:referrerdigest" || updated.IntegrityHealth != "Healthy" {
+		t.Fatalf("unexpected record after SetReferrer: %+v", updated)
+	}
+
+	got, err := store.Get("build-referrer")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.SpecReferrerDigest != "sha256:referrerdigest" || got.IntegrityHealth != "Healthy" {
+		t.Fatalf("SetReferrer did not persist: %+v", got)
+	}
+}
+
+// TestBuildStateStore_EnsureColumn_MigratesExistingDB verifies that opening a
+// database created before Sprint 7 (only the original six columns) adds the
+// new artifact columns in place, without losing existing rows.
+func TestBuildStateStore_EnsureColumn_MigratesExistingDB(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+
+	legacyDB, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("open legacy db: %v", err)
+	}
+	ctx := context.Background()
+	if _, execErr := legacyDB.ExecContext(ctx, `
+CREATE TABLE build_state (
+	build_id TEXT PRIMARY KEY,
+	tool_spec_digest TEXT NOT NULL,
+	status TEXT NOT NULL,
+	failure_reason TEXT NOT NULL DEFAULT '',
+	requested_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+)`); execErr != nil {
+		t.Fatalf("create legacy table: %v", execErr)
+	}
+	if _, execErr := legacyDB.ExecContext(ctx,
+		`INSERT INTO build_state (build_id, tool_spec_digest, status, failure_reason, requested_at, updated_at)
+VALUES (?, ?, ?, '', ?, ?)`,
+		"legacy-build", "legacy-spec", string(StatusSucceeded), int64(100000), int64(100000),
+	); execErr != nil {
+		t.Fatalf("insert legacy row: %v", execErr)
+	}
+	if closeErr := legacyDB.Close(); closeErr != nil {
+		t.Fatalf("close legacy db: %v", closeErr)
+	}
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open on legacy schema: %v", err)
+	}
+	defer func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Fatalf("Close: %v", closeErr)
+		}
+	}()
+
+	got, err := store.Get("legacy-build")
+	if err != nil {
+		t.Fatalf("Get after migration: %v", err)
+	}
+	if got.ToolSpecDigest != "legacy-spec" || got.Status != StatusSucceeded {
+		t.Fatalf("legacy row not preserved: %+v", got)
+	}
+	if got.ImageRef != "" || got.ImageDigest != "" || got.SpecReferrerDigest != "" || got.IntegrityHealth != "" {
+		t.Fatalf("expected new columns to default to empty string, got %+v", got)
+	}
+
+	updated, err := store.SetArtifact("legacy-build", "harbor.example.com/library/tool:latest", "sha256:abc", time.Unix(200, 0).UTC())
+	if err != nil {
+		t.Fatalf("SetArtifact after migration: %v", err)
+	}
+	if updated.ImageDigest != "sha256:abc" {
+		t.Fatalf("ImageDigest after SetArtifact: got %q", updated.ImageDigest)
 	}
 }
 

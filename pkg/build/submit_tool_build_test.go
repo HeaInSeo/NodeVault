@@ -136,6 +136,37 @@ func TestWatchToolBuild_SendsCurrentState(t *testing.T) {
 	}
 }
 
+// TestWatchToolBuild_ExposesImageDigest verifies AC-EVT-02: WatchToolBuild's
+// final event must carry image_ref/image_digest without the caller having to
+// parse logs or read index state directly.
+func TestWatchToolBuild_ExposesImageDigest(t *testing.T) {
+	svc := newSubmitTestService(t)
+	if _, err := svc.SubmitToolBuild(context.Background(), &nfv1.SubmitToolBuildRequest{
+		RequestId:      "build-digest",
+		ToolSpecDigest: "spec-123",
+	}); err != nil {
+		t.Fatalf("SubmitToolBuild: %v", err)
+	}
+
+	stream := newFakeStream()
+	if err := svc.WatchToolBuild(&nfv1.WatchToolBuildRequest{BuildId: "build-digest"}, stream); err != nil {
+		t.Fatalf("WatchToolBuild: %v", err)
+	}
+	if len(stream.events) == 0 {
+		t.Fatal("expected at least one state event")
+	}
+	last := stream.events[len(stream.events)-1]
+	if last.GetStatus() != string(buildstate.StatusSucceeded) {
+		t.Fatalf("final status got %q, want Succeeded", last.GetStatus())
+	}
+	if last.GetImageDigest() != "sha256:built" {
+		t.Errorf("ImageDigest: got %q, want %q", last.GetImageDigest(), "sha256:built")
+	}
+	if last.GetImageRef() == "" {
+		t.Error("ImageRef should be populated once the build has pushed")
+	}
+}
+
 type cancelableBuilder struct {
 	started chan struct{}
 }

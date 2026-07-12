@@ -1,7 +1,7 @@
 # Platform Schedule
 
-버전: 3.3
-갱신: 2026-07-07
+버전: 3.4
+갱신: 2026-07-12
 기준 문서:
 - `docs/ARCHITECTURE_V01.md` (NodeVault Kubernetes In-Pod 재현 가능 이미지 빌드 아키텍처 v0.1.0)
 - `docs/OBSERVED_PROFILE_SPEC.md`, `docs/SECURITY_SCAN_SPEC.md`, `docs/RUNNER_NODE_SPEC.md`
@@ -194,6 +194,239 @@
 - [x] `GET /v1/palette/data` alias 추가
 - [x] issue #13 라이브 검증 블로커 확인 — kubeconfig 있음, 현재 네트워크 `no route to host`
 - [x] `go test -tags "$(BUILDTAGS)" ./...` 통과
+
+---
+
+## 재현성 개선 (P0~P3, 2026-07-08 라이브 테스트 기반)
+
+NodeKit→NodeVault 라이브 재현성 테스트(`docs/NODEKIT_LIVE_RECIPE_REPRO_TEST_2026-07-08.md`, `docs/NODEKIT_LIVE_RECIPE_EXTENDED_TEST_2026-07-08.md`) 결과, 핵심 빌드 경로(NodeKit recipe → ResolveToolSpec/SubmitToolBuild → in-Pod Buildah → Harbor push → digest 기록 → index Active)는 정상 동작함을 확인했다. 남은 4가지 항목(`docs/NODEKIT_NODEVAULT_REPRO_IMPROVEMENT_NODEVAULT.md` P0~P3)을 Sprint 5~11로 분해한다.
+
+### Sprint 5 — P0a: RegistryConfig 통합 타입 도입
+
+**목표**: Buildah push, ORAS referrer push, reconcile, digest resolve 4개 경로가 각자 읽던 registry 설정(scheme/CA/auth)을 단일 `pkg/registryconfig` 타입으로 통합한다. 이 스프린트는 타입 도입 + ORAS 소비자 전환까지; reconcile 전환은 Sprint 6.
+
+**결정**
+
+- 새 패키지 `pkg/registryconfig`(leaf 패키지, `pkg/oras`↔`pkg/registry` 상호 의존 없음을 확인 완료 — 양쪽에서 안전하게 임포트 가능).
+- `Config{Addr, Scheme, CAFile, AuthFile, InsecureTLS}`. `FromEnv()`: `NODEVAULT_REGISTRY_ADDR`(기존 `pkg/build/service.go`의 `defaultRegistryAddr` 이관), `NODEVAULT_REGISTRY_SCHEME`(default `"https"`), `NODEVAULT_REGISTRY_CA_FILE`(없으면 `NODEVAULT_ORAS_CA_FILE`로 폴백), `REGISTRY_AUTH_FILE`(default `/run/containers/0/auth.json`).
+- CA 자동탐색: 둘 다 비어있으면 `/etc/containers/certs.d/<host>/ca.crt` 존재 확인 — 이는 Buildah(containers/image 라이브러리)가 이미 자동 신뢰하는 경로(`deploy/03-nodevault.yaml`의 `nodevault-harbor-ca` Secret 마운트)이므로 **`pkg/build/builder.go`는 코드 변경 없이** AC-REG-01을 만족한다.
+- `HTTPClient()`의 TLS RootCAs는 `x509.SystemCertPool()` + `CAFile` 추가(교체 아님) — 공인 레지스트리(docker.io 등) 조회를 깨지 않으면서 Harbor 자체서명 CA도 신뢰.
+- `pkg/oras/referrer.go`의 `credentialsFromAuthFile`을 `registryconfig.Config.Credentials(host)`로 순수 이동(로직 변경 없음).
+
+**주요 작업**
+
+| 파일 | 변경 |
+|------|------|
+| `pkg/registryconfig/config.go` (신규) | `Config`, `FromEnv()`, `discoverCAFile(addr)`, `HTTPClient()`, `Credentials(host)` |
+| `pkg/registryconfig/config_test.go` (신규) | env 조합별 `FromEnv()` 검증, CA 자동탐색 유무 검증 |
+| `pkg/oras/referrer.go` | `newRemoteRepository`가 `registryconfig.FromEnv()` 사용; `credentialsFromAuthFile` 삭제 후 이관된 함수 호출로 대체 |
+| `pkg/oras/referrer_test.go` | auth-file 파싱 테스트를 이관에 맞게 갱신(동작 동일성 회귀 확인) |
+| `pkg/build/service.go` | `defaultRegistryAddr` 상수를 `pkg/registryconfig`로 이동, `registryAddr()`는 `registryconfig.FromEnv().Addr` 위임 |
+| `deploy/03-nodevault.yaml` | `NODEVAULT_REGISTRY_SCHEME=https`, `NODEVAULT_REGISTRY_CA_FILE` env 추가(기존 `NODEVAULT_REGISTRY_ADDR` 옆) |
+| `README.md`, `ARCHITECTURE.md` | 신규 env var 문서화 |
+
+**완료 판정**
+
+- [ ] `TestRegistryConfig_FromEnv_Defaults`
+- [ ] `TestRegistryConfig_DiscoverCAFile`
+- [ ] `TestRegistryConfig_ORASCAFileFallback`
+- [ ] `pkg/oras` 기존 테스트 전부 통과(회귀 없음)
+- [ ] `go test -tags "$(BUILDTAGS)" ./...` 통과, `make lint` 경고 없음
+
+### Sprint 6 — P0b: reconcile HTTPS 전환 + 401/타임아웃 구분 + AC-REG-04
+
+**목표**: `pkg/registry/checker.go`의 하드코딩된 `http://`를 제거하고 `registryconfig`를 사용하도록 전환한다. HTTP 401(인증 챌린지)이 "not found"로 오분류되던 버그를 고친다. referrer push 실패 시에도 reconcile을 즉시 트리거해 `integrity_health=Partial`이 신속히 반영되도록 한다(AC-REG-04).
+
+**결정**
+
+- `HarborChecker`는 `NewHarborChecker(cfg registryconfig.Config)`로 변경(유일한 프로덕션 호출부는 `cmd/controlplane/main.go`). URL 조립을 `cfg.Scheme`로, `cfg.HTTPClient()`로 CA-신뢰 클라이언트 사용.
+- Outcome 분류는 기존 `(bool, error)` 시그니처 유지: `200`→`(true,nil)`, `404`→`(false,nil)`(확정 not-found), 그 외(401/403/5xx/타임아웃/TLS 실패)→`(false, err)`(indeterminate, `SetIntegrityHealth` 호출 안 함 — 기존 보수적 에러 경로 재사용).
+- 401은 `pkg/registry/resolve.go`의 기존 `parseBearerChallenge`/`anonymousToken`을 재사용해 익명 토큰 1회 재시도 후에도 실패하면 명시적 에러 반환.
+- AC-REG-04: `pkg/build/service.go`의 `postBuildRegistration`에서 `ReconcileOne` 호출을 referrer push 성공/실패 공통 경로로 이동. 이는 reconcile의 기존 계산 경로를 조기 트리거하는 것이지 `pkg/build`가 `integrity_health`를 직접 쓰는 게 아니다 — CLAUDE.md 이중 축 규칙 위반 아님.
+- 함께 정리: `pkg/registry/registry.go`의 `Client.GetDigest`(프로덕션 미사용 dead code, 동일하게 `http://` 하드코딩)도 이 스프린트에서 삭제.
+
+**주요 작업**
+
+| 파일 | 변경 |
+|------|------|
+| `pkg/registry/checker.go` | `NewHarborChecker(cfg registryconfig.Config)`; `http://` 하드코딩 제거; 401 챌린지 처리 |
+| `pkg/registry/checker_test.go` | 200/404/401/타임아웃 outcome 검증 |
+| `cmd/controlplane/main.go` | `registryconfig.FromEnv()` 전달 |
+| `pkg/build/service.go` | `postBuildRegistration` reconcile 트리거 경로 통합 |
+| `pkg/build/service_test.go` | AC-REG-04 회귀: referrer 실패해도 `ReconcileOne` 호출 + `lifecycle_phase` Active 유지 |
+| `pkg/registry/registry.go`, `registry_test.go` | dead code(`Client.GetDigest`) 삭제 |
+
+**완료 판정**
+
+- [ ] `TestHarborChecker_ImageExists_404_NotFound`
+- [ ] `TestHarborChecker_ImageExists_401_IsNotNotFound`
+- [ ] `TestHarborChecker_UsesConfiguredScheme`
+- [ ] `TestPostBuildRegistration_ReferrerPushFailure_TriggersReconcile`
+- [ ] `go test -tags "$(BUILDTAGS)" ./...` 통과, `make lint` 경고 없음
+
+### Sprint 7 — P1a: build_state 아티팩트 메타데이터 브릿지
+
+**목표**: `pkg/buildstate.Record`에 image_ref/image_digest/spec_referrer_digest/integrity_health를 추가하고 `WatchToolBuild`가 스트리밍하도록 한다(AC-EVT-02).
+
+**결정**
+
+- 마이그레이션: 버전 관리 프레임워크 신설 없이, `init()`에서 `PRAGMA table_info(build_state)`로 컬럼 존재 확인 후 없으면 `ALTER TABLE ... ADD COLUMN ... DEFAULT ''` 실행하는 `ensureColumn` 헬퍼(멱등적, 매 `Open()`마다 실행). Sprint 8에서 재사용.
+- `IntegrityHealth`는 `pkg/buildstate`가 `pkg/index`를 임포트하지 않는 현재 경계를 유지하기 위해 plain string 필드. read-through 스냅샷: `ReconcileOne` 호출 직후 `indexStore.GetByCasHash`(읽기 전용)로 방금 계산된 값을 복사만 함 — `pkg/buildstate`/`pkg/build` 모두 `SetIntegrityHealth`를 직접 호출하지 않음(이중 축 규칙 준수 재확인).
+- `BuildEvent` proto에 `image_ref`, `image_digest`, `spec_referrer_digest`, `integrity_health` 필드 추가.
+
+**주요 작업**
+
+| 파일 | 변경 |
+|------|------|
+| `pkg/buildstate/store.go` | `Record` 필드 추가, `ensureColumn` 헬퍼, `SetArtifact`, `SetReferrer` 신규 메서드 |
+| `pkg/buildstate/store_test.go` | 신규 컬럼 CRUD + 구 스키마 DB 마이그레이션 테스트 |
+| `protos/nodevault/v1/nodevault.proto` | `BuildEvent`에 필드 추가 |
+| `pkg/build/submit_tool_build.go` | `runSubmittedBuild`(digest 획득 시 `SetArtifact`), `buildStateEvent` 신규 필드 채우기 |
+| `pkg/build/service.go` | `postBuildRegistration`에서 referrer 처리 후 `SetReferrer` 호출 |
+
+**완료 판정**
+
+- [ ] `TestBuildStateStore_SetArtifact_PersistsImageRefDigest`
+- [ ] `TestBuildStateStore_EnsureColumn_MigratesExistingDB`
+- [ ] `TestWatchToolBuild_ExposesImageDigest`(AC-EVT-02)
+- [ ] `go test -tags "$(BUILDTAGS)" ./...` 통과, `make lint` 경고 없음
+
+### Sprint 8 — P1b: durable build_events 테이블 + 이벤트 종류 확장
+
+**목표**: 빌드 생애주기 전체의 구조화된 이벤트 로그를 영속화(AC-EVT-01), NodeSentinel/NodePalette가 로그 스크레이핑 없이 추적 가능한 기반 마련(AC-EVT-03 기반).
+
+**결정**
+
+- `build_events` 테이블(1:N, `build_state`와 별개): `id, build_id, kind, message, image_ref, image_digest, spec_referrer_digest, integrity_health, created_at`.
+- `BuildEventKind`에 `BUILD_SUBMITTED, BUILDING, PUSHING, SPEC_REFERRER_PUSHED, SPEC_REFERRER_PARTIAL, CANCELLED` 추가(기존 값 번호 재사용 안 함, 이어붙여 레거시 `BuildAndRegister` 스트림 호환성 유지).
+- `WatchToolBuild`의 폴링 메커니즘은 이 스프린트에서 변경하지 않는다 — `build_events`는 영속 기록/감사용, 실시간 스트리밍은 Sprint 7의 브릿지 필드로 충분. 이벤트 로그를 gRPC로 노출하는 신규 RPC는 범위 밖.
+- `AppendEvent`는 `Transition`과 별도 호출(상태 전이와 이벤트 기록 실패를 격리 — 실패 시 `slog.Warn`만).
+
+**주요 작업**
+
+| 파일 | 변경 |
+|------|------|
+| `protos/nodevault/v1/nodevault.proto` | `BuildEventKind`에 6개 값 추가 |
+| `pkg/buildstate/store.go` | `build_events` 테이블, `AppendEvent(...)`, `ListEvents(buildID)` |
+| `pkg/buildstate/store_test.go` | append/list, build_id 필터링 |
+| `pkg/build/submit_tool_build.go` | 각 상태 전이 지점에 대응 `AppendEvent` 호출 |
+| `pkg/build/service.go` | `recordBuildSuccess`(PUSH_SUCCEEDED, DIGEST_ACQUIRED), `postBuildRegistration`(SPEC_REFERRER_PUSHED/PARTIAL), `CancelToolBuild`(CANCELLED) |
+
+**완료 판정**
+
+- [ ] `TestBuildStateStore_AppendEvent_ListEvents`
+- [ ] `TestSubmitToolBuild_PersistsPushSucceededAndDigestAcquired`(AC-EVT-01)
+- [ ] `TestPostBuildRegistration_ReferrerFailure_PersistsSpecReferrerPartial`
+- [ ] `go test -tags "$(BUILDTAGS)" ./...` 통과, `make lint` 경고 없음
+
+### Sprint 9 — P2a: SourceBuild 정적 Dockerfile 정책 (risky RUN 탐지 + allowRuntimeTools)
+
+**목표**: 최종 스테이지 `RUN` 라인에서 risky runtime tool을 명시적으로 설치/실행하는 패턴을 빌드 게이트에서 차단한다.
+
+**범위 고지**: 이 스프린트는 정적 텍스트 스캔만 구현한다. base 이미지가 이미 curl/wget을 포함하는 경우(`curlimages/curl` 등 — 실제 라이브 테스트 실패 케이스)는 탐지 불가 → AC-SB-01, AC-SB-03(부분)만 만족, **AC-SB-02/04는 Sprint 10 필요**.
+
+**결정**
+
+- `riskyRuntimeTools`: `curl, wget, git, ssh, scp, apt, apt-get, apk, yum, dnf, mamba, conda, micromamba, gcc, g++, clang, make, cmake`.
+- 마지막 `FROM` 이후의 `RUN`만 검사(중간 빌드 스테이지는 허용) — `validateDockerfilePolicy`의 기존 `fromCount` 스테이지 경계 추적 재사용.
+- `RUN apt-get install curl` 류(설치)와 `RUN curl ...`(직접 실행) 둘 다 탐지.
+- `allowRuntimeTools`/`allowRuntimeToolsReason`을 `BuildRequest` proto에 신규 필드로 추가. 위반 tool이 allow list에 있고 reason이 비어있지 않을 때만 통과.
+- 최종 거부 판단은 NodeVault(`ValidateBuildRequest`)에서만 수행 — NodeKit L1 UI/검증 구현은 범위 밖(CLAUDE.md §1).
+
+**주요 작업**
+
+| 파일 | 변경 |
+|------|------|
+| `protos/nodevault/v1/nodevault.proto` | `BuildRequest`에 `allow_runtime_tools`, `allow_runtime_tools_reason` 추가 |
+| `pkg/build/validate.go` | `riskyRuntimeTools` 목록, 최종 스테이지 판별, `validateFinalStageRuntimeTools(...)` |
+| `pkg/build/validate_test.go` | AC-SB-01/02(정적 부분)/03(정적 부분) 각각 테스트 |
+| `pkg/build/submit_tool_build.go` | `allow_runtime_tools`/`reason` 역직렬화 회귀 테스트 |
+
+**완료 판정**
+
+- [ ] `TestValidateBuildRequest_FinalStageRiskyTool_Rejected`
+- [ ] `TestValidateBuildRequest_AllowRuntimeToolsWithReason_Passes`
+- [ ] `TestValidateBuildRequest_AllowRuntimeToolsWithoutReason_Rejected`
+- [ ] `TestValidateBuildRequest_BuildStageRiskyTool_NotFinalStage_Passes`
+- [ ] `TestValidateBuildRequest_CleanFinalImage_NoCurl_Passes`
+- [ ] `go test -tags "$(BUILDTAGS)" ./...` 통과, `make lint` 경고 없음
+
+### Sprint 10 — P2b: post-build 최종 이미지 콘텐츠 스캔 (podbridge5 이슈 선행)
+
+**목표**: Sprint 9가 놓치는 "base 이미지가 이미 risky tool 포함" 케이스를 실제 빌드된 이미지에서 탐지한다(AC-SB-04 완전 충족, AC-SB-02 완결).
+
+**선행 조건**: `HeaInSeo/podbridge5` [issue #2](https://github.com/HeaInSeo/podbridge5/issues/2) — 이미지 filesystem 콘텐츠를 exec 없이 export/조회하는 공개 API 요청. 확인 결과 내부 export 로직(`image.go`의 `saveImage`, `images.Export` 기반 tar/tar.gz)은 이미 존재하지만 비공개(소문자)라 NodeVault에서 호출 불가 — 필요한 것은 podbridge5 쪽 작은 공개 API PR 수준.
+
+**결정**
+
+- exec 기반 스캔(이미지 안에서 `which curl` 실행)은 채택하지 않는다 — 신뢰 안 되는 이미지 콘텐츠 실행은 새로운 공격 표면.
+- 대신 tar 아카이브 export 후 엔트리 경로 스캔(`usr/bin/curl` 등 표준 PATH 하위 경로와 risky tool 이름 매칭) — mount+stat보다 podbridge5의 기존 구현과 정확히 맞고, 특권 마운트 연산도 불필요.
+- `Builder` 인터페이스(`pkg/build/builder.go`)에 `InspectRiskyTools(ctx, imageID string, riskyTools []string) (found []string, err error)` 추가. `disabledBuilder`는 빈 슬라이스 반환(스캔 skip, WARN 아님).
+- WARN vs FAIL 구분: allow list에 없는 risky tool 발견 시 FAIL(빌드 거부, push 이전에 중단), allow list에 있고 reason 있으면 WARN.
+- 스캔 시점: `s.builder.Build(...)` 성공 직후, push 이전.
+
+**주요 작업**
+
+| 파일 | 변경 |
+|------|------|
+| (podbridge5 리포지토리, 별도 PR) | `SaveImage`(공개) 또는 `ExportImageArchive` 신규 공개 API — issue #2 |
+| `pkg/build/builder.go` | `Builder` 인터페이스에 `InspectRiskyTools` 추가, tar 엔트리 스캔 구현 |
+| `pkg/build/submit_tool_build.go` | build 성공 직후 스캔 호출, FAIL 시 push 이전 중단 |
+| `pkg/build/builder_test.go` | fake export 기반 유닛 테스트 |
+
+**완료 판정**
+
+- [ ] `TestInspectRiskyTools_DetectsBaseImageTool`(AC-SB-04 FAIL 케이스)
+- [ ] `TestInspectRiskyTools_AllowListedTool_WarnNotFail`(AC-SB-04 WARN 케이스)
+- [ ] `TestRunSubmittedBuild_RiskyToolFail_BlocksPush`
+- [ ] seoy 라이브 검증: curlimages/curl 기반 SourceBuild 재현 → FAIL 확인(별도 이슈로 트래킹)
+- [ ] `go test -tags "$(BUILDTAGS)" ./...` 통과, `make lint` 경고 없음
+
+### Sprint 11 — P3: pinning_status / reproducibility_status
+
+**목표**: `name=version=build`(FullPin)와 `name=version`(VersionOnly)을 구분 표현한다. 정책은 배관(plumbing)만 — `validateCondaPackagePin`의 현재 hard-reject 동작은 그대로 유지한다.
+
+**결정**
+
+- `PinningStatus`/`ReproducibilityStatus`는 `LifecyclePhase`/`IntegrityHealth`와 같은 선례(plain string 필드, proto enum 아님)를 따른다 — 클라이언트가 형태화하는 값이 아니라 서버가 계산하는 상태값이기 때문.
+- 저장 위치: `pkg/index.ResolvedToolSpec`(resolve 시점) + `pkg/index.Entry`(등록 시점 복사) 양쪽.
+- `validateCondaPackagePin`을 `error` → `(PinningStatus, error)` 반환으로 리팩터: `=` 2개(FullPin), `=` 1개(VersionOnly, 계속 reject), `$` 변수(Unresolved, 계속 reject). 호출자가 여러 패키지 판정 중 가장 약한 값으로 집계.
+- `VersionOnly`를 통과시키는 "loose mode"(AC-PIN-03)는 NodeKit과의 합의가 필요한 별도 결정이므로 이번 스프린트 범위 밖.
+- `docs/INDEX_SCHEMA.md`가 schema_version 1에 멈춰 있고 실제 코드는 `schemaVersion=3`(`pkg/index/store.go`)인데 이 문서 앞부분은 같은 변경을 "Index v4"로 라벨링한 기존 불일치가 있음 — 이 스프린트가 새 필드를 추가하며 라벨을 실제 코드값과 맞출 것.
+
+**주요 작업**
+
+| 파일 | 변경 |
+|------|------|
+| `pkg/index/schema.go` | `PinningStatus`, `ReproducibilityStatus` 타입+상수; `ResolvedToolSpec`, `Entry`에 필드 추가 |
+| `pkg/index/store.go` | 관련 mutator, `schemaVersion` 정리 |
+| `pkg/build/validate.go` | `validateCondaPackagePin` 리팩터 + 집계 로직 |
+| `pkg/build/resolve_tool_spec.go` | 집계된 `PinningStatus`를 `ResolvedToolSpec`에 기록 |
+| `pkg/catalog/*.go` | 등록 시 `Entry.PinningStatus`/`ReproducibilityStatus` 계산 |
+| `protos/nodevault/v1/nodevault.proto` | `RegisteredToolDefinition`에 `pinning_status`, `reproducibility_status` 추가 |
+| `docs/INDEX_SCHEMA.md` | schema_version 최신화, 라벨 불일치 각주 명시 |
+
+**완료 판정**
+
+- [ ] `TestValidateCondaPackagePin_ClassifiesFullPinVsVersionOnly`(AC-PIN-01)
+- [ ] `TestResolveToolSpec_VersionOnlySubmission_NeverComplete`(AC-PIN-02)
+- [ ] `TestRegisterTool_PinningStatus_CopiedFromResolvedSpec`
+- [ ] AC-PIN-03(loose mode)은 이번 스프린트 범위 밖 — NodeKit 합의 후 별도 스프린트로 추적
+- [ ] `go test -tags "$(BUILDTAGS)" ./...` 통과, `make lint` 경고 없음
+
+### 재현성 개선 스프린트 ↔ 요구사항 매핑
+
+| 스프린트 | 항목 | AC 충족 |
+|---|---|---|
+| 5 | P0a RegistryConfig 타입 | AC-REG-01 |
+| 6 | P0b reconcile HTTPS + 401 구분 + AC-REG-04 | AC-REG-02, AC-REG-04 (AC-REG-03은 이미 구현됨, 회귀 테스트만) |
+| 7 | P1a build_state 브릿지 | AC-EVT-02, AC-EVT-03 기반 |
+| 8 | P1b durable build_events | AC-EVT-01 |
+| 9 | P2a 정적 Dockerfile 정책 | AC-SB-01, AC-SB-03(부분), AC-SB-02(부분) |
+| 10 | P2b post-build 콘텐츠 스캔 (podbridge5 issue #2 선행) | AC-SB-02(완결), AC-SB-04 |
+| 11 | P3 pinning/reproducibility (plumbing만) | AC-PIN-01, AC-PIN-02 (AC-PIN-03은 NodeKit 합의 후 별도) |
+
+---
 
 ### NodeKit 연동 gate (2026-06-19)
 
@@ -484,7 +717,8 @@ NodeVault 남은 작업
   ├── Phase 4: seoy LayerCacheHit 라이브 검증 (seoy 필요, P3, issue #13)
   ├── TODO-16b: stableRef 재사용 UI 정책 합의 (NodeKit 조율 필요, issue #6)
   ├── 트랙 C: DagEdit ↔ NodePalette 연결 — NodeVault `/v1/palette/tools` alias 완료, DagEdit 소비자 연결은 외부 후속 (issue #14)
-  └── Phase 6: Legacy API 축소 (NodeKit 전환 완료 후)
+  ├── Phase 6: Legacy API 축소 (NodeKit 전환 완료 후)
+  └── 재현성 개선 Sprint 5~11 (P0~P3) — Sprint 5(RegistryConfig 통합)부터 순차 착수, Sprint 10은 podbridge5 issue #2 선행 필요, Sprint 11 loose mode는 NodeKit 합의 필요
 ```
 
 ---

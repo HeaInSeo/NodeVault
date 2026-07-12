@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +22,7 @@ import (
 	"github.com/HeaInSeo/NodeVault/pkg/index"
 	"github.com/HeaInSeo/NodeVault/pkg/metrics"
 	"github.com/HeaInSeo/NodeVault/pkg/oras"
+	"github.com/HeaInSeo/NodeVault/pkg/registryconfig"
 )
 
 // SentinelEnqueuer enqueues post-build L3/L4 validation work with NodeSentinel.
@@ -41,16 +41,10 @@ type ReconcileTriggerer interface {
 	ReconcileOne(ctx context.Context, casHash string) error
 }
 
-const (
-	defaultRegistryAddr = "harbor.10.113.24.96.nip.io"
-	backendInPodBuildah = "in-pod-buildah"
-)
+const backendInPodBuildah = "in-pod-buildah"
 
 func registryAddr() string {
-	if v := os.Getenv("NODEVAULT_REGISTRY_ADDR"); v != "" {
-		return v
-	}
-	return defaultRegistryAddr
+	return registryconfig.FromEnv().Addr
 }
 
 // Service implements BuildServiceServer.

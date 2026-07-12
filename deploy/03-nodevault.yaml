@@ -126,6 +126,13 @@ spec:
           env:
             - name: NODEVAULT_REGISTRY_ADDR
               value: "harbor.lab.local"
+            # pkg/registryconfig.FromEnv() reads these so ORAS referrer push
+            # and reconcile share the same scheme/CA trust as Buildah's
+            # push path (which auto-discovers the harbor-ca mount below).
+            - name: NODEVAULT_REGISTRY_SCHEME
+              value: "https"
+            - name: NODEVAULT_REGISTRY_CA_FILE
+              value: "/etc/containers/certs.d/harbor.lab.local/ca.crt"
             - name: NODEVAULT_BUILD_BACKEND
               value: "in-pod-buildah"
             - name: NODEVAULT_RUNTIME_MODE

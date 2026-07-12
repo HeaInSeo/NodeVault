@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/HeaInSeo/NodeVault/pkg/index"
+	"github.com/HeaInSeo/NodeVault/pkg/registryconfig"
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
@@ -73,8 +74,8 @@ func (m *mockBuilder) Close() error {
 
 func TestRegistryAddr_Default(t *testing.T) {
 	t.Setenv("NODEVAULT_REGISTRY_ADDR", "")
-	if got := registryAddr(); got != defaultRegistryAddr {
-		t.Errorf("got %q, want %q", got, defaultRegistryAddr)
+	if got := registryAddr(); got != registryconfig.DefaultAddr {
+		t.Errorf("got %q, want %q", got, registryconfig.DefaultAddr)
 	}
 }
 

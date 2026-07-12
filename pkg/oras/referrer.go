@@ -11,16 +11,15 @@ package oras
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/HeaInSeo/sori"
 	"github.com/HeaInSeo/sori/registryutil"
 
 	"github.com/HeaInSeo/NodeVault/pkg/index"
+	"github.com/HeaInSeo/NodeVault/pkg/registryconfig"
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
@@ -45,10 +44,8 @@ type toolSpec struct {
 // e.g. "harbor.lab.local/library/mytool".
 // subjectDigest is the image manifest digest, e.g. "sha256:abc...".
 //
-// TLS behavior is controlled by env vars:
-//
-//	NODEVAULT_ORAS_INSECURE_TLS=true  — skip TLS verification (self-signed certs)
-//	NODEVAULT_ORAS_CA_FILE=/path/cert.pem — use custom CA
+// TLS/CA/auth behavior comes from pkg/registryconfig.FromEnv() — see that
+// package for the env vars it reads.
 //
 // Returns the referrer manifest digest on success.
 // A non-nil error means the push failed; the caller should log and continue —
@@ -158,19 +155,20 @@ func PushToolProfileReferrer(
 	return result.ReferrerDigest, nil
 }
 
-// newRemoteRepository builds a remote repository client using env-driven TLS
-// config. Credentials are read from the Docker/containers auth.json file
-// (REGISTRY_AUTH_FILE env var, default /run/containers/0/auth.json) — the
-// same file Buildah uses for pull/push, so no separate Secret is required.
+// newRemoteRepository builds a remote repository client using
+// pkg/registryconfig's shared scheme/CA/auth settings — the same settings
+// used by reconcile and (eventually) digest resolve, so referrer push no
+// longer trusts a different CA than Buildah's push path.
 func newRemoteRepository(imageRepo string) (sori.ReferrerTarget, error) {
+	rc := registryconfig.FromEnv()
 	registry := registryFromRepo(imageRepo)
-	username, password, err := credentialsFromAuthFile(registry)
+	username, password, err := rc.Credentials(registry)
 	if err != nil {
 		return nil, fmt.Errorf("oras: load credentials for %q: %w", registry, err)
 	}
 	cfg := registryutil.RemoteConfig{
-		InsecureTLS: os.Getenv("NODEVAULT_ORAS_INSECURE_TLS") == "true",
-		CAFile:      os.Getenv("NODEVAULT_ORAS_CA_FILE"),
+		InsecureTLS: rc.InsecureTLS,
+		CAFile:      rc.CAFile,
 		Username:    username,
 		Password:    password,
 	}
@@ -188,44 +186,4 @@ func registryFromRepo(imageRepo string) string {
 		return imageRepo[:idx]
 	}
 	return imageRepo
-}
-
-// credentialsFromAuthFile reads username and password for registry from the
-// Docker/containers auth.json file. The file path is taken from the
-// REGISTRY_AUTH_FILE env var, defaulting to /run/containers/0/auth.json.
-// Returns ("", "", nil) when the file is absent or has no entry for registry.
-func credentialsFromAuthFile(registry string) (username, password string, err error) {
-	path := os.Getenv("REGISTRY_AUTH_FILE")
-	if path == "" {
-		path = "/run/containers/0/auth.json"
-	}
-	//nolint:gosec // path is operator-controlled via REGISTRY_AUTH_FILE or hardcoded default
-	data, readErr := os.ReadFile(path)
-	if os.IsNotExist(readErr) {
-		return "", "", nil
-	}
-	if readErr != nil {
-		return "", "", fmt.Errorf("read auth file %q: %w", path, readErr)
-	}
-	var cfg struct {
-		Auths map[string]struct {
-			Auth string `json:"auth"`
-		} `json:"auths"`
-	}
-	if parseErr := json.Unmarshal(data, &cfg); parseErr != nil {
-		return "", "", fmt.Errorf("parse auth file: %w", parseErr)
-	}
-	entry, ok := cfg.Auths[registry]
-	if !ok {
-		return "", "", nil
-	}
-	decoded, err := base64.StdEncoding.DecodeString(entry.Auth)
-	if err != nil {
-		return "", "", fmt.Errorf("decode auth for %q: %w", registry, err)
-	}
-	parts := strings.SplitN(string(decoded), ":", 2)
-	if len(parts) != 2 {
-		return "", "", fmt.Errorf("auth entry for %q is not user:password format", registry)
-	}
-	return parts[0], parts[1], nil
 }

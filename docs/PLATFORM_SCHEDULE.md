@@ -329,29 +329,31 @@ NodeKit→NodeVault 라이브 재현성 테스트(`docs/NODEKIT_LIVE_RECIPE_REPR
 
 **결정**
 
-- `riskyRuntimeTools`: `curl, wget, git, ssh, scp, apt, apt-get, apk, yum, dnf, mamba, conda, micromamba, gcc, g++, clang, make, cmake`.
-- 마지막 `FROM` 이후의 `RUN`만 검사(중간 빌드 스테이지는 허용) — `validateDockerfilePolicy`의 기존 `fromCount` 스테이지 경계 추적 재사용.
-- `RUN apt-get install curl` 류(설치)와 `RUN curl ...`(직접 실행) 둘 다 탐지.
-- `allowRuntimeTools`/`allowRuntimeToolsReason`을 `BuildRequest` proto에 신규 필드로 추가. 위반 tool이 allow list에 있고 reason이 비어있지 않을 때만 통과.
+- `riskyRuntimeTools`: `curl, wget, git, ssh, scp, apt, apt-get, apk, yum, dnf, gcc, g++, clang, make, cmake`. **원 요구사항 문서의 목록에서 `mamba`/`conda`/`micromamba`를 제외했다** — 구현 중 발견: Conda/Micromamba 레시피 variant는 `RUN micromamba install <pkg>=<version>=<build>` 자체가 빌드 메커니즘이며(라이브 재현 테스트 p04/p05에서 PASS로 확인된 정상 경로), 이걸 risky로 걸면 지금 동작하는 빌드가 전부 막힌다. NodeKit `docs/NODEKIT_SOURCEBUILD_STRUCTURED_INTENT_DESIGN.md`(2026-07-12)를 확인한 결과 멀티스테이지 렌더링은 `SourceBuild` 레시피에만 계획돼 있고(Phase B/C, 구현 미착수) Conda/Micromamba는 대상이 아니다 — NodeKit이 이 레시피들도 멀티스테이지로 내거나 `allow_runtime_tools`를 채워 보내게 되면 그때 다시 추가한다.
+- 마지막 `FROM` 이후의 `RUN`만 검사(중간 빌드 스테이지는 허용) — `validateDockerfilePolicy`의 기존 `fromCount` 스테이지 경계 추적 재사용(정확히는 전체 `FROM` 개수를 먼저 센 뒤 마지막 스테이지인지 비교).
+- 매 RUN을 `&&`/`||`/`|`/`;`로 분리한 각 커맨드 세그먼트의 첫 토큰이 risky 목록에 있는지 검사 — `RUN apt-get install curl`은 `apt-get`(그 자체가 risky) 토큰으로, `RUN curl ...`은 `curl` 토큰으로 자연스럽게 둘 다 잡힌다.
+- `allowRuntimeTools`/`allowRuntimeToolsReason`을 `BuildRequest` proto 필드 18, 19로 추가(17까지 사용 중, `reserved 7,8,12,13,14,15` 확인). 위반 tool이 allow list에 있고 reason이 비어있지 않을 때만 통과.
 - 최종 거부 판단은 NodeVault(`ValidateBuildRequest`)에서만 수행 — NodeKit L1 UI/검증 구현은 범위 밖(CLAUDE.md §1).
 
 **주요 작업**
 
 | 파일 | 변경 |
 |------|------|
-| `protos/nodevault/v1/nodevault.proto` | `BuildRequest`에 `allow_runtime_tools`, `allow_runtime_tools_reason` 추가 |
-| `pkg/build/validate.go` | `riskyRuntimeTools` 목록, 최종 스테이지 판별, `validateFinalStageRuntimeTools(...)` |
-| `pkg/build/validate_test.go` | AC-SB-01/02(정적 부분)/03(정적 부분) 각각 테스트 |
-| `pkg/build/submit_tool_build.go` | `allow_runtime_tools`/`reason` 역직렬화 회귀 테스트 |
+| `protos/nodevault/v1/nodevault.proto` | `BuildRequest`에 `allow_runtime_tools=18`, `allow_runtime_tools_reason=19` 추가 |
+| `pkg/build/validate.go` | `riskyRuntimeTools` 목록, 전체 `FROM` 개수 사전 계산 후 최종 스테이지 판별, `validateFinalStageRuntimeTools(...)`, `shellSegments(...)` |
+| `pkg/build/validate_test.go` | AC-SB-01/03(부분) 각각 테스트 |
+| `pkg/build/submit_tool_build_test.go` | `allow_runtime_tools`/`reason`이 `raw_spec` JSON에서 정상 역직렬화되는지 회귀 테스트 |
 
 **완료 판정**
 
-- [ ] `TestValidateBuildRequest_FinalStageRiskyTool_Rejected`
-- [ ] `TestValidateBuildRequest_AllowRuntimeToolsWithReason_Passes`
-- [ ] `TestValidateBuildRequest_AllowRuntimeToolsWithoutReason_Rejected`
-- [ ] `TestValidateBuildRequest_BuildStageRiskyTool_NotFinalStage_Passes`
-- [ ] `TestValidateBuildRequest_CleanFinalImage_NoCurl_Passes`
-- [ ] `go test -tags "$(BUILDTAGS)" ./...` 통과, `make lint` 경고 없음
+- [x] `TestValidateBuildRequest_FinalStageRiskyTool_Rejected`
+- [x] `TestValidateBuildRequest_AllowRuntimeToolsWithReason_Passes`
+- [x] `TestValidateBuildRequest_AllowRuntimeToolsWithoutReason_Rejected`
+- [x] `TestValidateBuildRequest_BuildStageRiskyTool_NotFinalStage_Passes`
+- [x] `TestValidateBuildRequest_CleanFinalImage_NoCurl_Passes`
+- [x] `TestBuildRequestFromResolved_DeserializesAllowRuntimeTools`
+- [x] 기존 `TestValidateBuildRequest_AcceptsCondaInstallWithBuildString` 회귀 없음(conda/mamba/micromamba 제외로 확인)
+- [x] `go test -tags "$(BUILDTAGS)" ./...` 통과, `make lint` 경고 없음(신규 코드 0경고 — 사전 존재 경고 2건은 범위 밖)
 
 ### Sprint 10 — P2b: post-build 최종 이미지 콘텐츠 스캔 (podbridge5 이슈 선행)
 
@@ -424,7 +426,7 @@ NodeKit→NodeVault 라이브 재현성 테스트(`docs/NODEKIT_LIVE_RECIPE_REPR
 | 6 | P0b reconcile HTTPS + 401 구분 + AC-REG-04 | AC-REG-02, AC-REG-04 (AC-REG-03은 이미 구현됨, 회귀 테스트만) |
 | 7 | P1a build_state 브릿지 | AC-EVT-02, AC-EVT-03 기반 |
 | 8 | P1b durable build_events | AC-EVT-01 |
-| 9 | P2a 정적 Dockerfile 정책 | AC-SB-01, AC-SB-03(부분), AC-SB-02(부분) |
+| 9 | P2a 정적 Dockerfile 정책(conda/mamba/micromamba 제외) | AC-SB-01, AC-SB-03(부분) — AC-SB-02는 base 이미지 자체를 봐야 해서 Sprint 10 전담 |
 | 10 | P2b post-build 콘텐츠 스캔 (podbridge5 issue #2 선행) | AC-SB-02(완결), AC-SB-04 |
 | 11 | P3 pinning/reproducibility (plumbing만) | AC-PIN-01, AC-PIN-02 (AC-PIN-03은 NodeKit 합의 후 별도) |
 
@@ -720,7 +722,7 @@ NodeVault 남은 작업
   ├── TODO-16b: stableRef 재사용 UI 정책 합의 (NodeKit 조율 필요, issue #6)
   ├── 트랙 C: DagEdit ↔ NodePalette 연결 — NodeVault `/v1/palette/tools` alias 완료, DagEdit 소비자 연결은 외부 후속 (issue #14)
   ├── Phase 6: Legacy API 축소 (NodeKit 전환 완료 후)
-  └── 재현성 개선 Sprint 5~11 (P0~P3) — Sprint 5~7(P0 RegistryConfig 통합, reconcile HTTPS/401, P1a build_state 브릿지) 완료, Sprint 8(P1b durable build_events)부터 계속, Sprint 10은 podbridge5 issue #2 선행 필요, Sprint 11 loose mode는 NodeKit 합의 필요
+  └── 재현성 개선 Sprint 5~11 (P0~P3) — Sprint 5·6·7·9(P0 RegistryConfig 통합, reconcile HTTPS/401, P1a build_state 브릿지, P2a 정적 risky-tool 정책) 완료, Sprint 8은 지금 당장 소비자가 없어 보류, Sprint 10은 podbridge5 issue #2 선행 필요, Sprint 11 loose mode는 NodeKit 합의 필요
 ```
 
 ---

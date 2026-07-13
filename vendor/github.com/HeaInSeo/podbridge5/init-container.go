@@ -6,8 +6,8 @@ import (
 	"strings"
 )
 
-// TODO 일단 간단하게 overlayfs 가 잘 생성이 되고 잘 전파가 되는지만 먼저 확인하고, 다시 구현해야 함.
-// TODO Pod 생성한 다음에, 제일 처음에는 init container 를 실행해서 overlayfs 를 생성하는 작업을 해야 한다.
+// TODO: Wire init-container execution into the pod lifecycle once the pod
+// orchestration API is finalized.
 
 // CreateInitContainer sets up an overlay mount in the pod's mount namespace.
 // It launches a privileged container that executes the mount command directly.

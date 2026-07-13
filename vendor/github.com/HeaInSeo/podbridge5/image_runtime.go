@@ -21,6 +21,19 @@ type imageBuildRuntime interface {
 
 type realImageBuildRuntime struct{}
 
+// BuildahExecutionErrorKind identifies common runtime-policy failures emitted
+// by Buildah. It is intended for logging and caller-specific remediation; it
+// does not guarantee that a particular runtime, kernel, or security profile
+// accepts a build.
+type BuildahExecutionErrorKind string
+
+const (
+	BuildahExecutionErrorUnknown            BuildahExecutionErrorKind = "unknown"
+	BuildahExecutionErrorUserNamespace      BuildahExecutionErrorKind = "user-namespace"
+	BuildahExecutionErrorSupplementaryGroup BuildahExecutionErrorKind = "supplementary-groups"
+	BuildahExecutionErrorFileCapabilities   BuildahExecutionErrorKind = "file-capabilities"
+)
+
 type userNamespaceStoreFactory func(UserNamespaceBuildConfig) (storage.Store, error)
 
 type storeShutdownFunc func(storage.Store, bool) error
@@ -105,16 +118,34 @@ func annotateBuildahExecutionError(err error) error {
 	if err == nil {
 		return nil
 	}
-	msg := strings.ToLower(err.Error())
-	switch {
-	case strings.Contains(msg, "unshare") || strings.Contains(msg, "clone_newuser"):
-		return fmt.Errorf("%w; hint: Buildah failed while creating a user namespace. In Kubernetes hostUsers:false pods, prefer explicit OCI isolation when nested user namespaces are unnecessary; otherwise verify AppArmor allows unprivileged user namespaces and the pod has the required capabilities", err)
-	case strings.Contains(msg, "setgroups"):
+	switch ClassifyBuildahExecutionError(err) {
+	case BuildahExecutionErrorUserNamespace:
+		return fmt.Errorf("%w; hint: Buildah failed while creating a user namespace. Prefer explicit OCI isolation when nested user namespaces are unnecessary; otherwise verify the runtime security policy and required capabilities", err)
+	case BuildahExecutionErrorSupplementaryGroup:
 		return fmt.Errorf("%w; hint: Buildah failed while configuring supplementary groups. Check user namespace gid mappings, /proc/self/setgroups policy, and whether the pod runtime blocks nested user namespace setup", err)
-	case strings.Contains(msg, "setcap") || strings.Contains(msg, "set file capabilities"):
+	case BuildahExecutionErrorFileCapabilities:
 		return fmt.Errorf("%w; hint: Buildah failed while setting file capabilities. Verify CAP_SETFCAP is present, the filesystem supports file capabilities, and the active security profile is not denying setcap", err)
 	default:
 		return err
+	}
+}
+
+// ClassifyBuildahExecutionError classifies known Buildah execution failures.
+// Unknown errors are returned as BuildahExecutionErrorUnknown.
+func ClassifyBuildahExecutionError(err error) BuildahExecutionErrorKind {
+	if err == nil {
+		return BuildahExecutionErrorUnknown
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "unshare") || strings.Contains(msg, "clone_newuser"):
+		return BuildahExecutionErrorUserNamespace
+	case strings.Contains(msg, "setgroups"):
+		return BuildahExecutionErrorSupplementaryGroup
+	case strings.Contains(msg, "setcap") || strings.Contains(msg, "set file capabilities"):
+		return BuildahExecutionErrorFileCapabilities
+	default:
+		return BuildahExecutionErrorUnknown
 	}
 }
 

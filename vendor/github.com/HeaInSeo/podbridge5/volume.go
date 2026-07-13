@@ -20,8 +20,6 @@ import (
 	"go.podman.io/podman/v6/pkg/specgen"
 )
 
-// TODO RemoveVolume 테스트 진행해야 함. 코드 정리 필요.
-
 type VolumeMode int
 
 const (
@@ -71,7 +69,6 @@ func WithNamedVolume(volumeName, dest, subPath string, options ...string) Contai
 				return nil
 			}
 		}
-		// TODO Option 하고 SubPath 확인하자.
 		spec.Volumes = append(spec.Volumes, &specgen.NamedVolume{
 			Name:        cleaned,
 			Dest:        dest,
@@ -83,7 +80,8 @@ func WithNamedVolume(volumeName, dest, subPath string, options ...string) Contai
 	}
 }
 
-// TODO nfs, lustre 로 volume 을 원격지에 둘경우 대응해줘야 함. 지금은 local 만 해줌
+// TODO: Add remote volume backend support if NFS/Lustre volumes become part of
+// the supported runtime contract. Current helpers assume local Podman volumes.
 
 // CreateVolume 주어진 볼륨 이름을 기반으로 볼륨 만들어줌. ignoreIfExists true 이면, 동일한 볼륨이 있으면 에러 리턴하지 않고 그대로 사용.
 func CreateVolume(ctx context.Context, volumeName string, ignoreIfExists bool) (*types.VolumeConfigResponse, error) {
@@ -196,8 +194,10 @@ func VolumeExists(ctx context.Context, name string) (bool, error) {
 	return exists, err
 }
 
-// WriteFolderToVolume TODO 일단 테스트 필요 일단 붙이면서 보자. 동시성 문제의 경우 ctx 관련해서 생각해보자. 중요.
-// TODO 부가적으로 시간 또는 퍼센트를 나타내는 것을 추가할지 고민해야 함. 일단 합치는 것 부터 하고 나머지 진행하기로 함.
+// WriteFolderToVolume copies a host directory into a named Podman volume.
+//
+// TODO: Add runtime coverage for cancellation and copy failure propagation.
+// Progress reporting can be added later if callers need upload visibility.
 func WriteFolderToVolume(parentCtx context.Context, volumeName, mountPath, hostDir string, mode VolumeMode) error {
 	if parentCtx == nil {
 		return fmt.Errorf("WriteFolderToVolume: parentCtx must not be nil")
@@ -265,14 +265,13 @@ func WriteFolderToVolume(parentCtx context.Context, volumeName, mountPath, hostD
 	pr, pw := io.Pipe()
 	var wg sync.WaitGroup
 	wg.Add(1)
-	// TODO tar 를 스트림으로 작성해줌. header 관련해서즌 좀 공부좀 하자. pr, pw 개념은 이해했는데 좀더 숙달하자.
 	go func() {
 		defer wg.Done()
 
 		tw := tar.NewWriter(pw)
 		var walkErr error
-		// TODO (지우지 말것) defer 의 경우 LIFO 방식으로 실행되므로, tw.Close() 가 나중에 실행되고, pw.Close 가 나중에 실행됨.
-		// tw.Close()가 먼저 호출되어 tar footer가 정상 쓰여지고, 그다음에 pw.Close()가 파이프를 닫으므로 에러가 발생하지 않는다.
+		// Defer order matters here: tw.Close writes the tar footer before the
+		// pipe writer closes, so the reader sees a complete archive on success.
 		defer func() {
 			if walkErr != nil {
 				// WalkDir 중 에러가 발생했음을 consumer에 전달
@@ -287,9 +286,6 @@ func WriteFolderToVolume(parentCtx context.Context, volumeName, mountPath, hostD
 				// 정상 종료
 				if cErr2 := pw.Close(); cErr2 != nil {
 					Log.Warnf("pipe writer close failed: %v", cErr2)
-				} else {
-					// TODO 향후 Log.Debug 바꾸자. 지금은 이렇게 남겨놓는다.
-					Log.Info("pipe writer closed cleanly")
 				}
 			}
 		}()
@@ -361,7 +357,7 @@ func WriteFolderToVolume(parentCtx context.Context, volumeName, mountPath, hostD
 		})
 	}()
 
-	// 5. tar -> 컨테이너 (mountPath), TODO CopyFromArchiveWithOptions 마지막 옵션에서 nil 써서 디폴트로 사용했는데, 이건 위의 내용 살펴봐서 CopyFromArchive 쓸지 고려해보자.
+	// 5. tar -> 컨테이너 (mountPath)
 	copyFunc, err := containers.CopyFromArchiveWithOptions(ctx, containerID, mountPath, pr, nil)
 	if err != nil {
 		cancel()
@@ -385,7 +381,6 @@ func WriteFolderToVolume(parentCtx context.Context, volumeName, mountPath, hostD
 	return nil
 }
 
-// ReadDataFromVolume TODO 이거 생각해보자. 필요한지
 func ReadDataFromVolume(ctx context.Context, volumeName, mountPath, fileName string) (string, error) {
 	// 1. Build the container specification.
 	spec, err := newVolumeReaderSpec(volumeName, mountPath)

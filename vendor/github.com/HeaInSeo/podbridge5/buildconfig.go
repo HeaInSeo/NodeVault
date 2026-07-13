@@ -100,7 +100,6 @@ type VolumeConfig struct {
 }
 
 // NewConfig creates a new BuildConfig using the provided sourceImageName.
-// TODO 리소스 설정하는 부분은 수정할 필요 있음.
 func NewConfig(sourceImageName string) *BuildConfig {
 	internalImgName := internalizeImageName(sourceImageName)
 	return &BuildConfig{
@@ -348,26 +347,20 @@ func (config *BuildConfig) SetCMD(cmd []string) {
 // BuildConfig and Image Creation Functions
 // ------------------------------------------------------
 
-// CreateImage 메서드는 BuildSettings 에 설정된 값들을 반영하여 이미지를 생성
-func (config *BuildConfig) CreateImage() (*buildah.Builder, string, error) {
-	if pbCtx == nil {
-		return nil, "", fmt.Errorf("pbCtx is nil")
-	}
-
-	builder, err := createConfiguredBuilder(pbCtx, pbStore, config.Image.SourceImageName, config.Image)
+// CreateImage builds and commits an image using the settings in BuildConfig.
+func (config *BuildConfig) CreateImage(ctx context.Context, store storage.Store) (*buildah.Builder, string, error) {
+	builder, err := createConfiguredBuilder(ctx, store, config.Image.SourceImageName, config.Image)
 	if err != nil {
 		return builder, "", err
 	}
 
-	imageID, err := commitAndSaveBuilderImage(pbCtx, builder, config.Image.ImageName, config.Image.ImageSavePath)
+	imageID, err := commitAndSaveBuilderImage(ctx, builder, config.Image.ImageName, config.Image.ImageSavePath)
 	if err != nil {
 		return builder, imageID, err
 	}
 
 	return builder, imageID, nil
 }
-
-// TODO  만약 사용자가 os 만 선택한 경우도 생각해야 한다.
 
 // CreateImageWithDockerfile builds an image from a Dockerfile using the BuildConfig.
 func (config *BuildConfig) CreateImageWithDockerfile(ctx context.Context, store storage.Store) (*buildah.Builder, string, error) {
@@ -389,57 +382,6 @@ func (config *BuildConfig) CreateImageWithDockerfile(ctx context.Context, store 
 
 	return builder, imageID, nil
 }
-
-/*func (img *ImageConfig) CreateImage(ctx context.Context, store storage.Store) (*buildah.Builder, string, error) {
-	if pbCtx == nil {
-		return nil, "", fmt.Errorf("pbCtx is nil")
-	}
-
-	var builder *buildah.Builder
-	var err error
-	var baseID string
-
-	// DockerfilePath가 설정되어 있으면 Dockerfile 기반 빌드 진행
-	if img.DockerfilePath != "" {
-		baseID, err = buildImageFromDockerfile(ctx, img.DockerfilePath)
-		if err != nil {
-			return nil, "", fmt.Errorf("failed to build image from Dockerfile: %w", err)
-		}
-	} else {
-		// 그렇지 않으면, SourceImageName을 베이스로 사용
-		baseID = img.SourceImageName
-	}
-
-	// 새로운 빌더 생성 (baseID를 사용)
-	builder, err = newBuilder(ctx, pbStore, baseID)
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to create new builder: %w", err)
-	}
-
-	// 이미지 참조 생성 (ImageName 기반)
-	imageRef, err := is.Transport.ParseReference(img.ImageName)
-	if err != nil {
-		return builder, "", fmt.Errorf("failed to parse image reference: %w", err)
-	}
-
-	// 이미지를 커밋
-	imageID, _, _, err := builder.Commit(ctx, imageRef, buildah.CommitOptions{
-		PreferredManifestType: buildah.Dockerv2ImageManifest,
-		SystemContext:         &imageTypes.SystemContext{},
-	})
-	if err != nil {
-		return builder, "", fmt.Errorf("failed to commit image: %w", err)
-	}
-
-	// 이미지를 저장
-	if err = saveImage(ctx, img.ImageSavePath, img.ImageName, imageID, false); err != nil {
-		return builder, imageID, fmt.Errorf("failed to save image: %w", err)
-	}
-
-	return builder, imageID, nil
-}*/
-
-// TODO 생각하기 ContainerConfig 로 할 필요가 있을까??
 
 // SetupContainer sets up the container environment based on ContainerConfig.
 func (c *ContainerConfig) SetupContainer(builder *buildah.Builder) error {

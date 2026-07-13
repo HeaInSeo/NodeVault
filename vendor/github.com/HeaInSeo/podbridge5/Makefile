@@ -26,7 +26,7 @@ REMOTE_VM_RUN = \
 	REMOTE_HOST='$(REMOTE_HOST)' REMOTE_USER='$(REMOTE_USER)' REMOTE_PORT='$(REMOTE_PORT)' REMOTE_PASS='$(REMOTE_PASS)' \
 	PODBRIDGE5_VM_NAME='$(PODBRIDGE5_VM_NAME)' PODBRIDGE5_VM_CPUS='$(PODBRIDGE5_VM_CPUS)' PODBRIDGE5_VM_MEMORY='$(PODBRIDGE5_VM_MEMORY)' PODBRIDGE5_VM_DISK='$(PODBRIDGE5_VM_DISK)' \
 	PODBRIDGE5_VM_REPO='$(PODBRIDGE5_VM_REPO)' PODBRIDGE5_LOCAL_REPO='$(PODBRIDGE5_LOCAL_REPO)' PODBRIDGE5_GO_VERSION='$(GO_REQUIRED_VERSION)' \
-	cd /opt/go/src/github.com/HeaInSeo/podbridge5/hack/remotevm && $(GO) run .
+	cd '$(CURDIR)/hack/remotevm' && $(GO) run .
 
 .PHONY: test test-unit test-runtime test-runtime-integration check-runtime-build go-version-check \
 	runtime-env-check runtime-host-check runtime-integration-host-check check-remote-auth \

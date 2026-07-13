@@ -52,10 +52,13 @@ const (
 )
 
 type UserNamespaceBuildConfig struct {
-	OutputRef                 string
-	ContextDirectory          string
-	Runtime                   string
-	CacheRef                  string
+	OutputRef        string
+	ContextDirectory string
+	Runtime          string
+	CacheRef         string
+	// Isolation selects Buildah's execution isolation. Empty preserves the
+	// legacy chroot default; callers that require OCI execution must set
+	// BuildIsolationOCI explicitly.
 	Isolation                 BuildIsolation
 	StorageMode               StorageMode
 	RunRoot                   string
@@ -66,6 +69,26 @@ type UserNamespaceBuildConfig struct {
 	// against the configured registry (e.g. a plain-HTTP in-cluster cache).
 	// Defaults to false (verify TLS), matching prior behavior.
 	InsecureSkipTLSVerify bool
+	// NetworkConfiguration controls network access for RUN instructions
+	// during the build. The zero value (define.NetworkDefault) preserves
+	// prior behavior; set define.NetworkDisabled where the runtime cannot
+	// set up a build-time network namespace (e.g. rootless netavark/setns
+	// restrictions in some user-namespace hosts).
+	NetworkConfiguration define.NetworkConfigurationPolicy
+}
+
+// NewUserNamespaceBuildConfig returns an explicit, portable starting point for
+// a build-and-push operation. OCI isolation is selected deliberately: callers
+// must not rely on the legacy empty-Isolation chroot behavior.
+//
+// StorageMode is kept explicit because the supported storage drivers have
+// materially different runtime requirements.
+func NewUserNamespaceBuildConfig(outputRef string, storageMode StorageMode) UserNamespaceBuildConfig {
+	return UserNamespaceBuildConfig{
+		OutputRef:   outputRef,
+		StorageMode: storageMode,
+		Isolation:   BuildIsolationOCI,
+	}
 }
 
 type UserNamespaceExecutionProfile struct {
@@ -245,6 +268,7 @@ func UserNamespaceImageBuildOptions(config UserNamespaceBuildConfig) (define.Bui
 	buildOpts.SystemContext = UserNamespaceSystemContext(config)
 	buildOpts.Layers = true
 	buildOpts.RemoveIntermediateCtrs = true
+	buildOpts.ConfigureNetwork = config.NetworkConfiguration
 	return buildOpts, nil
 }
 

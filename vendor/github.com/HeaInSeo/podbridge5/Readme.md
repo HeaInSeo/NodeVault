@@ -51,9 +51,24 @@ NodeVault의 rootless builder 전환을 위해 `podbridge5`는 Buildah user name
 필요하면 `WithStoreRoots`, `WithStoreDriver`, `WithFuseOverlayfsMountProgram`, `WithPartialImagePulls`로 런타임 환경에 맞게 조정합니다.
 
 빌드 옵션은 `UserNamespaceImageBuildOptions()`와 `BuildDockerfileContentUserNamespace()`를 사용합니다.
-기본값은 Kubernetes `hostUsers: false` Pod에서 쓰기 좋은 `chroot` isolation, `crun` runtime, `--layers` 활성화이며, Harbor 캐시 저장소는 `CacheRef`로 `cache-from/cache-to`에 동시에 연결합니다.
-worker manifest에는 `DefaultUserNamespaceBuildEnvironment()`의 환경 변수와 `DefaultUserNamespaceBuildCapabilities()`의 capability 세트를 반영합니다.
-현재 랩에서는 overlay driver가 mount propagation 단계에서 막혀서, non-privileged smoke는 `WithStoreDriver("vfs")`와 동일한 설정으로 검증했습니다.
+새 build-and-push 호출은 `NewUserNamespaceBuildConfig()`로 시작하면 OCI isolation과 storage mode가 명시됩니다. 기존 `UserNamespaceBuildConfig{}`의 빈 `Isolation`은 호환성을 위해 `chroot`로 해석되므로, 공개 소비자는 isolation을 명시해야 합니다. Harbor 캐시 저장소는 `CacheRef`로 `cache-from/cache-to`에 동시에 연결합니다.
+`DefaultUserNamespaceBuildEnvironment()`와 `DefaultUserNamespaceBuildCapabilities()`는 예시일 뿐입니다. capability, AppArmor, storage driver는 배포 런타임별로 검증해야 하며 라이브러리가 특정 Kubernetes 보안 정책을 보장하지 않습니다.
+
+### Persistent Multipass runtime VM
+
+원격 Buildah 런타임 검증용 `podbridge5-dev` VM은 [infra/multipass](infra/multipass/README.md)의 HCL로 관리합니다. 이 VM은 pd5 전용 검증 host이므로 `infra-lab` Kubernetes 인프라와 분리되어 있습니다.
+
+```bash
+cd infra/multipass
+tofu init && tofu apply
+
+cd ../..
+make vm-prepare-runtime REMOTE_USER=seoy
+make vm-sync-runtime REMOTE_USER=seoy
+make vm-run-runtime REMOTE_USER=seoy
+```
+
+`make vm-test-runtime`은 호환성 경로이며 테스트 뒤 VM을 삭제합니다. HCL로 관리하는 persistent VM에는 위의 prepare/sync/run 순서를 사용합니다.
 overlay는 목표 기본값으로 유지하되, NodeVault 전환 시 node filesystem/idmap 또는 fuse-overlayfs 경로를 별도 검증해야 합니다.
 
 이 경로는 Kubernetes 1.36 계열 user namespace, Linux 6.3 이상 수준의 idmapped mount 지원, containerd 2.x, crun 1.9+ 조합을 전제로 합니다.
@@ -61,6 +76,9 @@ overlay는 목표 기본값으로 유지하되, NodeVault 전환 시 node filesy
 
 ## 변경 이력
 
+- `v0.1.8` — `SaveImage`/`ImageArchivePath` 공개 API 추가(`saveImage`/`imageArchivePath`의 얇은 공개 래퍼). 빌드된 이미지를 tar/tar.gz로 export해 파일 목록을 exec 없이 검사할 수 있게 함(issue #2, NodeVault의 최종 이미지 risky-tool 스캔용)
+- `v0.1.7` — lint 수정(importShadow, nil context), `NewConfigFromFile`·`GenerateExecutor`·`ProcessScript` 단위 테스트 보강. `RunContainerWithStats` 삭제(삭제 예정 코드). `BuildConfig.CreateImage()` 시그니처 변경: 전역 상태(`pbCtx`/`pbStore`) 의존 제거, `(ctx context.Context, store storage.Store)` 명시 파라미터로 전환(`CreateImageWithDockerfile`과 동일한 패턴). TODO 주석 정리, GitHub Actions VM 런타임 테스트 워크플로 SSH 시크릿 설정 개선
+- `v0.1.6` — `NewUserNamespaceBuildConfig()` 생성자와 `ClassifyBuildahExecutionError()` 분리 추가, `UserNamespaceBuildConfig`에 `NetworkConfiguration` 옵션 추가. 원격 검증 VM에서 발견한 버그 수정: rootless netavark가 OCI isolation 빌드의 `RUN` 단계에서 네트워크 네임스페이스를 설정하지 못하는 문제(`setns: Operation not permitted`)를 `NetworkConfiguration: NetworkDisabled`로 우회. `infra/multipass`에 persistent 검증 VM(`podbridge5-dev`) 관리용 OpenTofu 모듈 추가
 - `v0.1.5` — 실제 런타임/통합 테스트 커버리지 확대(store, builder, registry push/pull, user namespace 빌드, rootless init 경로). 이 과정에서 발견한 버그 수정: `runc` 하드코딩 제거(VM은 `crun`만 설치됨), `RemoveIntermediateCtrs` 미설정으로 인한 빌드 레이어 누수, 불필요한 netavark 네트워크 설정, 잘못된 `Chmod` 기본값(`"0o755"` → `"755"`), 볼륨 정리 타임아웃 조정. remote VM 통합 테스트 하니스를 `unshare -r`에서 `podman unshare`로 교체(subuid/subgid 전체 범위 및 rootless 환경변수를 올바르게 적용), 합산 테스트 커버리지 80%+ 달성
 - `v0.1.4` — `MountOverlay`의 fuse-overlayfs 폴백 제거(네이티브 rootless overlay만 시도), `CreateContainer`의 create-if-absent 계약 명시 및 관련 테스트 정리, remote VM 런타임 테스트 파이프라인 수정(소켓 권한, 출력 스트리밍 끊김), 합산 테스트 커버리지 70%+ 달성
 - `v0.1.2` — Podman/Buildah 의존성 업데이트, remote VM user namespace 통합 수정, user namespace Buildah 기본값 추가

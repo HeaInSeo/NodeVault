@@ -12,3 +12,7 @@ backup/*
 scripts/
 cli/
 hack/remotevm/remotevm
+infra/multipass/.terraform/
+infra/multipass/terraform.tfstate
+infra/multipass/terraform.tfstate.*
+infra/multipass/terraform.tfvars

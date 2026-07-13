@@ -16,6 +16,8 @@ github.com/HeaInSeo/podbridge5 v0.1.3 h1:fV2bKm4dfJLrK7o6/XP6rhI0vL0SFuhRlw397AU
 github.com/HeaInSeo/podbridge5 v0.1.3/go.mod h1:DTkm6vapKYiah9VG0omEIHR+c+nF3eGeBsWPz28Csec=
 github.com/HeaInSeo/podbridge5 v0.1.5 h1:YEZOE6dFU05kcsmIWk7FxO73rbPlCc8LLbdluL7uM/A=
 github.com/HeaInSeo/podbridge5 v0.1.5/go.mod h1:DTkm6vapKYiah9VG0omEIHR+c+nF3eGeBsWPz28Csec=
+github.com/HeaInSeo/podbridge5 v0.1.8 h1:0sbywIC9tp6DO4m5/caamQh5IyrEnlNNAmk/RkVAaSc=
+github.com/HeaInSeo/podbridge5 v0.1.8/go.mod h1:DTkm6vapKYiah9VG0omEIHR+c+nF3eGeBsWPz28Csec=
 github.com/HeaInSeo/sori v0.8.0-rc5 h1:HcQCvSLmLbTLS2JgCR2B3IBkArc2A5myOhKRWe7IXZk=
 github.com/HeaInSeo/sori v0.8.0-rc5/go.mod h1:VQ0a4l8mpbM3tc64LwmhUiPkAff/G3DBolSdA2/tEhM=
 github.com/HeaInSeo/utils v0.0.7 h1:YSGKsFGybK57G0esXz4H8HtNWvndijf/86txQADzQlE=

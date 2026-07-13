@@ -17,7 +17,7 @@ require (
 
 require (
 	github.com/HeaInSeo/kube-slint v1.2.0
-	github.com/HeaInSeo/podbridge5 v0.1.5
+	github.com/HeaInSeo/podbridge5 v0.1.8
 	github.com/HeaInSeo/sori v0.8.0-rc5
 	go.podman.io/storage v1.63.0
 )

@@ -70,8 +70,7 @@ func WithIsolation(isolation define.Isolation) BuilderOption {
 	}
 }
 
-// WithCommonBuildOptions sets the common build options such as CPU and memory limits. 함수 수정: 에러 발생 시 이를 반환
-// TODO 확인하자.
+// WithCommonBuildOptions sets the common build options such as CPU and memory limits.
 func WithCommonBuildOptions(options *buildah.CommonBuildOptions) BuilderOption {
 	return func(opts *buildah.BuilderOptions) error {
 		if options != nil {
@@ -83,8 +82,7 @@ func WithCommonBuildOptions(options *buildah.CommonBuildOptions) BuilderOption {
 	}
 }
 
-// WithSystemContext sets the system context for the builder options. 함수 수정: 에러 발생 시 이를 반환
-// TODO 확인하자.
+// WithSystemContext sets the system context for the builder options.
 func WithSystemContext(sysCtx *imageTypes.SystemContext) BuilderOption {
 	return func(opts *buildah.BuilderOptions) error {
 		if sysCtx != nil {
@@ -216,8 +214,8 @@ func NewUserNamespaceStore(opts ...StoreOption) (storage.Store, error) {
 	return buildStore, nil
 }
 
-func NewUserNamespaceStoreWithConfig(config UserNamespaceBuildConfig) (storage.Store, error) {
-	buildStoreOptions, err := UserNamespaceStoreOptions(config)
+func NewUserNamespaceStoreWithConfig(buildConfig UserNamespaceBuildConfig) (storage.Store, error) {
+	buildStoreOptions, err := UserNamespaceStoreOptions(buildConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -342,7 +340,6 @@ func NewAddAndCopyOptions(opts ...func(*buildah.AddAndCopyOptions)) buildah.AddA
 // ------------------------------------------------------
 // Image Build Helper Functions
 // ------------------------------------------------------
-// TODO dockerfilePath 관점에서 ContextDirectory 생각해봐야 한다. 실제 caleb 적용시 수정될 수 있음. (중요)
 // buildImageFromDockerfile builds an image from the provided Dockerfile
 func buildImageFromDockerfile(ctx context.Context, dockerfilePath string) (string, error) {
 	// Define build options
@@ -421,12 +418,11 @@ func BuildAndPushDockerfileContent(ctx context.Context, store storage.Store, doc
 	return buildAndPushDockerfileContentWithRuntime(ctx, realImageBuildRuntime{}, store, dockerfileContent, outputRef)
 }
 
-func BuildAndPushUserNamespace(ctx context.Context, config UserNamespaceBuildConfig, dockerfileContent string) (imageID, digestStr string, err error) {
-	return buildAndPushUserNamespaceWithRuntime(ctx, realImageBuildRuntime{}, NewUserNamespaceStoreWithConfig, shutdown, config, dockerfileContent)
+func BuildAndPushUserNamespace(ctx context.Context, buildConfig UserNamespaceBuildConfig, dockerfileContent string) (imageID, digestStr string, err error) {
+	return buildAndPushUserNamespaceWithRuntime(ctx, realImageBuildRuntime{}, NewUserNamespaceStoreWithConfig, shutdown, buildConfig, dockerfileContent)
 }
 
 // newBuilder creates a new builder using the NewBuilder function with default options.
-// TODO 좀더 study 필요. 옵션들에 대해서.
 func newBuilder(ctx context.Context, store storage.Store, idName string) (*buildah.Builder, error) {
 	return newBuilderWithRuntime(ctx, realImageBuilderFactoryRuntime{}, store, idName)
 }
@@ -443,6 +439,24 @@ func newAddAndCopyOptions() buildah.AddAndCopyOptions {
 // saveImage saves the built image to an archive file.
 func saveImage(ctx context.Context, path, imageName, imageID string, compress bool) error {
 	return saveImageWithRuntime(ctx, realImageExportRuntime{}, path, imageName, imageID, compress)
+}
+
+// SaveImage exports the image identified by imageID to a tar archive (or
+// tar.gz, if compress is true) under path. The archive's exact filename is
+// reported by ImageArchivePath. This lets a caller inspect an image's file
+// list — e.g. checking for specific binaries — by reading the resulting
+// archive directly, without mounting the image or executing anything
+// inside it.
+func SaveImage(ctx context.Context, path, imageName, imageID string, compress bool) error {
+	return saveImage(ctx, path, imageName, imageID, compress)
+}
+
+// ImageArchivePath returns the file path SaveImage writes to for the given
+// basePath/imageName/compress combination, without performing the export.
+// Callers that need to open the archive after SaveImage succeeds should use
+// this instead of reconstructing the naming convention themselves.
+func ImageArchivePath(basePath, imageName string, compress bool) string {
+	return imageArchivePath(basePath, imageName, compress)
 }
 
 // internalizeImageName 은 입력 이미지 이름에서 태그 앞에 "-internal"을 삽입하여 내부 전용 이미지 이름을 생성

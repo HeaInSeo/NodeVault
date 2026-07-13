@@ -201,6 +201,63 @@ func TestValidateBuildRequest_CleanFinalImage_NoCurl_Passes(t *testing.T) {
 	}
 }
 
+// ─── NodeKit real-world Dockerfile shapes (adversarial review follow-up) ──────
+//
+// These use the exact Dockerfile shapes NodeKit's SourceBuild renderer
+// produces today (legacy, single-stage — see NodeKit's RecipeRenderer.
+// RenderSourceBuild) and the shape its still-unimplemented
+// SourceBuildStructured design targets (2-stage — NodeKit's
+// docs/NODEKIT_SOURCEBUILD_STRUCTURED_INTENT_DESIGN.md §5), rather than
+// synthetic minimal examples, so the policy is checked against what NodeKit
+// actually emits/plans to emit.
+
+func TestValidateBuildRequest_NodeKitLegacySourceBuildDockerfile_RejectedWithoutExemption(t *testing.T) {
+	// Mirrors RecipeRenderer.RenderSourceBuild's single-stage output: BaseImage
+	// doubles as both the fetch environment and the final runtime image, so
+	// curl/tar/sha256sum used to fetch the source all land in the only (and
+	// therefore final) stage.
+	req := &nfv1.BuildRequest{
+		ToolName: "bwa",
+		DockerfileContent: "FROM alpine:3.20@" + validDigestA + "\n" +
+			`RUN curl -fsSL -o source.tar.gz "https://example.com/bwa-0.7.17.tar.gz" && ` + "\\\n" +
+			`    echo "` + validDigestA[len("sha256:"):] + `  source.tar.gz" | sha256sum -c - && ` + "\\\n" +
+			"    tar -xzf source.tar.gz && \\\n" +
+			"    make install\n" +
+			"USER 1000",
+	}
+	err := ValidateBuildRequest(req)
+	if err == nil {
+		t.Fatal("expected legacy single-stage SourceBuild output to be rejected (curl/tar/make in the only stage)")
+	}
+	if !strings.Contains(err.Error(), "curl") {
+		t.Fatalf("ValidateBuildRequest error got %v, want rejection naming curl (first risky tool in the RUN line)", err)
+	}
+}
+
+func TestValidateBuildRequest_NodeKitStructuredSourceBuildDockerfile_Passes(t *testing.T) {
+	// Mirrors the 2-stage template from NodeKit's SourceBuildStructured design
+	// (§5): a builder stage does the fetch/compile, and only its output is
+	// copied into a clean runtime stage. NodeKit has not implemented this
+	// renderer yet (Sprint R22-C, unimplemented) — this pins down what
+	// NodeVault's policy does the moment it starts submitting Dockerfiles
+	// shaped like this.
+	req := &nfv1.BuildRequest{
+		ToolName: "bwa",
+		DockerfileContent: "FROM golang:1.21@" + validDigestA + " AS builder\n" +
+			`RUN curl -fsSL -o source.tar.gz "https://example.com/bwa-0.7.17.tar.gz" && ` + "\\\n" +
+			`    echo "` + validDigestA[len("sha256:"):] + `  source.tar.gz" | sha256sum -c - && ` + "\\\n" +
+			"    tar -xzf source.tar.gz && \\\n" +
+			"    make install DESTDIR=/nodekit/output\n" +
+			"\n" +
+			"FROM alpine:3.20@" + validDigestB + "\n" +
+			"COPY --from=builder /nodekit/output/ /\n" +
+			"USER 1000",
+	}
+	if err := ValidateBuildRequest(req); err != nil {
+		t.Fatalf("ValidateBuildRequest: %v (builder-stage curl/tar/make must be allowed; final stage has none)", err)
+	}
+}
+
 func TestValidateBuildRequest_RejectsToolFunctionSpecOnDockerfileBuildPath(t *testing.T) {
 	req := &nfv1.BuildRequest{
 		ToolName:        "bwa-fn",

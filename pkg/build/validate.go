@@ -33,8 +33,11 @@ func validateToolSpecBuildRequest(req *nfv1.BuildRequest) error {
 	if strings.TrimSpace(req.GetDockerfileContent()) == "" {
 		return errors.New("dockerfile_content is required")
 	}
-	if err := validateDockerfilePolicy(req.GetDockerfileContent()); err != nil {
-		return err
+	dockerfileErr := validateDockerfilePolicy(
+		req.GetDockerfileContent(), req.GetAllowRuntimeTools(), req.GetAllowRuntimeToolsReason(),
+	)
+	if dockerfileErr != nil {
+		return dockerfileErr
 	}
 	if err := validateCondaPinsInEnvironmentSpec(req.GetEnvironmentSpec()); err != nil {
 		return err
@@ -42,8 +45,15 @@ func validateToolSpecBuildRequest(req *nfv1.BuildRequest) error {
 	return nil
 }
 
-func validateDockerfilePolicy(content string) error {
+func validateDockerfilePolicy(content string, allowRuntimeTools []string, allowRuntimeToolsReason string) error {
 	lines := logicalDockerfileLines(content)
+	totalFromCount := 0
+	for _, line := range lines {
+		if instruction, _ := dockerfileInstruction(line); instruction == "FROM" {
+			totalFromCount++
+		}
+	}
+
 	fromCount := 0
 	for _, line := range lines {
 		instruction, rest := dockerfileInstruction(line)
@@ -61,12 +71,94 @@ func validateDockerfilePolicy(content string) error {
 			if err := validateCondaPinsInRunInstruction(rest); err != nil {
 				return err
 			}
+			// Runtime tool policy applies only to the final stage — earlier
+			// build stages may freely use fetch/build tools.
+			if fromCount == totalFromCount {
+				if err := validateFinalStageRuntimeTools(rest, allowRuntimeTools, allowRuntimeToolsReason); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	if fromCount == 0 {
 		return errors.New("dockerfile must contain at least one FROM instruction")
 	}
 	return nil
+}
+
+// riskyRuntimeTools are fetch/build tools that should not remain in a
+// ToolSpec's final image stage by default, because ToolFunctionSpec images
+// build on top of it. This is a static Dockerfile-text check: it catches
+// RUN instructions that install or invoke these tools in the final stage,
+// but cannot detect a base image that already ships one of them — that
+// requires inspecting the built image's actual contents (Sprint 10).
+//
+// conda/mamba/micromamba are deliberately excluded even though the original
+// requirement doc listed them: the Conda/Micromamba recipe variants render a
+// single-stage Dockerfile whose only RUN line is exactly
+// "RUN micromamba install <pkg>=<version>=<build>" — that IS the build
+// mechanism, not a leftover fetch tool, and NodeKit has no multi-stage
+// rendering or allow_runtime_tools exemption for these variants yet (per
+// NodeKit's docs/NODEKIT_SOURCEBUILD_STRUCTURED_INTENT_DESIGN.md, only
+// SourceBuild is getting multi-stage rendering, and it's not implemented
+// yet either). Flagging them here would break currently-working production
+// builds with no coordinated way to opt out. Revisit once NodeKit ships
+// either multi-stage Conda/Micromamba rendering or passes
+// allow_runtime_tools for them.
+var riskyRuntimeTools = map[string]bool{
+	"curl": true, "wget": true, "git": true, "ssh": true, "scp": true,
+	"apt": true, "apt-get": true, "apk": true, "yum": true, "dnf": true,
+	"gcc": true, "g++": true, "clang": true, "make": true, "cmake": true,
+}
+
+// validateFinalStageRuntimeTools rejects a final-stage RUN instruction that
+// installs (e.g. "apt-get install curl") or directly invokes (e.g. "curl ...")
+// a risky runtime tool, unless the tool is explicitly exempted via
+// allow_runtime_tools with a non-empty allow_runtime_tools_reason.
+func validateFinalStageRuntimeTools(rest string, allowRuntimeTools []string, allowRuntimeToolsReason string) error {
+	allowed := make(map[string]bool, len(allowRuntimeTools))
+	for _, tool := range allowRuntimeTools {
+		allowed[tool] = true
+	}
+	for _, segment := range shellSegments(rest) {
+		fields := strings.Fields(segment)
+		if len(fields) == 0 {
+			continue
+		}
+		tool := cleanShellToken(fields[0])
+		if !riskyRuntimeTools[tool] {
+			continue
+		}
+		if allowed[tool] && strings.TrimSpace(allowRuntimeToolsReason) != "" {
+			continue
+		}
+		return fmt.Errorf(
+			"RUN %q uses runtime tool %q in the final image stage; "+
+				"add it to allow_runtime_tools with allow_runtime_tools_reason, or remove it", rest, tool,
+		)
+	}
+	return nil
+}
+
+// shellSegments splits a shell-form RUN instruction on &&, ||, |, and ;
+// separators into individual command invocations.
+func shellSegments(rest string) []string {
+	var segments []string
+	var current []string
+	for _, field := range strings.Fields(rest) {
+		if isShellSeparator(cleanShellToken(field)) {
+			if len(current) > 0 {
+				segments = append(segments, strings.Join(current, " "))
+				current = nil
+			}
+			continue
+		}
+		current = append(current, field)
+	}
+	if len(current) > 0 {
+		segments = append(segments, strings.Join(current, " "))
+	}
+	return segments
 }
 
 func validateCondaPinsInEnvironmentSpec(spec string) error {

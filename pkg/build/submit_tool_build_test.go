@@ -46,6 +46,32 @@ func newSubmitTestService(t *testing.T) *Service {
 	}
 }
 
+// TestBuildRequestFromResolved_DeserializesAllowRuntimeTools verifies that
+// allow_runtime_tools/allow_runtime_tools_reason round-trip through the
+// raw_spec JSON the same way every other BuildRequest field does — these are
+// plain proto-generated JSON tags, not a bespoke unmarshal path.
+func TestBuildRequestFromResolved_DeserializesAllowRuntimeTools(t *testing.T) {
+	spec := index.ResolvedToolSpec{
+		ToolSpecDigest: "spec-allow-1",
+		ToolName:       "bwa",
+		RawSpec: `{"tool_name":"bwa","dockerfile_content":"FROM alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nRUN curl -fsSL -o out https://example.com",` +
+			`"allow_runtime_tools":["curl"],"allow_runtime_tools_reason":"plugin catalog fetch"}`,
+	}
+	req, err := buildRequestFromResolved("build-allow-1", spec)
+	if err != nil {
+		t.Fatalf("buildRequestFromResolved: %v", err)
+	}
+	if len(req.GetAllowRuntimeTools()) != 1 || req.GetAllowRuntimeTools()[0] != "curl" {
+		t.Fatalf("AllowRuntimeTools: got %v, want [curl]", req.GetAllowRuntimeTools())
+	}
+	if req.GetAllowRuntimeToolsReason() != "plugin catalog fetch" {
+		t.Fatalf("AllowRuntimeToolsReason: got %q", req.GetAllowRuntimeToolsReason())
+	}
+	if err := ValidateBuildRequest(req); err != nil {
+		t.Fatalf("ValidateBuildRequest should accept curl with the deserialized exemption: %v", err)
+	}
+}
+
 func TestSubmitToolBuild_CreatesRequestedBuildState(t *testing.T) {
 	svc := newSubmitTestService(t)
 

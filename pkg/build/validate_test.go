@@ -139,6 +139,68 @@ func TestValidateBuildRequest_AcceptsEnvironmentSpecWithBuildString(t *testing.T
 	}
 }
 
+// ─── final-stage risky runtime tool policy (Sprint 9, AC-SB-01/02/03 partial) ─
+
+func TestValidateBuildRequest_FinalStageRiskyTool_Rejected(t *testing.T) {
+	req := &nfv1.BuildRequest{
+		ToolName:          "bwa",
+		DockerfileContent: "FROM alpine:3.20@" + validDigestA + "\nRUN curl -fsSL -o out https://example.com/tool",
+	}
+	err := ValidateBuildRequest(req)
+	if err == nil || !strings.Contains(err.Error(), "curl") {
+		t.Fatalf("ValidateBuildRequest error got %v, want rejection naming curl", err)
+	}
+}
+
+func TestValidateBuildRequest_AllowRuntimeToolsWithReason_Passes(t *testing.T) {
+	req := &nfv1.BuildRequest{
+		ToolName:                "bwa",
+		DockerfileContent:       "FROM alpine:3.20@" + validDigestA + "\nRUN curl -fsSL -o out https://example.com/tool",
+		AllowRuntimeTools:       []string{"curl"},
+		AllowRuntimeToolsReason: "tool downloads its own plugin catalog at runtime",
+	}
+	if err := ValidateBuildRequest(req); err != nil {
+		t.Fatalf("ValidateBuildRequest: %v", err)
+	}
+}
+
+func TestValidateBuildRequest_AllowRuntimeToolsWithoutReason_Rejected(t *testing.T) {
+	req := &nfv1.BuildRequest{
+		ToolName:          "bwa",
+		DockerfileContent: "FROM alpine:3.20@" + validDigestA + "\nRUN curl -fsSL -o out https://example.com/tool",
+		AllowRuntimeTools: []string{"curl"},
+		// AllowRuntimeToolsReason intentionally left empty.
+	}
+	err := ValidateBuildRequest(req)
+	if err == nil || !strings.Contains(err.Error(), "curl") {
+		t.Fatalf("ValidateBuildRequest error got %v, want rejection naming curl (empty reason must not exempt it)", err)
+	}
+}
+
+func TestValidateBuildRequest_BuildStageRiskyTool_NotFinalStage_Passes(t *testing.T) {
+	req := &nfv1.BuildRequest{
+		ToolName: "bwa",
+		DockerfileContent: "FROM golang:1.21@" + validDigestA + " AS builder\n" +
+			"RUN curl -fsSL -o src.tar.gz https://example.com/src.tar.gz && tar -xzf src.tar.gz && make\n" +
+			"FROM alpine:3.20@" + validDigestB + "\n" +
+			"COPY --from=builder /out/bwa /usr/local/bin/bwa\n" +
+			"USER app",
+	}
+	if err := ValidateBuildRequest(req); err != nil {
+		t.Fatalf("ValidateBuildRequest: %v (build-stage curl/make must be allowed)", err)
+	}
+}
+
+func TestValidateBuildRequest_CleanFinalImage_NoCurl_Passes(t *testing.T) {
+	req := &nfv1.BuildRequest{
+		ToolName:          "bwa",
+		DockerfileContent: "FROM alpine:3.20@" + validDigestA + "\nUSER app\nRUN echo built",
+	}
+	if err := ValidateBuildRequest(req); err != nil {
+		t.Fatalf("ValidateBuildRequest: %v", err)
+	}
+}
+
 func TestValidateBuildRequest_RejectsToolFunctionSpecOnDockerfileBuildPath(t *testing.T) {
 	req := &nfv1.BuildRequest{
 		ToolName:        "bwa-fn",

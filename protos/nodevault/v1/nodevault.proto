@@ -202,6 +202,14 @@ message BuildRequest {
   string script = 6;
   string base_image_digest = 17;
 
+  // allow_runtime_tools exempts specific fetch/build tools (see
+  // pkg/build.riskyRuntimeTools) from the final-image-stage runtime tool
+  // policy (Sprint 9). allow_runtime_tools_reason must be non-empty for the
+  // exemption to take effect — an empty reason means the exemption is
+  // ignored and the default reject policy applies.
+  repeated string allow_runtime_tools = 18;
+  string allow_runtime_tools_reason = 19;
+
   reserved 7, 8, 12, 13, 14, 15;
   reserved "input_names", "output_names", "inputs", "outputs", "display", "command";
 }

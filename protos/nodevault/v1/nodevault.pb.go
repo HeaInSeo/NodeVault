@@ -1424,8 +1424,15 @@ type BuildRequest struct {
 	// for the future function-image builder, not accepted by today's Dockerfile path.
 	Script          string `protobuf:"bytes,6,opt,name=script,proto3" json:"script,omitempty"`
 	BaseImageDigest string `protobuf:"bytes,17,opt,name=base_image_digest,json=baseImageDigest,proto3" json:"base_image_digest,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// allow_runtime_tools exempts specific fetch/build tools (see
+	// pkg/build.riskyRuntimeTools) from the final-image-stage runtime tool
+	// policy (Sprint 9). allow_runtime_tools_reason must be non-empty for the
+	// exemption to take effect — an empty reason means the exemption is
+	// ignored and the default reject policy applies.
+	AllowRuntimeTools       []string `protobuf:"bytes,18,rep,name=allow_runtime_tools,json=allowRuntimeTools,proto3" json:"allow_runtime_tools,omitempty"`
+	AllowRuntimeToolsReason string   `protobuf:"bytes,19,opt,name=allow_runtime_tools_reason,json=allowRuntimeToolsReason,proto3" json:"allow_runtime_tools_reason,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *BuildRequest) Reset() {
@@ -1524,6 +1531,20 @@ func (x *BuildRequest) GetScript() string {
 func (x *BuildRequest) GetBaseImageDigest() string {
 	if x != nil {
 		return x.BaseImageDigest
+	}
+	return ""
+}
+
+func (x *BuildRequest) GetAllowRuntimeTools() []string {
+	if x != nil {
+		return x.AllowRuntimeTools
+	}
+	return nil
+}
+
+func (x *BuildRequest) GetAllowRuntimeToolsReason() string {
+	if x != nil {
+		return x.AllowRuntimeToolsReason
 	}
 	return ""
 }
@@ -4018,7 +4039,7 @@ const file_nodevault_v1_nodevault_proto_rawDesc = "" +
 	"\x0eclosed_network\x18\b \x01(\bR\rclosedNetwork\"\x81\x01\n" +
 	"\x15ResolveRecipeResponse\x12+\n" +
 	"\x11resolution_source\x18\x01 \x01(\tR\x10resolutionSource\x12;\n" +
-	"\bpackages\x18\x02 \x03(\v2\x1f.nodevault.v1.PackageResolutionR\bpackages\"\xdc\x03\n" +
+	"\bpackages\x18\x02 \x03(\v2\x1f.nodevault.v1.PackageResolutionR\bpackages\"\xc9\x04\n" +
 	"\fBuildRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12,\n" +
@@ -4031,7 +4052,9 @@ const file_nodevault_v1_nodevault_proto_rawDesc = "" +
 	"\x12dockerfile_content\x18\x05 \x01(\tR\x11dockerfileContent\x12)\n" +
 	"\x10environment_spec\x18\t \x01(\tR\x0fenvironmentSpec\x12\x16\n" +
 	"\x06script\x18\x06 \x01(\tR\x06script\x12*\n" +
-	"\x11base_image_digest\x18\x11 \x01(\tR\x0fbaseImageDigestJ\x04\b\a\x10\bJ\x04\b\b\x10\tJ\x04\b\f\x10\rJ\x04\b\r\x10\x0eJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10R\vinput_namesR\foutput_namesR\x06inputsR\aoutputsR\adisplayR\acommand\"\xde\x02\n" +
+	"\x11base_image_digest\x18\x11 \x01(\tR\x0fbaseImageDigest\x12.\n" +
+	"\x13allow_runtime_tools\x18\x12 \x03(\tR\x11allowRuntimeTools\x12;\n" +
+	"\x1aallow_runtime_tools_reason\x18\x13 \x01(\tR\x17allowRuntimeToolsReasonJ\x04\b\a\x10\bJ\x04\b\b\x10\tJ\x04\b\f\x10\rJ\x04\b\r\x10\x0eJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10R\vinput_namesR\foutput_namesR\x06inputsR\aoutputsR\adisplayR\acommand\"\xde\x02\n" +
 	"\n" +
 	"BuildEvent\x120\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x1c.nodevault.v1.BuildEventKindR\x04kind\x12\x18\n" +

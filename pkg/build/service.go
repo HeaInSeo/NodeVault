@@ -113,8 +113,10 @@ func (s *Service) Close() error {
 }
 
 // BuildAndRegister implements BuildServiceServer.
-// Deprecated: use ResolveToolSpec + SubmitToolBuild + WatchToolBuild.
-// Kept until NodeKit UI/library callers stop using the legacy BuildRequest path.
+//
+// Deprecated: use ResolveToolSpec + SubmitToolBuild + WatchToolBuild. Kept
+// until NodeKit UI/library callers stop using the legacy BuildRequest path.
+//
 // Full orchestration: L2 (image build+push) → L3 (dry-run) → L4 (smoke run) → registration.
 //
 //nolint:funlen // orchestration function — extracting sub-steps would obscure the L2→L3→L4 sequence.

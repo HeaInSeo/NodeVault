@@ -204,12 +204,16 @@ func TestValidateBuildRequest_CleanFinalImage_NoCurl_Passes(t *testing.T) {
 // ─── NodeKit real-world Dockerfile shapes (adversarial review follow-up) ──────
 //
 // These use the exact Dockerfile shapes NodeKit's SourceBuild renderer
-// produces today (legacy, single-stage — see NodeKit's RecipeRenderer.
-// RenderSourceBuild) and the shape its still-unimplemented
-// SourceBuildStructured design targets (2-stage — NodeKit's
-// docs/NODEKIT_SOURCEBUILD_STRUCTURED_INTENT_DESIGN.md §5), rather than
-// synthetic minimal examples, so the policy is checked against what NodeKit
-// actually emits/plans to emit.
+// produces (legacy RecipeBuildKind.SourceBuild, single-stage — NodeKit's
+// RecipeRenderer.RenderSourceBuild) and the shape its
+// RecipeBuildKind.SourceBuildStructured renderer produces (2-stage —
+// NodeKit's docs/NODEKIT_SOURCEBUILD_STRUCTURED_INTENT_DESIGN.md §5),
+// rather than synthetic minimal examples, so the policy is checked against
+// what NodeKit actually emits. As of NodeKit commit e1aa822 (2026-07-13),
+// R22-B/C/D are all implemented and wizard-integrated, and NodeKit warns
+// authors off legacy SourceBuild in favor of source-structured (commit
+// 2e9fdf7) — these tests describe NodeVault's side of that boundary, not a
+// still-pending NodeKit capability.
 
 func TestValidateBuildRequest_NodeKitLegacySourceBuildDockerfile_RejectedWithoutExemption(t *testing.T) {
 	// Mirrors RecipeRenderer.RenderSourceBuild's single-stage output: BaseImage
@@ -235,12 +239,10 @@ func TestValidateBuildRequest_NodeKitLegacySourceBuildDockerfile_RejectedWithout
 }
 
 func TestValidateBuildRequest_NodeKitStructuredSourceBuildDockerfile_Passes(t *testing.T) {
-	// Mirrors the 2-stage template from NodeKit's SourceBuildStructured design
-	// (§5): a builder stage does the fetch/compile, and only its output is
-	// copied into a clean runtime stage. NodeKit has not implemented this
-	// renderer yet (Sprint R22-C, unimplemented) — this pins down what
-	// NodeVault's policy does the moment it starts submitting Dockerfiles
-	// shaped like this.
+	// Mirrors the 2-stage template NodeKit's SourceBuildStructured renderer
+	// produces (design doc §5, implemented in NodeKit commit 3117f8a): a
+	// builder stage does the fetch/compile, and only its output is copied
+	// into a clean runtime stage.
 	req := &nfv1.BuildRequest{
 		ToolName: "bwa",
 		DockerfileContent: "FROM golang:1.21@" + validDigestA + " AS builder\n" +

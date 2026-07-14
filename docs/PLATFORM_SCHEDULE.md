@@ -395,7 +395,7 @@ NodeKit→NodeVault 라이브 재현성 테스트(`docs/NODEKIT_LIVE_RECIPE_REPR
 - `PinningStatus`/`ReproducibilityStatus`는 `LifecyclePhase`/`IntegrityHealth`와 같은 선례(plain string 필드, proto enum 아님)를 따른다 — 클라이언트가 형태화하는 값이 아니라 서버가 계산하는 상태값이기 때문.
 - 저장 위치: `pkg/index.ResolvedToolSpec`(resolve 시점) + `pkg/index.Entry`(등록 시점 복사) 양쪽.
 - `validateCondaPackagePin`을 `error` → `(PinningStatus, error)` 반환으로 리팩터: `=` 2개(FullPin), `=` 1개(VersionOnly, 계속 reject), `$` 변수(Unresolved, 계속 reject). 호출자가 여러 패키지 판정 중 가장 약한 값으로 집계.
-- `VersionOnly`를 통과시키는 "loose mode"(AC-PIN-03)는 NodeKit과의 합의가 필요한 별도 결정이므로 이번 스프린트 범위 밖.
+- `VersionOnly`를 통과시키는 "loose mode"(AC-PIN-03)는 **결정됨(2026-07-14, 사용자 확인)**: 도입하지 않는다. `validateCondaPackagePin`의 hard-reject(name=version=build 미만 전부 거부)를 계속 유지 — 재현성을 타협하지 않는 원칙을 지킨다. NodeKit도 이 결정을 인지하고 있으며(legacy SourceBuild 경고와 동일하게, full pin을 유도하는 UX로 대응 중), 이 스프린트가 실제 진행되어도 accept/reject 동작 자체는 바뀌지 않는다 — `PinningStatus`/`ReproducibilityStatus` 필드는 순수 배관(관측용)이다.
 - `docs/INDEX_SCHEMA.md`가 schema_version 1에 멈춰 있고 실제 코드는 `schemaVersion=3`(`pkg/index/store.go`)인데 이 문서 앞부분은 같은 변경을 "Index v4"로 라벨링한 기존 불일치가 있음 — 이 스프린트가 새 필드를 추가하며 라벨을 실제 코드값과 맞출 것.
 
 **주요 작업**

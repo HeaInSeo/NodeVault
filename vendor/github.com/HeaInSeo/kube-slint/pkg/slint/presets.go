@@ -1,14 +1,14 @@
-package harness
+package slint
 
 import "github.com/HeaInSeo/kube-slint/pkg/slo/spec"
 
-// DefaultV3Specs 는 하위 호환성을 위해 유지됨.
-// 기준(baseline) 프리셋 모음을 반환함.
+// DefaultV3Specs is kept for backward compatibility.
+// It returns the baseline preset set.
 func DefaultV3Specs() []spec.SLISpec {
 	return BaselineV3Specs()
 }
 
-// BaselineV3Specs 는 확장 가능하고 재사용 가능한 프리셋 모음임:
+// BaselineV3Specs returns an extensible, reusable preset set covering
 // controller-runtime + workqueue + rest-client.
 func BaselineV3Specs() []spec.SLISpec {
 	return []spec.SLISpec{
@@ -22,7 +22,7 @@ func BaselineV3Specs() []spec.SLISpec {
 			Kind:        "delta_counter",
 			Description: "Delta of controller_runtime_reconcile_total during the test window (all results).",
 			Inputs: []spec.MetricRef{
-				// 이름만 지정하는 경우 parsePrometheusText에서 값을 누적 연산(out[name]+=val)함
+				// Name-only refs are summed across label combinations in parsePrometheusText (out[name]+=val).
 				spec.PromMetric("controller_runtime_reconcile_total", nil),
 			},
 			Compute: spec.ComputeSpec{Mode: spec.ComputeDelta},
@@ -48,7 +48,7 @@ func BaselineV3Specs() []spec.SLISpec {
 				spec.PromMetric("controller_runtime_reconcile_total", spec.Labels{"result": "error"}),
 			},
 			Compute: spec.ComputeSpec{Mode: spec.ComputeDelta},
-			// 판단(judge) 규칙 예시: 에러 델타는 0이어야 함
+			// Example judge rule: error delta should be 0.
 			// Judge: &spec.JudgeSpec{Rules: []spec.Rule{{Op: spec.OpGT, Target: 0, Level: spec.LevelFail}}},
 		},
 

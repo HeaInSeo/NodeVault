@@ -128,6 +128,9 @@ func IsPrometheusOperatorCRDsInstalled(
 	)
 	out, err := r.Run(ctx, logger, cmd)
 	if err != nil {
+		// See IsCertManagerCRDsInstalled: a failed kubectl call is not the
+		// same as "CRDs genuinely absent" — log it so the caller can tell.
+		logger.Logf("IsPrometheusOperatorCRDsInstalled: kubectl get crds failed: %v", err)
 		return false
 	}
 

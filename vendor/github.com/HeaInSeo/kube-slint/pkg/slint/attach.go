@@ -1,4 +1,4 @@
-package harness
+package slint
 
 import (
 	"context"
@@ -10,34 +10,20 @@ import (
 	"github.com/onsi/ginkgo/v2"
 )
 
-// Config는 SLO 측정 세션에 대한 입력을 정의함.
-// type Config struct {
-// 	Enabled bool	// false면 계측 훅 완전 스킵
-// 	Namespace          string
-// 	MetricsServiceName string
-// 	TestCase           string
-// 	Suite              string
-// 	RunID              string
-// 	ServiceAccountName string
-// 	Token              string
-// 	ArtifactsDir string
-// 	Tags         map[string]string
-// 	// 계측 코드에서 선택할 수 있도록 해줌.
-// 	Method engine.Method
-//     Fetcher fetch.MetricsFetcher
-// }
-
-// Attach 는 제공자 함수를 호출하는 BeforeEach/AfterEach 훅을 등록하여
-// 현재 테스트의 구성을 가져오고 측정 세션을 관리함.
+// Attach registers BeforeEach/AfterEach hooks that call provider to fetch
+// the current test's config (see SessionConfig in session.go for its full,
+// authoritative field list) and manage the measurement session. Calling
+// Attach() is itself the opt-in; disable it without code changes via
+// SLINT_ENABLED=0/false (see isEnabledByEnv below).
 func Attach(provider func() SessionConfig) (*Session, error) {
-	session := &Session{} // 자리 표시자 (impl은 BeforeEach에서 설정됨)
+	session := &Session{} // placeholder; impl is set in BeforeEach
 
-	// 하네스 레벨 토글 (오퍼레이터의 테스트 코드에 노출되지 않음)
+	// Harness-level toggle, not exposed to the operator's test code.
 	enabled := isEnabledByEnv()
 
 	ginkgo.BeforeEach(func() {
 		if !enabled {
-			session.reset(nil) // impl=nil이므로 End()는 아무 작업도 수행하지 않음/안전함
+			session.reset(nil) // impl=nil, so End() is a safe no-op
 			return
 		}
 
@@ -77,25 +63,22 @@ func isEnabledByEnv() bool {
 func validateSessionConfigOrFail(cfg SessionConfig) {
 	if strings.TrimSpace(cfg.Namespace) == "" {
 		ginkgo.Fail(fmt.Sprintf(
-			"harness: invalid config: Namespace is required "+
+			"slint: invalid config: Namespace is required "+
 				"(Suite=%q TestCase=%q RunID=%q MetricsServiceName=%q SA=%q ArtifactsDir=%q)",
 			cfg.Suite, cfg.TestCase, cfg.RunID, cfg.MetricsServiceName, cfg.ServiceAccountName, cfg.ArtifactsDir,
 		))
 	}
 	if strings.TrimSpace(cfg.MetricsServiceName) == "" {
 		ginkgo.Fail(fmt.Sprintf(
-			"harness: invalid config: MetricsServiceName is required "+
+			"slint: invalid config: MetricsServiceName is required "+
 				"(Namespace=%q Suite=%q TestCase=%q RunID=%q SA=%q)",
 			cfg.Namespace, cfg.Suite, cfg.TestCase, cfg.RunID, cfg.ServiceAccountName,
 		))
 	}
-	if strings.TrimSpace(cfg.Token) == "" {
-		ginkgo.Fail(fmt.Sprintf(
-			"harness: invalid config: Token is empty "+
-				"(Namespace=%q MetricsServiceName=%q Suite=%q TestCase=%q RunID=%q SA=%q)",
-			cfg.Namespace, cfg.MetricsServiceName, cfg.Suite, cfg.TestCase, cfg.RunID, cfg.ServiceAccountName,
-		))
-	}
+	// Note: Token is intentionally not required. The default curlpod fetcher
+	// reads its bearer token from the pod's own mounted ServiceAccount token
+	// file rather than from cfg.Token (see docs/post-rc-hardening-design.md).
+	// cfg.Token remains available for callers supplying a custom Fetcher.
 }
 
 func fillSessionDefaults(cfg SessionConfig) SessionConfig {

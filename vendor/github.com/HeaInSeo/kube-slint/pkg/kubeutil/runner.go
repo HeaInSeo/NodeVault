@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/HeaInSeo/kube-slint/pkg/slo"
+	"github.com/HeaInSeo/kube-slint/pkg/slo/evidence"
 )
 
 // CmdRunner abstracts command execution (stdout-only on success).
@@ -56,7 +57,8 @@ func (DefaultRunner) Run(ctx context.Context, logger slo.Logger, cmd *exec.Cmd) 
 	}
 
 	command := strings.Join(c2.Args, " ")
-	logger.Logf("running: %q", command)
+	redactedCommand := evidence.RedactString(command)
+	logger.Logf("running: %q", redactedCommand)
 
 	// TODO 왜 이렇게 했는지, 혹시 문제가 발생한다면 어떠한 문제가 발생할 수 있는지 스터디
 	// var stdout, stderr bytes.Buffer
@@ -71,7 +73,7 @@ func (DefaultRunner) Run(ctx context.Context, logger slo.Logger, cmd *exec.Cmd) 
 
 	if err != nil {
 		combined := strings.TrimSpace(errStr + "\n" + outStr)
-		return outStr, fmt.Errorf("%q failed: %s: %w", command, combined, err)
+		return outStr, fmt.Errorf("%q failed: %s: %w", redactedCommand, evidence.RedactString(combined), err)
 	}
 	return outStr, nil
 }

@@ -1,3 +1,8 @@
+// Package summary defines the sli-summary.json contract (schema slo.v3):
+// the Summary/SLIResult shape every kube-slint measurement fetcher produces
+// and every consumer (pkg/gate, cmd/slint-gate, pkg/slint) reads. A baseline
+// file is not a distinct type — it is a plain Summary saved via WriteFile
+// and reloaded via LoadFile, same as a regular measurement.
 package summary
 
 import (
@@ -20,9 +25,19 @@ func ValidateSchemaVersion(s Summary) error {
 	return nil
 }
 
+// allowedStatuses is the enum of valid SLIResult.Status values.
+var allowedStatuses = map[Status]bool{
+	StatusPass:  true,
+	StatusWarn:  true,
+	StatusFail:  true,
+	StatusBlock: true,
+	StatusSkip:  true,
+}
+
 // Validate performs a comprehensive check of a Summary:
-// schemaVersion must be supported, generatedAt must be non-zero,
-// and every SLIResult must have a non-empty ID.
+// schemaVersion must be supported, generatedAt must be non-zero, every
+// SLIResult must have a non-empty and unique ID, and every SLIResult's
+// Status must be one of the allowed enum values.
 // External tools should call this after loading a summary to ensure contract compliance.
 func Validate(s Summary) error {
 	if err := ValidateSchemaVersion(s); err != nil {
@@ -31,9 +46,17 @@ func Validate(s Summary) error {
 	if s.GeneratedAt.IsZero() {
 		return fmt.Errorf("generatedAt is zero")
 	}
+	seenIDs := make(map[string]bool, len(s.Results))
 	for i, r := range s.Results {
 		if r.ID == "" {
 			return fmt.Errorf("results[%d].id is empty", i)
+		}
+		if seenIDs[r.ID] {
+			return fmt.Errorf("results[%d].id %q is a duplicate result ID", i, r.ID)
+		}
+		seenIDs[r.ID] = true
+		if !allowedStatuses[r.Status] {
+			return fmt.Errorf("results[%d].status %q is not a recognized status", i, r.Status)
 		}
 	}
 	return nil
@@ -123,6 +146,21 @@ type SLIResult struct {
 
 	InputsUsed    []string `json:"inputsUsed,omitempty"`
 	InputsMissing []string `json:"inputsMissing,omitempty"`
+}
+
+// ResultValues flattens Results into a map of SLI ID to value, omitting any
+// result whose Value is nil (e.g. a skipped SLI). This is the single
+// canonical way to go from a Summary to a comparable value map — gate
+// evaluation, baseline diff, and baseline merge all need the same
+// flattening and previously each reimplemented it separately.
+func (s Summary) ResultValues() map[string]float64 {
+	m := make(map[string]float64, len(s.Results))
+	for _, r := range s.Results {
+		if r.Value != nil {
+			m[r.ID] = *r.Value
+		}
+	}
+	return m
 }
 
 // EnsureFormat 은 schemaVersion을 보존하면서 포맷 힌트(기본값 v4)를 설정함.

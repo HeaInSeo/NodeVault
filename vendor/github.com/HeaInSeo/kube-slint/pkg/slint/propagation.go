@@ -1,4 +1,4 @@
-package harness
+package slint
 
 import (
 	"fmt"
@@ -9,8 +9,8 @@ import (
 
 const modeBestEffort = "BestEffort"
 
-// CheckStrictness 는 StrictnessMode를 기반으로 측정 파이프라인의 신뢰도를 평가함.
-// 'Strictness' 전파 계약을 강제함.
+// CheckStrictness evaluates the measurement pipeline's reliability based on
+// StrictnessMode. Enforces the "Strictness" propagation contract.
 func CheckStrictness(cfg SessionConfig, sum *summary.Summary) error {
 	if sum == nil || sum.Reliability == nil {
 		return fmt.Errorf("summary or reliability is nil")
@@ -58,7 +58,7 @@ func evaluateStrictnessDecision(mode string, rel *summary.Reliability, blockReas
 		return err
 	}
 
-	// strict 모드에서 명시적 블록 사유가 있으면 항상 실패 처리함
+	// In any non-BestEffort mode, an explicit block reason is always a failure.
 	if mode != modeBestEffort && len(blockReasons) > 0 {
 		return fmt.Errorf("pipeline blocked: %s", strings.Join(blockReasons, ", "))
 	}
@@ -99,8 +99,8 @@ func checkStrictnessModeRules(mode string, rel *summary.Reliability, blockReason
 	return nil
 }
 
-// CheckGating 은 성공적으로 계산된 SLI를 게이팅 정책에 따라 평가함.
-// 'GatingPolicy' 전파 계약을 강제함.
+// CheckGating evaluates successfully computed SLIs against the gating
+// policy. Enforces the "GatingPolicy" propagation contract.
 func CheckGating(cfg SessionConfig, sum *summary.Summary) error {
 	if sum == nil {
 		return fmt.Errorf("summary is nil")
@@ -114,7 +114,7 @@ func CheckGating(cfg SessionConfig, sum *summary.Summary) error {
 	var gatingFailures []string
 
 	for _, res := range sum.Results {
-		// 건너뛰거나 차단된 결과는 무시함. 이는 Strictness 단위에서 처리됨.
+		// Skipped or blocked results are ignored here; they're handled by Strictness.
 		if res.Status == summary.StatusSkip || res.Status == summary.StatusBlock {
 			continue
 		}

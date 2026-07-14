@@ -1,4 +1,4 @@
-package harness
+package slint
 
 import (
 	"encoding/json"
@@ -10,7 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// DiscoveredConfig 는 브리지 스프린트 YAML에서 지원하는 최소 필드를 나타냄.
+// DiscoveredConfig represents the minimal fields supported by the bridge-sprint YAML.
 type DiscoveredConfig struct {
 	Format     string `yaml:"format" json:"format"`
 	Strictness struct {
@@ -36,17 +36,17 @@ type DiscoveredConfig struct {
 	} `yaml:"reliability" json:"reliability"`
 }
 
-// ConfigSource 는 구성이 로드된 위치를 나타냄.
+// ConfigSource represents where the config was loaded from.
 type ConfigSource struct {
 	Type     string // "injected" | "env" | "discovered"
 	Path     string // File path if Type is "env" or "discovered"
 	Disabled bool   // True if discovery was disabled via SLINT_DISABLE_DISCOVERY=1
 }
 
-// DiscoverConfig 는 kube-slint 구성을 검색하고 로드함.
-// 우선순위 규칙:
-//  1. 환경 변수: SLINT_CONFIG_PATH
-//  2. 자동 탐색: .slint.yaml 또는 slint.config.yaml (디렉터리 상향 탐색)
+// DiscoverConfig locates and loads the kube-slint config.
+// Priority rules:
+//  1. Environment variable: SLINT_CONFIG_PATH
+//  2. Auto-discovery: .slint.yaml or slint.config.yaml (walking up the directory tree)
 func DiscoverConfig(startDir string) (*DiscoveredConfig, ConfigSource, error) {
 	if isDiscoveryDisabled() {
 		return nil, ConfigSource{Type: "injected", Disabled: true}, nil
@@ -92,7 +92,7 @@ func discoverConfigByWalking(startDir string) (*DiscoveredConfig, ConfigSource, 
 	targetFiles := []string{".slint.yaml", "slint.config.yaml"}
 	currentDir := startDir
 
-	// 루트 디렉터리에 도달할 때까지 상위 디렉터리 탐색
+	// Walk up parent directories until the filesystem root is reached.
 	for {
 		for _, target := range targetFiles {
 			path := filepath.Join(currentDir, target)
@@ -107,13 +107,13 @@ func discoverConfigByWalking(startDir string) (*DiscoveredConfig, ConfigSource, 
 
 		parentDir := filepath.Dir(currentDir)
 		if parentDir == currentDir {
-			// 루트 도달
+			// Reached the root.
 			break
 		}
 		currentDir = parentDir
 	}
 
-	// 찾지 못함, 주입/기본값으로 폴백
+	// Not found; fall back to injected/default config.
 	return nil, ConfigSource{Type: "injected"}, nil
 }
 

@@ -96,6 +96,12 @@ func IsCertManagerCRDsInstalled(ctx context.Context, logger slo.Logger, r CmdRun
 	cmd := exec.Command("kubectl", "get", "crds")
 	output, err := r.Run(ctx, logger, cmd)
 	if err != nil {
+		// A failed `kubectl get crds` (no cluster access, permission denied,
+		// kubectl missing) is not the same thing as "CRDs genuinely absent" —
+		// log it so a caller deciding whether to InstallCertManager can tell
+		// the difference instead of silently retrying an install that will
+		// also fail for the same underlying reason.
+		logger.Logf("IsCertManagerCRDsInstalled: kubectl get crds failed: %v", err)
 		return false
 	}
 

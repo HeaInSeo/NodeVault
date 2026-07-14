@@ -15,20 +15,20 @@ github.com/Azure/go-ansiterm/winterm
 ## explicit; go 1.18
 github.com/BurntSushi/toml
 github.com/BurntSushi/toml/internal
-# github.com/HeaInSeo/kube-slint v1.2.0
-## explicit; go 1.25.5
+# github.com/HeaInSeo/kube-slint v1.6.0
+## explicit; go 1.22
 github.com/HeaInSeo/kube-slint/pkg/kubeutil
 github.com/HeaInSeo/kube-slint/pkg/slint
 github.com/HeaInSeo/kube-slint/pkg/slo
 github.com/HeaInSeo/kube-slint/pkg/slo/common/promkey
 github.com/HeaInSeo/kube-slint/pkg/slo/engine
+github.com/HeaInSeo/kube-slint/pkg/slo/evidence
 github.com/HeaInSeo/kube-slint/pkg/slo/fetch
 github.com/HeaInSeo/kube-slint/pkg/slo/fetch/curlpod
 github.com/HeaInSeo/kube-slint/pkg/slo/fetch/promtext
 github.com/HeaInSeo/kube-slint/pkg/slo/spec
 github.com/HeaInSeo/kube-slint/pkg/slo/summary
 github.com/HeaInSeo/kube-slint/pkg/slo/tags
-github.com/HeaInSeo/kube-slint/test/e2e/harness
 # github.com/HeaInSeo/podbridge5 v0.1.8
 ## explicit; go 1.25.6
 github.com/HeaInSeo/podbridge5

@@ -2,7 +2,12 @@ package curlpod
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 	"time"
+
+	"github.com/HeaInSeo/kube-slint/pkg/slo/evidence"
 )
 
 // CurlPod 는 외부 어댑터 없이 curl 파드 수명 주기를 캡슐화함.
@@ -37,16 +42,37 @@ func (c *CurlPod) Run(ctx context.Context, waitTimeout time.Duration, logsTimeou
 
 	waitCtx, waitCancel := context.WithTimeout(ctx, waitTimeout)
 	defer waitCancel()
-	if err := client.WaitDone(waitCtx, c.Namespace, podName, 2*time.Second); err != nil {
+	waitErr := client.WaitDone(waitCtx, c.Namespace, podName, 2*time.Second)
+	if waitErr != nil && !errors.Is(waitErr, ErrPodFailed) {
+		// A non-phase error (context deadline, kubectl call itself failed) —
+		// the pod never reached a terminal phase, so there's nothing useful
+		// to fetch from its logs.
 		c.cleanupWithLog(ctx, client, podName)
-		return "", err
+		return "", waitErr
 	}
 
+	// Either the pod Succeeded, or it reached phase Failed — in both cases
+	// its logs (the curl output, captured via --fail-with-body even on a
+	// non-2xx response) are worth fetching: on success they're the
+	// measurement itself, on failure they're the diagnostic the caller
+	// needs to understand why (e.g. an RBAC 403 body).
 	logCtx, logCancel := context.WithTimeout(ctx, logsTimeout)
 	defer logCancel()
-	out, err := client.Logs(logCtx, c.Namespace, podName)
+	out, logErr := client.Logs(logCtx, c.Namespace, podName)
 	c.cleanupWithLog(ctx, client, podName)
-	return out, err
+
+	if waitErr != nil {
+		if logErr == nil && strings.TrimSpace(out) != "" {
+			// Redact before embedding: this is the raw metrics endpoint
+			// response body (whatever caused the non-2xx that failed the
+			// pod), which could echo back sensitive request data. Same
+			// redaction contract applied to every other error/log surface
+			// in this codebase (see pkg/kubeutil/runner.go).
+			return "", fmt.Errorf("%w (pod output: %s)", waitErr, evidence.RedactString(strings.TrimSpace(out)))
+		}
+		return "", waitErr
+	}
+	return out, logErr
 }
 
 // cleanupWithLog deletes the pod and logs a warning if deletion fails.

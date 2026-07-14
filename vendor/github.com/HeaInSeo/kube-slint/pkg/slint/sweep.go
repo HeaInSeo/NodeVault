@@ -1,13 +1,16 @@
-package harness
+package slint
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/HeaInSeo/kube-slint/pkg/kubeutil"
 )
 
 const (
@@ -17,15 +20,15 @@ const (
 
 var execCommandContext = exec.CommandContext
 
-// OrphanSweepOptions 는 고아(orphan) 리소스 정리 동작을 설정함.
+// OrphanSweepOptions configures orphan-resource cleanup behavior.
 type OrphanSweepOptions struct {
 	Enabled bool
-	Mode    string        // "report-only" (기본값) | "delete"
-	Limit   int           // 한 번에 삭제/보고할 최대 고아 리소스 수 (0이면 무제한)
-	MaxAge  time.Duration // 이 시간보다 오래된 리소스만 대상으로 함 (0이면 검사 안 함)
+	Mode    string        // "report-only" (default) | "delete"
+	Limit   int           // max orphan resources to delete/report per run (0 = unlimited)
+	MaxAge  time.Duration // only target resources older than this (0 = no age check)
 }
 
-// DevSweepOptions 제공: 로컬 개발 시 짧은 MaxAge와 적은 Limit
+// DevSweepOptions provides a short MaxAge and small Limit for local development.
 var DevSweepOptions = OrphanSweepOptions{
 	Enabled: true,
 	Mode:    modeReportOnly,
@@ -33,7 +36,7 @@ var DevSweepOptions = OrphanSweepOptions{
 	MaxAge:  10 * time.Minute,
 }
 
-// CISweepOptions 제공: CI 환경에서 적절한 Limit 부여
+// CISweepOptions provides a Limit sized appropriately for CI environments.
 var CISweepOptions = OrphanSweepOptions{
 	Enabled: true,
 	Mode:    "report-only",
@@ -103,8 +106,9 @@ func WriteSweepResultJSON(w io.Writer, r SweepResult) error {
 	return enc.Encode(r)
 }
 
-// SweepOrphans 는 이전 kube-slint run-id의 리소스를 탐지하고 선택적으로 삭제함.
-// 기존 API 호환성을 위해 SweepOrphansWithResult 결과를 버리고 성공 여부만 반환함.
+// SweepOrphans detects and optionally deletes resources from previous
+// kube-slint run-ids. It discards the SweepOrphansWithResult result and
+// returns only success/failure, for existing API compatibility.
 func (s *Session) SweepOrphans(ctx context.Context, opts OrphanSweepOptions) error {
 	_, err := s.SweepOrphansWithResult(ctx, opts)
 	return err
@@ -128,6 +132,11 @@ func (s *Session) SweepOrphansWithResult(ctx context.Context, opts OrphanSweepOp
 		finalizeSweepResult(&res)
 		return res, nil
 	}
+	if kubeutil.IsDangerousNamespace(ns) && !s.impl.DangerouslyAllowKubeSystemNamespace {
+		appendDangerousNamespaceGuard(&res, ns)
+		finalizeSweepResult(&res)
+		return res, nil
+	}
 
 	res.Request.Namespace = ns
 	res.Request.CurrentRunID = runID
@@ -135,7 +144,7 @@ func (s *Session) SweepOrphansWithResult(ctx context.Context, opts OrphanSweepOp
 	res.Request.ModeRequested = opts.Mode
 	normalizeSweepMode(opts.Mode, &res)
 
-	labelSelector := fmt.Sprintf("app.kubernetes.io/managed-by=kube-slint,slint-run-id!=%s", runID)
+	labelSelector := fmt.Sprintf("app.kubernetes.io/managed-by=kube-slint,slint-run-id!=%s", SanitizeKubernetesLabelValue(runID))
 	res.Request.Selector = labelSelector
 
 	lines, err := listOrphanCandidates(ctx, ns, labelSelector)
@@ -144,7 +153,7 @@ func (s *Session) SweepOrphansWithResult(ctx context.Context, opts OrphanSweepOp
 		return res, err
 	}
 	if len(lines) == 0 {
-		fmt.Printf("kube-slint [orphan-sweep]: mode=%s ns=%s run-id=%s :: no orphan resources detected\n",
+		fmt.Fprintf(os.Stderr, "kube-slint [orphan-sweep]: mode=%s ns=%s run-id=%s :: no orphan resources detected\n",
 			res.Apply.ModeEffective, ns, runID)
 		finalizeSweepResult(&res)
 		return res, nil
@@ -189,7 +198,15 @@ func appendSkipGuard(res *SweepResult) {
 	res.Summary.SkippedByReason["missing_guard"]++
 	warnMsg := "skip - missing namespace or run-id for safety guard"
 	res.Warnings = append(res.Warnings, warnMsg)
-	fmt.Printf("kube-slint [orphan-sweep]: %s\n", warnMsg)
+	fmt.Fprintf(os.Stderr, "kube-slint [orphan-sweep]: %s\n", warnMsg)
+}
+
+func appendDangerousNamespaceGuard(res *SweepResult, ns string) {
+	res.Summary.Skipped++
+	res.Summary.SkippedByReason["dangerous_namespace"]++
+	warnMsg := fmt.Sprintf("skip - namespace %q is cluster-critical and rejected by default; set DangerouslyAllowKubeSystemNamespace to override", ns)
+	res.Warnings = append(res.Warnings, warnMsg)
+	fmt.Fprintf(os.Stderr, "kube-slint [orphan-sweep]: %s\n", warnMsg)
 }
 
 func normalizeSweepMode(modeReq string, res *SweepResult) {
@@ -206,7 +223,7 @@ func normalizeSweepMode(modeReq string, res *SweepResult) {
 		fallbackReason = "invalid_mode"
 		warnMsg := fmt.Sprintf("invalid mode %q provided, falling back to report-only", modeReq)
 		res.Warnings = append(res.Warnings, warnMsg)
-		fmt.Printf("kube-slint [orphan-sweep]: warning - %s\n", warnMsg)
+		fmt.Fprintf(os.Stderr, "kube-slint [orphan-sweep]: warning - %s\n", warnMsg)
 	}
 
 	res.Apply.ModeEffective = modeEff
@@ -252,7 +269,7 @@ func evaluateSweepCandidate(
 	if err != nil {
 		warnMsg := fmt.Sprintf("failed to parse creation timestamp for pod %s: %v", name, err)
 		res.Warnings = append(res.Warnings, warnMsg)
-		fmt.Printf("kube-slint [orphan-sweep]: warning - %s\n", warnMsg)
+		fmt.Fprintf(os.Stderr, "kube-slint [orphan-sweep]: warning - %s\n", warnMsg)
 		if opts.MaxAge > 0 {
 			appendSkipReason(res, &item, "timestamp_parse_failed")
 			return
@@ -292,30 +309,40 @@ func appendSkipReason(res *SweepResult, item *SweepItem, reason string) {
 
 func printSweepSummary(
 	res *SweepResult, ns, runID string, opts OrphanSweepOptions, targetNames []string, hitLimit int) {
-	fmt.Printf("kube-slint [orphan-sweep]: mode=%s ns=%s run-id=%s limit=%d maxAge=%v\n",
+	fmt.Fprintf(os.Stderr, "kube-slint [orphan-sweep]: mode=%s ns=%s run-id=%s limit=%d maxAge=%v\n",
 		res.Apply.ModeEffective, ns, runID, opts.Limit, opts.MaxAge)
-	fmt.Printf("kube-slint [orphan-sweep]: detected %d matching orphan(s) ", res.Summary.Evaluated)
+	fmt.Fprintf(os.Stderr, "kube-slint [orphan-sweep]: detected %d matching orphan(s) ", res.Summary.Evaluated)
 	if hitLimit > 0 {
-		fmt.Printf("(processing %d, skipping %d due to limit)\n", len(targetNames), hitLimit)
+		fmt.Fprintf(os.Stderr, "(processing %d, skipping %d due to limit)\n", len(targetNames), hitLimit)
 	} else {
-		fmt.Printf("(processing all)\n")
+		fmt.Fprintf(os.Stderr, "(processing all)\n")
 	}
 }
 
+// applySweepDeletes deletes pods by name only (not by label selector) — this
+// is safe because targetNames is derived exclusively from
+// listOrphanCandidates' label-filtered output earlier in the same call
+// (SweepOrphansWithResult), so a name can never reach this function without
+// having already matched the managed-by ownership selector. Combining name
+// and "-l" in one kubectl invocation was considered for defense-in-depth,
+// but kubectl rejects it outright ("name cannot be provided when a selector
+// is specified"), so re-verifying per-name would require an extra kubectl
+// call per pod; given targetNames' provenance is already provably
+// label-scoped, that extra round-trip isn't adding real safety here.
 func applySweepDeletes(ctx context.Context, ns string, targetNames []string, res *SweepResult) error {
 	if res.Apply.ModeEffective != modeDelete {
 		if len(targetNames) > 0 {
-			fmt.Printf("kube-slint [orphan-sweep]: report-only mode, skipped deletion of %v\n", targetNames)
-			fmt.Printf("kube-slint [orphan-sweep]: to delete, set option mode='delete'\n")
+			fmt.Fprintf(os.Stderr, "kube-slint [orphan-sweep]: report-only mode, skipped deletion of %v\n", targetNames)
+			fmt.Fprintf(os.Stderr, "kube-slint [orphan-sweep]: to delete, set option mode='delete'\n")
 		}
 		return nil
 	}
 	if len(targetNames) == 0 {
-		fmt.Printf("kube-slint [orphan-sweep]: no targets to delete\n")
+		fmt.Fprintf(os.Stderr, "kube-slint [orphan-sweep]: no targets to delete\n")
 		return nil
 	}
 
-	fmt.Printf("kube-slint [orphan-sweep]: proceeding with individual deletion for %d orphan(s)...\n", len(targetNames))
+	fmt.Fprintf(os.Stderr, "kube-slint [orphan-sweep]: proceeding with individual deletion for %d orphan(s)...\n", len(targetNames))
 	var hasError bool
 
 	itemIdx := make(map[string]int)
@@ -324,7 +351,11 @@ func applySweepDeletes(ctx context.Context, ns string, targetNames []string, res
 	}
 
 	for _, name := range targetNames {
-		cmd := execCommandContext(ctx, "kubectl", "delete", "pods", name, "-n", ns, "--ignore-not-found=true")
+		// kube-slint-no-unsafe-cleanup: see applySweepDeletes' doc comment
+		// above -- targetNames is derived exclusively from a label-filtered
+		// list step, and kubectl itself rejects combining a resource name with "-l".
+		// nosemgrep
+		cmd := execCommandContext(ctx, "kubectl", "delete", "pod", name, "-n", ns, "--ignore-not-found=true")
 		delOut, delErr := cmd.CombinedOutput()
 		idx, ok := itemIdx[name]
 		if !ok {
@@ -346,6 +377,6 @@ func applySweepDeletes(ctx context.Context, ns string, targetNames []string, res
 	if hasError {
 		return fmt.Errorf("some orphan deletions failed, check result for details")
 	}
-	fmt.Printf("kube-slint [orphan-sweep]: deletion complete\n")
+	fmt.Fprintf(os.Stderr, "kube-slint [orphan-sweep]: deletion complete\n")
 	return nil
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/HeaInSeo/kube-slint/pkg/slo"
+	"github.com/HeaInSeo/kube-slint/pkg/slo/evidence"
 )
 
 type tokenRequest struct {
@@ -74,7 +75,11 @@ func requestServiceAccountTokenOnce(
 
 	var tr tokenRequest
 	if err := json.Unmarshal([]byte(stdout), &tr); err != nil {
-		return "", fmt.Errorf("token response json parse failed: %w (body=%q)", err, stdout)
+		// stdout may be a partial/malformed TokenRequest response that still
+		// contains a real "token":"..." fragment (e.g. truncated output) —
+		// redact before it reaches an error string that gets logged on every
+		// retry (see ServiceAccountToken's logger.Logf on failed polls).
+		return "", fmt.Errorf("token response json parse failed: %w (body=%q)", err, evidence.RedactString(stdout))
 	}
 	if tr.Status.Token == "" {
 		return "", fmt.Errorf("token is empty")

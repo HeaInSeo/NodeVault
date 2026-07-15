@@ -19,7 +19,12 @@ PROTO_SRC     ?= ./protos
 BUILDTAGS ?= exclude_graphdriver_btrfs containers_image_openpgp exclude_graphdriver_devicemapper
 
 # ── infra-lab / Harbor 설정 ──────────────────────────────────────────
-INFRALAB_KUBECONFIG ?= $(shell realpath ../infra-lab/kubeconfig 2>/dev/null || echo "")
+# infra-lab은 환경별로 ../infra-lab/state/<env-name>/kubeconfig에 kubeconfig를
+# 둔다(예: seoy-libvirt-cilium) — 예전에는 ../infra-lab/kubeconfig 단일
+# 파일이었으나 이제 없다. <env-name>은 환경이 재생성될 때마다 바뀔 수 있으므로
+# 특정 이름을 고정하지 않고 state/ 아래 첫 번째 kubeconfig를 자동 탐색한다.
+# 여러 환경이 동시에 있으면 반드시 INFRALAB_KUBECONFIG=...를 명시할 것.
+INFRALAB_KUBECONFIG ?= $(shell realpath ../infra-lab/state/*/kubeconfig 2>/dev/null | head -1)
 INFRALAB_REGISTRY   ?= harbor.lab.local
 IMAGE                ?= $(INFRALAB_REGISTRY)/nodevault/controlplane:latest
 INTEGRATION_GRPC_PORT ?= 50051

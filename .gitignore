@@ -9,8 +9,9 @@ assets/catalog/
 assets/datacatalog/
 assets/index/
 
-# 생성 파일 (proto 생성 코드는 gen/ 디렉토리)
-gen/
+# 생성 파일 (proto 생성 코드는 gen/ 디렉토리) — repo 루트만, vendor/ 안의
+# 동명 gen/ 디렉토리(예: sigstore/protobuf-specs)는 실수로 무시하지 않는다.
+/gen/
 
 # 테스트
 coverage.out

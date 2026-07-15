@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # deploy-seoy.sh — NodeVault + NodePalette를 seoy 호스트에 배포한다.
 #
+# ⚠️ dev-only: 이 스크립트는 seoy 랩 호스트 전용 개발 편의 배포 경로다.
+# 컨테이너 이미지 버전 관리, 롤백, 이중화가 없는 단일 바이너리+systemd
+# 배포이며 상업적/이식 가능한 배포 경로가 아니다. 실제 배포 기준은
+# docs/DEPLOY_IN_CLUSTER.md의 K8s Deployment(deploy/03-nodevault.yaml)다.
+#
 # 사전 조건:
 #   - seoy (100.123.80.48)에 SSH 키 접근 가능
 #   - seoy에 nodevault 사용자 및 /opt/nodevault 디렉토리 존재
@@ -21,7 +26,7 @@ LOCAL_DEPLOY="$(dirname "$0")/../deploy"
 LOCAL_ASSETS="$(dirname "$0")/../assets"
 KUBECONFIG_MODE="${KUBECONFIG_MODE:-remote}"
 LOCAL_KUBECONFIG="${LOCAL_KUBECONFIG:-}"
-REMOTE_KUBECONFIG_SOURCE="${REMOTE_KUBECONFIG_SOURCE:-/opt/go/src/github.com/HeaInSeo/infra-lab/kubeconfig}"
+REMOTE_KUBECONFIG_SOURCE="${REMOTE_KUBECONFIG_SOURCE:-/opt/go/src/github.com/HeaInSeo/infra-lab/state/seoy-libvirt-cilium/kubeconfig}"
 
 RESTART_ONLY=false
 if [[ "${1:-}" == "--restart-only" ]]; then
@@ -75,13 +80,29 @@ else
   else
     echo "==> assets/policy/dockguard.wasm 없음 — 건너뜀"
   fi
+
+  # ── 3.5. containers/storage 설정 복사 (host 전역 storage.conf 우회) ────────
+  # nodevault.service의 CONTAINERS_STORAGE_CONF가 이 파일을 가리킨다 — 이유는
+  # deploy/nodevault-host-storage.conf 상단 주석 참조.
+  echo "==> containers/storage 설정 복사..."
+  $SCP_BASE "${LOCAL_DEPLOY}/nodevault-host-storage.conf" \
+    "${SEOY_USER}@${SEOY_HOST}:/tmp/nodevault-storage.conf"
+  $SSH "sudo mkdir -p ${REMOTE_DIR}/containers-storage && \
+        sudo chown nodevault:nodevault ${REMOTE_DIR}/containers-storage && \
+        sudo mv /tmp/nodevault-storage.conf ${REMOTE_DIR}/storage.conf && \
+        sudo chown nodevault:nodevault ${REMOTE_DIR}/storage.conf && \
+        sudo restorecon -v ${REMOTE_DIR}/storage.conf ${REMOTE_DIR}/containers-storage 2>/dev/null || true"
 fi
 
 # ── 4. kubeconfig 배포 ─────────────────────────────────────────────────────────
 case "${KUBECONFIG_MODE}" in
   remote)
-    echo "==> kubeconfig 복사 (remote authoritative source)..."
-    $SSH "test -f '${REMOTE_KUBECONFIG_SOURCE}' && \
+    echo "==> kubeconfig 복사 (remote authoritative source: ${REMOTE_KUBECONFIG_SOURCE})..."
+    # test -f를 && 체인 앞에 두면 소스가 없을 때 조용히 아무 일도 안 하고 넘어가
+    # 버려서(예전 버그), 클러스터 환경이 바뀌어 기본 경로가 stale해져도 아무 경고
+    # 없이 kubeconfig가 갱신 안 된 채로 배포가 "성공"한 것처럼 보였다. 이제 소스가
+    # 없으면 명시적으로 실패한다.
+    $SSH "test -f '${REMOTE_KUBECONFIG_SOURCE}' || { echo 'ERROR: kubeconfig source not found: ${REMOTE_KUBECONFIG_SOURCE}' >&2; exit 1; }; \
           sudo cp '${REMOTE_KUBECONFIG_SOURCE}' '${REMOTE_DIR}/kubeconfig' && \
           sudo chown nodevault:nodevault '${REMOTE_DIR}/kubeconfig' && \
           sudo chmod 600 '${REMOTE_DIR}/kubeconfig' && \

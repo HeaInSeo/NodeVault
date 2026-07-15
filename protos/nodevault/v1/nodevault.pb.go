@@ -4293,9 +4293,9 @@ const file_nodevault_v1_nodevault_proto_rawDesc = "" +
 	"\x17BUILD_EVENT_KIND_FAILED\x10\a2\xbb\x01\n" +
 	"\rPolicyService\x12S\n" +
 	"\x0fGetPolicyBundle\x12$.nodevault.v1.GetPolicyBundleRequest\x1a\x1a.nodevault.v1.PolicyBundle\x12U\n" +
-	"\fListPolicies\x12!.nodevault.v1.ListPoliciesRequest\x1a\".nodevault.v1.ListPoliciesResponse2\xa1\x04\n" +
-	"\fBuildService\x12J\n" +
-	"\x10BuildAndRegister\x12\x1a.nodevault.v1.BuildRequest\x1a\x18.nodevault.v1.BuildEvent0\x01\x12X\n" +
+	"\fListPolicies\x12!.nodevault.v1.ListPoliciesRequest\x1a\".nodevault.v1.ListPoliciesResponse2\xa6\x04\n" +
+	"\fBuildService\x12O\n" +
+	"\x10BuildAndRegister\x12\x1a.nodevault.v1.BuildRequest\x1a\x18.nodevault.v1.BuildEvent\"\x03\x88\x02\x010\x01\x12X\n" +
 	"\x0fResolveToolSpec\x12\x1d.nodevault.v1.ToolSpecRequest\x1a&.nodevault.v1.ResolvedToolSpecResponse\x12^\n" +
 	"\x0fSubmitToolBuild\x12$.nodevault.v1.SubmitToolBuildRequest\x1a%.nodevault.v1.SubmitToolBuildResponse\x12Q\n" +
 	"\x0eWatchToolBuild\x12#.nodevault.v1.WatchToolBuildRequest\x1a\x18.nodevault.v1.BuildEvent0\x01\x12^\n" +

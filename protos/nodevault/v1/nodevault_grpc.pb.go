@@ -171,9 +171,13 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type BuildServiceClient interface {
+	// Deprecated: Do not use.
 	// Deprecated: use ResolveToolSpec + SubmitToolBuild + WatchToolBuild.
 	// BuildAndRegister stays available only while NodeKit UI/library callers
-	// still submit legacy BuildRequest messages.
+	// still submit legacy BuildRequest messages. option deprecated = true below
+	// surfaces this as a real compiler-level deprecation marker in generated
+	// clients (e.g. C#'s [Obsolete]), not just a comment, so callers get a
+	// build warning rather than having to notice a doc string.
 	BuildAndRegister(ctx context.Context, in *BuildRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BuildEvent], error)
 	ResolveToolSpec(ctx context.Context, in *ToolSpecRequest, opts ...grpc.CallOption) (*ResolvedToolSpecResponse, error)
 	SubmitToolBuild(ctx context.Context, in *SubmitToolBuildRequest, opts ...grpc.CallOption) (*SubmitToolBuildResponse, error)
@@ -190,6 +194,7 @@ func NewBuildServiceClient(cc grpc.ClientConnInterface) BuildServiceClient {
 	return &buildServiceClient{cc}
 }
 
+// Deprecated: Do not use.
 func (c *buildServiceClient) BuildAndRegister(ctx context.Context, in *BuildRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BuildEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &BuildService_ServiceDesc.Streams[0], BuildService_BuildAndRegister_FullMethodName, cOpts...)
@@ -272,9 +277,13 @@ func (c *buildServiceClient) ResolveRecipe(ctx context.Context, in *ResolveRecip
 // All implementations must embed UnimplementedBuildServiceServer
 // for forward compatibility.
 type BuildServiceServer interface {
+	// Deprecated: Do not use.
 	// Deprecated: use ResolveToolSpec + SubmitToolBuild + WatchToolBuild.
 	// BuildAndRegister stays available only while NodeKit UI/library callers
-	// still submit legacy BuildRequest messages.
+	// still submit legacy BuildRequest messages. option deprecated = true below
+	// surfaces this as a real compiler-level deprecation marker in generated
+	// clients (e.g. C#'s [Obsolete]), not just a comment, so callers get a
+	// build warning rather than having to notice a doc string.
 	BuildAndRegister(*BuildRequest, grpc.ServerStreamingServer[BuildEvent]) error
 	ResolveToolSpec(context.Context, *ToolSpecRequest) (*ResolvedToolSpecResponse, error)
 	SubmitToolBuild(context.Context, *SubmitToolBuildRequest) (*SubmitToolBuildResponse, error)

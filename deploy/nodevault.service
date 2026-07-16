@@ -1,5 +1,9 @@
 [Unit]
-Description=NodeVault Control Plane (gRPC :50051 + webhook :8082)
+# DEV-ONLY: this host systemd deployment has no image versioning, rollback,
+# or replication. The commercial/portable deploy path is the K8s manifests
+# under deploy/*.yaml (see docs/DEPLOY_IN_CLUSTER.md) — do not use this unit
+# as a reference for production readiness.
+Description=NodeVault Control Plane (gRPC :50051 + webhook :8082) [dev-only, not the commercial deploy path]
 Documentation=https://github.com/HeaInSeo/NodeVault
 After=network-online.target
 Wants=network-online.target
@@ -21,7 +25,14 @@ Environment=NODEVAULT_WEBHOOK_ADDR=:8082
 Environment=KUBECONFIG=/opt/nodevault/kubeconfig
 
 # ── Harbor 레지스트리 주소 ────────────────────────────────────────────────────
-Environment=NODEVAULT_REGISTRY_ADDR=harbor.10.113.24.96.nip.io
+# harbor.lab.local is the standard hostname since Sprint 5 (2026-07-12) — see
+# pkg/registryconfig.DefaultAddr and deploy/03-nodevault.yaml. The old raw
+# nip.io address has no CA trust entry on this host
+# (/etc/containers/certs.d/harbor.lab.local/ca.crt exists; a nip.io one does
+# not) and no /etc/hosts entry, so pushes to it fail the TLS handshake and
+# fall back to a plain-HTTP attempt on :80, which times out against the
+# HTTPS-only Cilium Gateway.
+Environment=NODEVAULT_REGISTRY_ADDR=harbor.lab.local
 
 # ── reconcile 간격 (기본: fast=5m, slow=30m / 테스트 시 단축 가능) ──────────
 Environment=NODEVAULT_FAST_RECONCILE=30s

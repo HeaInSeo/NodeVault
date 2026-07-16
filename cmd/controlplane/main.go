@@ -307,6 +307,17 @@ func logStartupConfig(rc runtimeConfig) {
 // in-pod-buildah: NodeVault calls podbridge5, which uses the Buildah Go API in
 // the same NodeVault process/Pod. No builder Job or worker Pod is created.
 // disabled: keeps non-build APIs available while explicitly rejecting builds.
+// buildServiceConstructor is a seam over build.NewService so tests can inject
+// a failing constructor without a real podbridge5/Buildah storage environment.
+var buildServiceConstructor = build.NewService
+
+// registerBuildService never fails the process for an in-pod-buildah init
+// error (see CLAUDE.md §12, D-01/D-02: known transient environment issues —
+// e.g. subuid ranges, storage.conf permissions — must not block gRPC startup).
+// It degrades to the disabled backend instead, so Ping/PolicyService/
+// ValidateService/catalog RPCs keep working while only build RPCs return
+// Unavailable. Only an internal programming error (unnormalized backend
+// value) is still fatal.
 func registerBuildService(
 	srv *grpc.Server,
 	rc *runtimeConfig,
@@ -321,9 +332,12 @@ func registerBuildService(
 		slog.Info("BuildService registered with disabled backend")
 		return nil
 	case buildBackendInPodBuildah:
-		buildSvc, buildErr := build.NewService(registrySvc, indexStore, buildStateStore, rec)
+		buildSvc, buildErr := buildServiceConstructor(registrySvc, indexStore, buildStateStore, rec)
 		if buildErr != nil {
-			return fmt.Errorf("initialize in-pod podbridge5/Buildah builder: %w", buildErr)
+			slog.Error("BuildService init failed, degrading to disabled backend",
+				"backend", buildBackendInPodBuildah, "build_backend_status", "degraded", "err", buildErr)
+			nfv1.RegisterBuildServiceServer(srv, build.NewDisabledService())
+			return nil
 		}
 		nfv1.RegisterBuildServiceServer(srv, buildSvc)
 		slog.Info("BuildService registered", "backend", buildBackendInPodBuildah)

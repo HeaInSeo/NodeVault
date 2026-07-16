@@ -205,10 +205,11 @@ coverage:
 	go test -tags "$(BUILDTAGS)" -race -covermode=atomic -coverprofile=coverage.out ./...
 	go tool cover -func=coverage.out | tail -1
 
-# ── 취약점 스캔 ───────────────────────────────────────────────────────────────
+# ── 취약점 스캔 (security/govulncheck-exceptions.yaml 기준 게이트, CI와 동일 계약) ──
 vuln:
 	go install golang.org/x/vuln/cmd/govulncheck@latest
-	govulncheck -tags "$(BUILDTAGS)" ./...
+	govulncheck -tags "$(BUILDTAGS)" -format json ./... > /tmp/nodevault-govulncheck.json
+	go run ./cmd/govulncheckgate -input /tmp/nodevault-govulncheck.json
 
 # ── kube-slint gate (churn suppression + reconcile regression) ────────────────
 # 사전 조건: make build (bin/nodevault 존재해야 함)

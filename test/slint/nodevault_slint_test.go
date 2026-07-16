@@ -23,10 +23,15 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
 	"github.com/HeaInSeo/kube-slint/pkg/slint"
 	"github.com/HeaInSeo/kube-slint/pkg/slo/fetch"
 	"github.com/HeaInSeo/kube-slint/pkg/slo/spec"
 	"github.com/HeaInSeo/kube-slint/pkg/slo/summary"
+
+	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
 const (
@@ -37,6 +42,19 @@ const (
 	testSlowReconcile = "1h" // suppress slow loop in test window
 	observationWindow = 25 * time.Second
 	readinessTimeout  = 15 * time.Second
+
+	// startupLatencyBudget bounds time from process start to healthz-ready.
+	// Observed baseline is tens of milliseconds (config load + gRPC bind);
+	// this budget is generous but catches a regression like an accidental
+	// blocking network/disk call added to startup.
+	startupLatencyBudget = 5 * time.Second
+
+	// pingProbeInterval/pingLatencyBudget gate the gRPC request path itself,
+	// not just the passive reconcile-loop counters: Ping is called
+	// throughout the observation window and every call must succeed within
+	// budget on localhost.
+	pingProbeInterval = 1 * time.Second
+	pingLatencyBudget = 200 * time.Millisecond
 )
 
 // TestNodeVaultSlintGate measures NodeVault's reconcile loop SLI over a 25-second window.
@@ -48,6 +66,11 @@ const (
 //   - reconcile_slow_delta == 0   (testSlowReconcile=1h never fires in a 25s window)
 //   - build_failure_delta == 0    (NODEVAULT_BUILD_BACKEND=disabled: no build is
 //     submitted during this window, so the failure counter must not move)
+//
+// Also gates two signals outside the reconcile-loop counters:
+//   - startup latency (process start -> healthz ready) <= startupLatencyBudget
+//   - gRPC Ping probed every pingProbeInterval throughout the window: zero
+//     errors, every call within pingLatencyBudget
 func TestNodeVaultSlintGate(t *testing.T) {
 	binPath := os.Getenv("NODEVAULT_BIN")
 	if binPath == "" {
@@ -74,6 +97,7 @@ func TestNodeVaultSlintGate(t *testing.T) {
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	startedAt := time.Now()
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start nodevault: %v", err)
 	}
@@ -81,6 +105,12 @@ func TestNodeVaultSlintGate(t *testing.T) {
 
 	if err := waitForHealthz(testMetricsAddr, readinessTimeout); err != nil {
 		t.Fatalf("nodevault metrics not ready: %v", err)
+	}
+	if startupLatency := time.Since(startedAt); startupLatency > startupLatencyBudget {
+		t.Errorf("startup latency = %s, want <= %s (regression: init likely blocked on something new)",
+			startupLatency, startupLatencyBudget)
+	} else {
+		t.Logf("startup latency (process start -> healthz ready): %s", startupLatency)
 	}
 
 	fetcher := newExpvarFetcher(testMetricsAddr)
@@ -91,7 +121,7 @@ func TestNodeVaultSlintGate(t *testing.T) {
 		Specs:        nodevaultSpecs(),
 	})
 	sess.Start()
-	time.Sleep(observationWindow)
+	pingResult := probeGRPCPing(ctx, t, testGRPCAddr, observationWindow, pingProbeInterval)
 
 	sum, err := sess.End(ctx)
 	if err != nil {
@@ -107,6 +137,19 @@ func TestNodeVaultSlintGate(t *testing.T) {
 	assertEQ(t, results, "reconcile_error_delta", 0)
 	assertEQ(t, results, "reconcile_slow_delta", 0)
 	assertEQ(t, results, "build_failure_delta", 0)
+
+	if pingResult.calls == 0 {
+		t.Error("gRPC ping probe made 0 calls during the observation window")
+	}
+	if pingResult.errors > 0 {
+		t.Errorf("gRPC ping probe: %d/%d calls failed: %v", pingResult.errors, pingResult.calls, pingResult.lastErr)
+	}
+	if pingResult.maxLatency > pingLatencyBudget {
+		t.Errorf("gRPC ping probe: max latency = %s, want <= %s (regression: request path slower)",
+			pingResult.maxLatency, pingLatencyBudget)
+	} else {
+		t.Logf("gRPC ping probe: %d calls, max latency %s", pingResult.calls, pingResult.maxLatency)
+	}
 }
 
 // nodevaultSpecs defines the SLI spec set for NodeVault's reconcile counters.
@@ -287,4 +330,59 @@ func waitForHealthz(addr string, timeout time.Duration) error {
 		time.Sleep(500 * time.Millisecond)
 	}
 	return fmt.Errorf("healthz at %s not ready after %s", addr, timeout)
+}
+
+// ── gRPC ping probe ───────────────────────────────────────────────────────────
+
+// pingProbeResult summarizes repeated Ping calls made throughout the
+// observation window, so the gate covers the active gRPC request path in
+// addition to the passive reconcile-loop counters.
+type pingProbeResult struct {
+	calls      int
+	errors     int
+	lastErr    error
+	maxLatency time.Duration
+}
+
+// probeGRPCPing calls PingService/Ping every interval until duration elapses
+// (or ctx is done), returning a summary of call count, errors, and the
+// slowest observed latency. Failures to dial or connect count as a single
+// error rather than aborting the whole probe, so a transient blip doesn't
+// crash the test outright — the gate still fails on any recorded error.
+func probeGRPCPing(ctx context.Context, t *testing.T, addr string, duration, interval time.Duration) pingProbeResult {
+	t.Helper()
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return pingProbeResult{calls: 1, errors: 1, lastErr: fmt.Errorf("grpc.NewClient: %w", err)}
+	}
+	defer func() { _ = conn.Close() }()
+	client := nfv1.NewPingServiceClient(conn)
+
+	var result pingProbeResult
+	deadline := time.Now().Add(duration)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		callStart := time.Now()
+		callCtx, cancel := context.WithTimeout(ctx, interval)
+		_, err := client.Ping(callCtx, &nfv1.PingRequest{Message: "slint-gate"})
+		cancel()
+		latency := time.Since(callStart)
+		result.calls++
+		if err != nil {
+			result.errors++
+			result.lastErr = err
+		}
+		if latency > result.maxLatency {
+			result.maxLatency = latency
+		}
+		if !time.Now().Before(deadline) {
+			return result
+		}
+		select {
+		case <-ctx.Done():
+			return result
+		case <-ticker.C:
+		}
+	}
 }

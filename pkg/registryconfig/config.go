@@ -19,7 +19,11 @@ import (
 )
 
 // DefaultAddr is the registry host used when NODEVAULT_REGISTRY_ADDR is unset.
-const DefaultAddr = "harbor.10.113.24.96.nip.io"
+// Kept in sync with deploy/03-nodevault.yaml's NODEVAULT_REGISTRY_ADDR and
+// infra-lab's CoreDNS mapping (harbor.lab.local -> Cilium LB VIP), the
+// standard hostname since Sprint 5 (2026-07-12). The pre-Sprint-5 raw
+// nip.io address is stale and unreachable under the current Harbor CA/HTTPRoute.
+const DefaultAddr = "harbor.lab.local"
 
 const (
 	defaultScheme   = "https"

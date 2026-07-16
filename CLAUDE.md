@@ -76,7 +76,7 @@ Kubernetes API 권한은 현재 L3/L4 ValidateService Job 실행에만 남아 �
 | 환경 | kubeconfig | 레지스트리 주소 | Makefile 타겟 |
 |------|-----------|----------------|--------------|
 | kind | `~/.kube/config` | `10.96.0.1:5000` | `test-integration` |
-| infra-lab | `../infra-lab/kubeconfig` | `harbor.10.113.24.96.nip.io` | `test-integration-infralab` |
+| infra-lab | `../infra-lab/state/<env-name>/kubeconfig` (Makefile이 자동 탐색) | `harbor.lab.local` | `test-integration-infralab` |
 
 **infra-lab 사전 조건** (최초 1회):
 ```bash

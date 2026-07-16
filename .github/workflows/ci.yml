@@ -184,13 +184,25 @@ jobs:
             echo "Unsupported package manager" >&2; exit 1
           fi
 
-      # continue-on-error: stdlib CVE는 Go 버전 업그레이드 없이는 해소 불가.
-      # 결과는 Annotations에 표시됨.
+      # Reachable findings must be listed (id+module+package, non-expired) in
+      # security/govulncheck-exceptions.yaml or this step fails — see
+      # cmd/govulncheckgate. Do NOT reintroduce a blanket continue-on-error
+      # here: that previously masked 5 real reachable vulnerabilities for
+      # every CI run since this step was added.
       - name: govulncheck
-        continue-on-error: true
         run: |
+          set -euo pipefail
           go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck -tags "${{ env.BUILD_TAGS }}" ./...
+          govulncheck -tags "${{ env.BUILD_TAGS }}" -format json ./... > govulncheck.json
+          go run ./cmd/govulncheckgate -input govulncheck.json
+
+      - name: Upload govulncheck report
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: govulncheck-${{ github.run_id }}
+          path: govulncheck.json
+          retention-days: 14
 
   # ──────────────────────────────────────────────────────────────────
   # 5. kube-slint gate (churn suppression + reconcile regression check)

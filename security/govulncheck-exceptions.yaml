@@ -1,0 +1,24 @@
+# Accepted-risk exceptions for scripts/govulncheck-gate.sh.
+#
+# A call-graph-reachable finding from `govulncheck -format json` is allowed
+# through the CI gate ONLY if every field below matches AND `expires` is in
+# the future. Anything else (unlisted finding, module/package mismatch,
+# expired entry) fails CI — see scripts/govulncheck-gate.sh.
+exceptions:
+  - id: GO-2026-5932
+    module: golang.org/x/crypto
+    package: golang.org/x/crypto/openpgp
+    reason: >-
+      Upstream has no fix (x/crypto/openpgp is unmaintained and unsafe by
+      design). Reachable via github.com/containers/ocicrypt's PGP layer-
+      encryption keywrap (keywrap/pgp/keywrapper_gpg.go, no build tag,
+      unconditionally linked through go.podman.io/image/v5/copy ->
+      buildah.Push -> podbridge5.PushImage -> pkg/build/builder.go).
+      NodeVault never configures an encryption key on push, so this path
+      is linked but never actually invoked; govulncheck's static
+      reachability still flags it. No actionable fix until containers/
+      ocicrypt replaces its PGP keywrap dependency upstream. Re-check
+      whenever go.podman.io/image/v5 or containers/ocicrypt is bumped.
+    owner: "HeaInSeo"
+    expires: "2026-10-16"
+    tracking_issue: "https://github.com/HeaInSeo/NodeVault/issues/20"

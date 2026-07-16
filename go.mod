@@ -21,6 +21,7 @@ require (
 	github.com/HeaInSeo/sori v0.8.0-rc5
 	github.com/mattn/go-sqlite3 v1.14.45
 	go.podman.io/storage v1.63.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -179,7 +180,6 @@ require (
 	gopkg.in/evanphx/json-patch.v4 v4.12.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/klog/v2 v2.130.1 // indirect
 	k8s.io/kube-openapi v0.0.0-20250318190949-c8a335a9a2ff // indirect
 	k8s.io/utils v0.0.0-20250820121507-0af2bda4dd1d // indirect

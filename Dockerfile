@@ -6,7 +6,7 @@
 # vendor/ 디렉토리가 없으면 -mod=vendor 빌드가 실패한다.
 FROM quay.io/buildah/stable:latest AS builder
 
-ENV GO_VERSION=1.25.11
+ENV GO_VERSION=1.25.12
 RUN dnf install -y gcc && \
     curl -fsSL https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz \
     | tar -C /usr/local -xz

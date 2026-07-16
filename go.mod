@@ -1,6 +1,6 @@
 module github.com/HeaInSeo/NodeVault
 
-go 1.25.11
+go 1.25.12
 
 require google.golang.org/grpc v1.81.1
 

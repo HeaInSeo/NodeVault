@@ -35,13 +35,23 @@ Environment=KUBECONFIG=/opt/nodevault/kubeconfig
 Environment=NODEVAULT_REGISTRY_ADDR=harbor.lab.local
 
 # ── Harbor push 인증 ─────────────────────────────────────────────────────────
-# pkg/registryconfig's default auth file path (/run/containers/0/auth.json)
-# assumes UID 0; this unit runs as the unprivileged nodevault user (UID 975),
-# so that default never matched anything here and pushes failed with
-# "unauthorized" even after the registry address fix above. auth.json is
-# provisioned out-of-band at /opt/nodevault/auth.json (0600, owned by
-# nodevault:nodevault) from infra-lab's Harbor admin credentials — not
-# checked into this repo.
+# Two independent auth-file lookups exist in this process and neither
+# defaults to something valid here:
+#
+#   1. pkg/registryconfig.Credentials() (used by ORAS referrer push) reads
+#      REGISTRY_AUTH_FILE directly — set below, points at the persistent
+#      copy provisioned out-of-band at /opt/nodevault/auth.json (0600,
+#      owned by nodevault:nodevault, from infra-lab's Harbor admin
+#      credentials — not checked into this repo).
+#   2. podbridge5/Buildah's push does NOT read REGISTRY_AUTH_FILE at all —
+#      it goes through go.podman.io/image/v5/pkg/docker/config's own
+#      default resolution, which — since XDG_RUNTIME_DIR is set below for
+#      the storage fix — always resolves to
+#      $XDG_RUNTIME_DIR/containers/auth.json, i.e. /run/nodevault/containers/auth.json,
+#      never REGISTRY_AUTH_FILE. RuntimeDirectoryPreserve defaults to "no",
+#      so /run/nodevault is wiped on every restart — the ExecStartPre lines
+#      near XDG_RUNTIME_DIR below re-seed that path from the same
+#      persistent /opt/nodevault/auth.json on every start.
 Environment=REGISTRY_AUTH_FILE=/opt/nodevault/auth.json
 
 # ── reconcile 간격 (기본: fast=5m, slow=30m / 테스트 시 단축 가능) ──────────
@@ -65,6 +75,12 @@ RuntimeDirectory=nodevault
 RuntimeDirectoryMode=0700
 Environment=XDG_RUNTIME_DIR=/run/nodevault
 Environment=CONTAINERS_STORAGE_CONF=/opt/nodevault/storage.conf
+
+# Re-seed podbridge5/Buildah's auth file into the ephemeral runtime dir on
+# every start (see the Harbor push 인증 comment above for why this can't
+# just live at $XDG_RUNTIME_DIR/containers/auth.json permanently).
+ExecStartPre=/usr/bin/install -d -m 0700 /run/nodevault/containers
+ExecStartPre=/usr/bin/install -m 0600 /opt/nodevault/auth.json /run/nodevault/containers/auth.json
 
 # ── assets/ 경로 (index, catalog, policy) ────────────────────────────────────
 Environment=INDEX_DIR=/opt/nodevault/assets/index

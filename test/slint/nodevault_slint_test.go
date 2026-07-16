@@ -42,9 +42,12 @@ const (
 // TestNodeVaultSlintGate measures NodeVault's reconcile loop SLI over a 25-second window.
 //
 // Thresholds (churn gate):
-//   - reconcile_fast_delta >= 1  (loop ran at least once — liveness check)
-//   - reconcile_fast_delta <= 15 (no churn — at most ~5 ticks in 25s window)
-//   - reconcile_error_delta == 0 (no reconcile errors — regression check)
+//   - reconcile_fast_delta >= 1   (loop ran at least once — liveness check)
+//   - reconcile_fast_delta <= 15  (no churn — at most ~5 ticks in 25s window)
+//   - reconcile_error_delta == 0  (no reconcile errors — regression check)
+//   - reconcile_slow_delta == 0   (testSlowReconcile=1h never fires in a 25s window)
+//   - build_failure_delta == 0    (NODEVAULT_BUILD_BACKEND=disabled: no build is
+//     submitted during this window, so the failure counter must not move)
 func TestNodeVaultSlintGate(t *testing.T) {
 	binPath := os.Getenv("NODEVAULT_BIN")
 	if binPath == "" {
@@ -102,6 +105,8 @@ func TestNodeVaultSlintGate(t *testing.T) {
 	assertGE(t, results, "reconcile_fast_delta", 1)
 	assertLE(t, results, "reconcile_fast_delta", 15)
 	assertEQ(t, results, "reconcile_error_delta", 0)
+	assertEQ(t, results, "reconcile_slow_delta", 0)
+	assertEQ(t, results, "build_failure_delta", 0)
 }
 
 // nodevaultSpecs defines the SLI spec set for NodeVault's reconcile counters.

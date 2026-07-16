@@ -34,6 +34,16 @@ Environment=KUBECONFIG=/opt/nodevault/kubeconfig
 # HTTPS-only Cilium Gateway.
 Environment=NODEVAULT_REGISTRY_ADDR=harbor.lab.local
 
+# ── Harbor push 인증 ─────────────────────────────────────────────────────────
+# pkg/registryconfig's default auth file path (/run/containers/0/auth.json)
+# assumes UID 0; this unit runs as the unprivileged nodevault user (UID 975),
+# so that default never matched anything here and pushes failed with
+# "unauthorized" even after the registry address fix above. auth.json is
+# provisioned out-of-band at /opt/nodevault/auth.json (0600, owned by
+# nodevault:nodevault) from infra-lab's Harbor admin credentials — not
+# checked into this repo.
+Environment=REGISTRY_AUTH_FILE=/opt/nodevault/auth.json
+
 # ── reconcile 간격 (기본: fast=5m, slow=30m / 테스트 시 단축 가능) ──────────
 Environment=NODEVAULT_FAST_RECONCILE=30s
 Environment=NODEVAULT_SLOW_RECONCILE=10m

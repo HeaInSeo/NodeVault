@@ -581,7 +581,33 @@ func TestAppendToolImageRecord_Duplicate_Rejected(t *testing.T) {
 		t.Fatalf("first append: %v", err)
 	}
 	if err := s.AppendToolImageRecord(r); err == nil {
-		t.Fatal("expected error for duplicate ImageDigest")
+		t.Fatal("expected error for duplicate (ImageDigest, BuildID)")
+	}
+}
+
+// TestAppendToolImageRecord_SameDigestDifferentBuildID_BothRecorded guards a
+// reproducibility regression: a repeat build that reproduces the exact same
+// digest is itself evidence of reproducibility and must get its own record
+// instead of being silently dropped because some other BuildID already
+// claimed that ImageDigest.
+func TestAppendToolImageRecord_SameDigestDifferentBuildID_BothRecorded(t *testing.T) {
+	s := newStore(t)
+	first := index.ToolImageRecord{ImageDigest: "sha256:repro", BuildID: "build-a"}
+	second := index.ToolImageRecord{ImageDigest: "sha256:repro", BuildID: "build-b"}
+	if err := s.AppendToolImageRecord(first); err != nil {
+		t.Fatalf("first append: %v", err)
+	}
+	if err := s.AppendToolImageRecord(second); err != nil {
+		t.Fatalf("second append (same digest, different build_id): %v", err)
+	}
+
+	gotA, err := s.ListToolImageRecordsByBuildID("build-a")
+	if err != nil || len(gotA) != 1 {
+		t.Fatalf("ListToolImageRecordsByBuildID(build-a) = %v, %v", gotA, err)
+	}
+	gotB, err := s.ListToolImageRecordsByBuildID("build-b")
+	if err != nil || len(gotB) != 1 {
+		t.Fatalf("ListToolImageRecordsByBuildID(build-b) = %v, %v", gotB, err)
 	}
 }
 

@@ -428,7 +428,10 @@ func (s *Store) ListToolBuildRecordsByToolSpecDigest(toolSpecDigest string) ([]T
 // ── ToolImageRecord ───────────────────────────────────────────────────────────
 
 // AppendToolImageRecord adds a new image record to the index.
-// Returns an error if a record with the same ImageDigest already exists.
+// Uniqueness is (ImageDigest, BuildID), not ImageDigest alone: a repeat
+// build that reproduces the same digest is itself reproducibility
+// evidence and must get its own record, not be silently dropped. Returns
+// an error only if this exact BuildID already has a record for this digest.
 //
 //nolint:dupl,gocritic // dupl: same guard+append pattern, distinct types. gocritic: by value is intentional.
 func (s *Store) AppendToolImageRecord(r ToolImageRecord) error {
@@ -439,8 +442,8 @@ func (s *Store) AppendToolImageRecord(r ToolImageRecord) error {
 		return errors.New("index: ImageDigest must not be empty")
 	}
 	for i := range s.idx.ToolImageRecords {
-		if s.idx.ToolImageRecords[i].ImageDigest == r.ImageDigest {
-			return fmt.Errorf("index: tool image record %q already exists", r.ImageDigest)
+		if s.idx.ToolImageRecords[i].ImageDigest == r.ImageDigest && s.idx.ToolImageRecords[i].BuildID == r.BuildID {
+			return fmt.Errorf("index: tool image record %q (build_id=%q) already exists", r.ImageDigest, r.BuildID)
 		}
 	}
 	if r.PushedAt.IsZero() {

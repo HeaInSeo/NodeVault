@@ -199,6 +199,20 @@ func validateCondaPinsInEnvironmentSpec(spec string) error {
 	return nil
 }
 
+// condaInstallValueFlags are conda/mamba/micromamba install flags that
+// consume the following token as their value (not a package spec). Missing
+// one here means its value gets misclassified as a bare package name and
+// rejected — e.g. NodeKit's micromamba recipes always render
+// "RUN micromamba install -n base -y <packages>" (micromamba requires an
+// explicit target env; see NodeKit's RecipeRenderer.RenderCondaLike), so
+// "-n" MUST be in this set or every micromamba build is rejected on "base".
+var condaInstallValueFlags = map[string]bool{
+	"-c": true, "--channel": true,
+	"-n": true, "--name": true,
+	"-p": true, "--prefix": true,
+	"--clone": true,
+}
+
 func validateCondaPinsInRunInstruction(rest string) error {
 	fields := strings.Fields(rest)
 	for i := 0; i < len(fields); i++ {
@@ -216,7 +230,7 @@ func validateCondaPinsInRunInstruction(rest string) error {
 			if isShellSeparator(token) {
 				break
 			}
-			if token == "-c" || token == "--channel" {
+			if condaInstallValueFlags[token] {
 				j++
 				continue
 			}

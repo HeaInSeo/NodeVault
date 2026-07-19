@@ -169,6 +169,41 @@ func TestValidateBuildRequest_RejectsBareCondaPackageNameInEnvironmentSpec(t *te
 	}
 }
 
+// TestValidateBuildRequest_MicromambaNamedEnvInstall_Passes is a regression
+// guard: fixing the bare-package bypass above (removing the "no =, skip"
+// check) initially broke NodeKit's real micromamba output, because "-n"
+// wasn't in the value-consuming-flag skip list — its value ("base") was
+// misclassified as an unpinned bare package and rejected. Mirrors NodeKit's
+// RecipeRenderer.RenderCondaLike exactly: micromamba requires an explicit
+// target env ("-n base") since it doesn't auto-activate one for plain RUN
+// steps, per NodeKit's own comment at
+// src/Authoring/Recipes/RecipeRenderer.cs:101-104.
+func TestValidateBuildRequest_MicromambaNamedEnvInstall_Passes(t *testing.T) {
+	req := &nfv1.BuildRequest{
+		ToolName: "bwa",
+		DockerfileContent: "FROM alpine:3.20@" + validDigestA +
+			"\nRUN micromamba install -n base -y bioconda::bwa=0.7.17=h5bf99c6_8",
+	}
+	if err := ValidateBuildRequest(req); err != nil {
+		t.Fatalf("ValidateBuildRequest: %v (micromamba's required \"-n base\" env flag must not be misread as a bare package)", err)
+	}
+}
+
+// TestValidateBuildRequest_CondaNamedEnvInstall_RejectsBarePackage confirms
+// the "-n"/"--name" fix doesn't just skip validation for that install line
+// entirely — a genuinely unpinned package alongside "-n base" must still be
+// rejected.
+func TestValidateBuildRequest_CondaNamedEnvInstall_RejectsBarePackage(t *testing.T) {
+	req := &nfv1.BuildRequest{
+		ToolName:          "bwa",
+		DockerfileContent: "FROM alpine:3.20@" + validDigestA + "\nRUN conda install -n base -y bwa",
+	}
+	err := ValidateBuildRequest(req)
+	if err == nil || !strings.Contains(err.Error(), "name=version=build") {
+		t.Fatalf("ValidateBuildRequest error got %v, want rejection of bare (unpinned) package name", err)
+	}
+}
+
 // TestValidateBuildRequest_EnvironmentSpecMetadataLines_NotTreatedAsPackages
 // guards the fix for the bare-package bypass above: environment_spec's own
 // non-dependency YAML lines (name:, channels: section header, a "- pip:"

@@ -139,6 +139,57 @@ func TestValidateBuildRequest_AcceptsEnvironmentSpecWithBuildString(t *testing.T
 	}
 }
 
+// TestValidateBuildRequest_RejectsBareCondaPackageName guards against a
+// completely unpinned package (no "=" at all) bypassing the pin policy —
+// previously validateCondaPinsInRunInstruction skipped any token without an
+// "=", so "RUN conda install -y bwa" sailed through undetected.
+func TestValidateBuildRequest_RejectsBareCondaPackageName(t *testing.T) {
+	req := &nfv1.BuildRequest{
+		ToolName:          "bwa",
+		DockerfileContent: "FROM alpine:3.20@" + validDigestA + "\nRUN conda install -y bwa",
+	}
+	err := ValidateBuildRequest(req)
+	if err == nil || !strings.Contains(err.Error(), "name=version=build") {
+		t.Fatalf("ValidateBuildRequest error got %v, want rejection of bare (unpinned) package name", err)
+	}
+}
+
+// TestValidateBuildRequest_RejectsBareCondaPackageNameInEnvironmentSpec is the
+// same bare-package bypass as above, via environment_spec's YAML dependency
+// list instead of a RUN instruction.
+func TestValidateBuildRequest_RejectsBareCondaPackageNameInEnvironmentSpec(t *testing.T) {
+	req := &nfv1.BuildRequest{
+		ToolName:          "bwa",
+		DockerfileContent: "FROM alpine:3.20@" + validDigestA + "\nRUN true",
+		EnvironmentSpec:   "dependencies:\n  - bwa\n",
+	}
+	err := ValidateBuildRequest(req)
+	if err == nil || !strings.Contains(err.Error(), "environment_spec") {
+		t.Fatalf("ValidateBuildRequest error got %v, want rejection of bare (unpinned) package name", err)
+	}
+}
+
+// TestValidateBuildRequest_EnvironmentSpecMetadataLines_NotTreatedAsPackages
+// guards the fix for the bare-package bypass above: environment_spec's own
+// non-dependency YAML lines (name:, channels: section header, a "- pip:"
+// nested section header) must not be misclassified as unpinned package specs.
+func TestValidateBuildRequest_EnvironmentSpecMetadataLines_NotTreatedAsPackages(t *testing.T) {
+	req := &nfv1.BuildRequest{
+		ToolName:          "bwa",
+		DockerfileContent: "FROM alpine:3.20@" + validDigestA + "\nRUN true",
+		EnvironmentSpec: "name: bwa-env\n" +
+			"channels:\n" +
+			"  - bioconda\n" +
+			"dependencies:\n" +
+			"  - bioconda::bwa=0.7.17=h5bf99c6_8\n" +
+			"  - pip:\n" +
+			"    - some-pip-tool==1.0\n",
+	}
+	if err := ValidateBuildRequest(req); err != nil {
+		t.Fatalf("ValidateBuildRequest: %v (metadata/section-header lines must not be rejected as bare packages)", err)
+	}
+}
+
 // ─── final-stage risky runtime tool policy (Sprint 9, AC-SB-01/02/03 partial) ─
 
 func TestValidateBuildRequest_FinalStageRiskyTool_Rejected(t *testing.T) {

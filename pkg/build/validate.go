@@ -161,15 +161,35 @@ func shellSegments(rest string) []string {
 	return segments
 }
 
+// validateCondaPinsInEnvironmentSpec pin-validates only list items under a
+// top-level "dependencies:" section of a conda environment.yml-shaped spec.
+// This is a flat, section-name-tracking pass, not a real YAML parser: it
+// does not handle multi-document specs or anchors/aliases, but conda
+// environment.yml files don't use those either.
 func validateCondaPinsInEnvironmentSpec(spec string) error {
+	currentSection := ""
 	for _, raw := range strings.Split(spec, "\n") {
 		line := strings.TrimSpace(raw)
-		line = strings.TrimPrefix(line, "- ")
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasSuffix(line, ":") {
+		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		token := firstToken(line)
-		if token == "" || !strings.Contains(token, "=") {
+		trimmed := strings.TrimPrefix(line, "- ")
+		if trimmed == line {
+			// Not a list item — a top-level key, e.g. "name: bwa-env" or the
+			// section header "dependencies:". Track which section follows.
+			currentSection = strings.TrimSuffix(firstToken(line), ":")
+			continue
+		}
+		if currentSection != "dependencies" {
+			// e.g. a channel name under "channels:" — not a package spec.
+			continue
+		}
+		if strings.HasSuffix(trimmed, ":") {
+			// A nested section header under the list, e.g. "- pip:".
+			continue
+		}
+		token := firstToken(trimmed)
+		if token == "" {
 			continue
 		}
 		if err := validateCondaPackagePin(token); err != nil {
@@ -200,7 +220,7 @@ func validateCondaPinsInRunInstruction(rest string) error {
 				j++
 				continue
 			}
-			if strings.HasPrefix(token, "-") || !strings.Contains(token, "=") {
+			if strings.HasPrefix(token, "-") {
 				continue
 			}
 			if err := validateCondaPackagePin(token); err != nil {

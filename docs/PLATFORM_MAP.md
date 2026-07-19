@@ -1,8 +1,8 @@
 # Platform Map
 
-버전: 1.1  
+버전: 1.2  
 작성일: 2026-04-18  
-갱신일: 2026-06-17  
+갱신일: 2026-07-19 (spec referrer TODO-07 완료 반영; Harbor 주소 harbor.lab.local로 수정 — 그 외 항목은 미검증 상태로 남아 있을 수 있음)  
 목적: **개발 세션 시작 시 이 파일 하나로 전체 플랫폼 맥락 파악**
 
 → 전체 일정/작업 큐: [PLATFORM_SCHEDULE.md](PLATFORM_SCHEDULE.md)
@@ -31,9 +31,9 @@
     └── pkg/catalogrest  Catalog/Validation REST
     │ 이미지 push / pull
     ▼
-[Harbor]  ── OCI 레지스트리 (harbor.10.113.24.96.nip.io)
+[Harbor]  ── OCI 레지스트리 (harbor.lab.local)
     └── library/<tool>:latest
-        └── [spec referrer] ← TODO-07 미구현
+        └── [spec referrer] ← TODO-07 구현 완료 (pkg/oras, PLATFORM_SCHEDULE.md 참조)
 
 [DockGuard]  ── OPA/Rego 정책 (.wasm 번들)
     └── NodeKit WasmPolicyChecker가 로컬 실행
@@ -95,8 +95,8 @@ ip route add 10.113.24.96/32 via 10.113.24.254
 
 3. 등록
    ├── pkg/catalog: CAS JSON 저장 (assets/catalog/{casHash}.tooldefinition)
-   ├── pkg/index: vault-index.json append (lifecycle_phase=Active, integrity_health=Partial)
-   └── [TODO-07] pkg/oras: spec referrer push → Harbor ← 현재 미구현
+   ├── pkg/index: vault-index.json append (lifecycle_phase=Active, integrity_health=Partial → reconcile 성공 시 Healthy)
+   └── pkg/oras: spec referrer push → Harbor (TODO-07 구현 완료)
 
 4. BuildEvent 스트림 → NodeKit 빌드 로그 표시
 
@@ -150,7 +150,6 @@ Deleted       혼합     Unreachable
 
 | 항목 | 위치 | TODO | 우선순위 |
 |------|------|------|---------|
-| OCI spec referrer push (sori 통합) | NodeVault `pkg/build` + sori | TODO-07 | **P1 — 지금 시작 가능** |
 | NodeKit compiler warning 276개 | NodeKit CA1062 | — | **즉시 수정** |
 | NodePalette 별도 바이너리 분리 | NodeVault `cmd/palette/` | TODO-10 | P2 (TODO-09b 이후) |
 | Retract/Delete lifecycle | NodeVault | TODO-14 | P4 |
@@ -180,7 +179,6 @@ Deleted       혼합     Unreachable
 | 제약 | 내용 |
 |------|------|
 | NodeKit compiler warning | 276개 (CA1062). CLAUDE.md §8 위반 상태. 다음 작업 전 수정 필요 |
-| spec referrer 없음 | 현재 등록된 모든 툴 integrity_health = Partial (TODO-07 미완료) |
 | GrpcToolRegistryClient | NodeKit에 존재하나 MainWindow 미사용 레거시 — 향후 삭제 예정 |
 
 ---

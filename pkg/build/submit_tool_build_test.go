@@ -72,6 +72,24 @@ func TestBuildRequestFromResolved_DeserializesAllowRuntimeTools(t *testing.T) {
 	}
 }
 
+// TestBuildRequestFromResolved_UnknownField_Rejected guards against a raw_spec
+// typo or contract-drift field silently being ignored: NodeKit's only
+// producer (ToolSpecRawSpecFactory.Build) emits only real BuildRequest
+// fields, so this should never fire in practice — but a typo (e.g.
+// "dockerfile_kontent") must surface a clear decode error instead of
+// silently producing a BuildRequest with an empty DockerfileContent.
+func TestBuildRequestFromResolved_UnknownField_Rejected(t *testing.T) {
+	spec := index.ResolvedToolSpec{
+		ToolSpecDigest: "spec-unknown-1",
+		ToolName:       "bwa",
+		RawSpec:        `{"tool_name":"bwa","dockerfile_kontent":"FROM alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nRUN true"}`,
+	}
+	_, err := buildRequestFromResolved("build-unknown-1", spec)
+	if err == nil {
+		t.Fatal("buildRequestFromResolved: expected an error for an unrecognized raw_spec field, got nil")
+	}
+}
+
 func TestSubmitToolBuild_CreatesRequestedBuildState(t *testing.T) {
 	svc := newSubmitTestService(t)
 

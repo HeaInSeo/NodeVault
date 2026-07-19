@@ -1,6 +1,7 @@
 package build
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -150,7 +151,9 @@ func (s *Service) CancelToolBuild(
 //nolint:gocritic // hugeParam: by-value snapshot is intentional — read-only helper, no pointer lifetime risk.
 func buildRequestFromResolved(buildID string, spec index.ResolvedToolSpec) (*nfv1.BuildRequest, error) {
 	var req nfv1.BuildRequest
-	if err := json.Unmarshal([]byte(spec.RawSpec), &req); err != nil {
+	dec := json.NewDecoder(bytes.NewReader([]byte(spec.RawSpec)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		return nil, fmt.Errorf("decode raw_spec JSON: %w", err)
 	}
 	if req.GetDockerfileContent() == "" {

@@ -1,8 +1,8 @@
 # Platform Map
 
-버전: 1.2  
+버전: 1.3  
 작성일: 2026-04-18  
-갱신일: 2026-07-19 (spec referrer TODO-07 완료 반영; Harbor 주소 harbor.lab.local로 수정 — 그 외 항목은 미검증 상태로 남아 있을 수 있음)  
+갱신일: 2026-07-19 (spec referrer TODO-07 완료 반영; Harbor 주소 harbor.lab.local로 수정; NodeKit gRPC 클라이언트를 GrpcToolSpecClient로 수정(issue #25) — 그 외 항목은 미검증 상태로 남아 있을 수 있음)  
 목적: **개발 세션 시작 시 이 파일 하나로 전체 플랫폼 맥락 파악**
 
 → 전체 일정/작업 큐: [PLATFORM_SCHEDULE.md](PLATFORM_SCHEDULE.md)
@@ -134,7 +134,7 @@ Deleted       혼합     Unreachable
 | 기능 | 위치 |
 |------|------|
 | L1 정적 검증 + DockGuard 정책 | NodeKit `src/Validation/`, `src/Policy/` |
-| BuildRequest gRPC 전송 | NodeKit `GrpcBuildClient` |
+| ToolSpec gRPC 전송 (ResolveToolSpec/SubmitToolBuild/WatchToolBuild) | NodeKit `GrpcToolSpecClient` |
 | L2 이미지 빌드 (podbridge5) | NodeVault `pkg/build` |
 | L3/L4 K8s dry-run / smoke | NodeVault `pkg/validate` |
 | CAS 파일 저장 | NodeVault `pkg/catalog` |

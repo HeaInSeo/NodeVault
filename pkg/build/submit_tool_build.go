@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"time"
 
@@ -156,6 +157,9 @@ func buildRequestFromResolved(buildID string, spec index.ResolvedToolSpec) (*nfv
 	if err := dec.Decode(&req); err != nil {
 		return nil, fmt.Errorf("decode raw_spec JSON: %w", err)
 	}
+	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("decode raw_spec JSON: unexpected trailing content after the first JSON value")
+	}
 	if req.GetDockerfileContent() == "" {
 		return nil, errors.New("dockerfile_content is required")
 	}
@@ -204,9 +208,11 @@ func (s *Service) runSubmittedBuild(
 		s.activeMu.Unlock()
 	}()
 	if _, err := s.buildState.Transition(rec.BuildID, buildstate.StatusResolving, "", time.Now().UTC()); err != nil {
+		s.abandonSubmittedBuild(rec, "resolving", err)
 		return
 	}
 	if _, err := s.buildState.Transition(rec.BuildID, buildstate.StatusBuilding, "", time.Now().UTC()); err != nil {
+		s.abandonSubmittedBuild(rec, "building", err)
 		return
 	}
 	if s.builder == nil {
@@ -220,6 +226,7 @@ func (s *Service) runSubmittedBuild(
 		return
 	}
 	if _, err := s.buildState.Transition(rec.BuildID, buildstate.StatusPushing, "", time.Now().UTC()); err != nil {
+		s.abandonSubmittedBuild(rec, "pushing", err)
 		return
 	}
 	if _, err := s.buildState.SetArtifact(rec.BuildID, destination, digest, time.Now().UTC()); err != nil {
@@ -241,6 +248,24 @@ func (s *Service) failSubmittedBuild(rec buildstate.Record, buildErr error) {
 	}
 	s.recordBuildFailure(rec.BuildID, rec.RequestedAt, buildErr)
 	_, _ = s.buildState.Transition(rec.BuildID, buildstate.StatusFailed, buildErr.Error(), time.Now().UTC())
+}
+
+// abandonSubmittedBuild handles the case where buildState.Transition itself
+// failed (e.g. a local SQLite write error) — the build cannot be moved to a
+// terminal state through the same store that just failed to write, so a
+// WatchToolBuild caller would otherwise hang with no further events forever.
+// This makes the failure loud (slog.Error, unlike the best-effort slog.Warn
+// used elsewhere for non-critical writes) and records it in pkg/index — a
+// separate store from buildstate — so there is at least one durable,
+// queryable record of the failure even though buildstate's own record is
+// stuck at whatever status it last reached.
+//
+//nolint:gocritic // hugeParam: by-value snapshot is intentional — read-only helper, no pointer needed.
+func (s *Service) abandonSubmittedBuild(rec buildstate.Record, atStage string, transitionErr error) {
+	slog.Error("buildstate transition failed; build abandoned at this stage and will not reach a terminal state",
+		"build_id", rec.BuildID, "stage", atStage, "err", transitionErr)
+	s.recordBuildFailure(rec.BuildID, rec.RequestedAt,
+		fmt.Errorf("buildstate transition to %s failed: %w", atStage, transitionErr))
 }
 
 //nolint:gocritic // hugeParam: by-value snapshot is intentional — read-only helper, no pointer lifetime risk.

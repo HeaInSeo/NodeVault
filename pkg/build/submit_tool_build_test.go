@@ -90,6 +90,23 @@ func TestBuildRequestFromResolved_UnknownField_Rejected(t *testing.T) {
 	}
 }
 
+// TestBuildRequestFromResolved_TrailingContent_Rejected guards against
+// json.Decoder only reading the first JSON value in a stream: a raw_spec
+// with trailing content after a well-formed first object must be rejected
+// rather than silently decoding just the first value and ignoring the rest.
+func TestBuildRequestFromResolved_TrailingContent_Rejected(t *testing.T) {
+	spec := index.ResolvedToolSpec{
+		ToolSpecDigest: "spec-trailing-1",
+		ToolName:       "bwa",
+		RawSpec: `{"tool_name":"bwa","dockerfile_content":"FROM alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nRUN true"}` +
+			` {"junk":"trailing"}`,
+	}
+	_, err := buildRequestFromResolved("build-trailing-1", spec)
+	if err == nil {
+		t.Fatal("buildRequestFromResolved: expected an error for trailing content after the first JSON value, got nil")
+	}
+}
+
 func TestSubmitToolBuild_CreatesRequestedBuildState(t *testing.T) {
 	svc := newSubmitTestService(t)
 
@@ -337,5 +354,28 @@ func TestSubmitToolBuild_IdempotentRetry(t *testing.T) {
 	}
 	if first.GetBuildId() != second.GetBuildId() {
 		t.Fatalf("build ids differ: %q vs %q", first.GetBuildId(), second.GetBuildId())
+	}
+}
+
+// TestAbandonSubmittedBuild_RecordsDurableFailure guards against a
+// buildstate.Transition failure leaving a build in a ghost state with no
+// record anywhere: even though buildstate's own record is stuck (the same
+// store that just failed to write), pkg/index — a separate store — must
+// still end up with a failure record for the build.
+func TestAbandonSubmittedBuild_RecordsDurableFailure(t *testing.T) {
+	svc := newSubmitTestService(t)
+	rec := buildstate.Record{BuildID: "build-abandoned-1", RequestedAt: time.Now().UTC()}
+
+	svc.abandonSubmittedBuild(rec, "resolving", errors.New("simulated buildstate write failure"))
+
+	got, err := svc.indexStore.GetToolBuildRecordByBuildID("build-abandoned-1")
+	if err != nil {
+		t.Fatalf("GetToolBuildRecordByBuildID: %v", err)
+	}
+	if got.Success {
+		t.Error("ToolBuildRecord.Success = true, want false")
+	}
+	if got.FailureReason == "" {
+		t.Error("ToolBuildRecord.FailureReason is empty, want a reason mentioning the stage and underlying error")
 	}
 }

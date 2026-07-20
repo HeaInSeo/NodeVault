@@ -186,11 +186,10 @@ spec:
             - name: MAMBA_PKG_CACHE
               value: "/var/cache/nodevault/packages/conda"
 
-            # Harbor layer cache for --cache-from/--cache-to (optional).
-            # Set to e.g. "harbor.lab.local/nodevault-cache/layers:latest" to enable.
-            # Leave empty (default) to build without a remote layer cache.
-            # - name: NODEVAULT_BUILD_CACHE_REF
-            #   value: "harbor.lab.local/nodevault-cache/layers:latest"
+            # Harbor layer cache for --cache-from/--cache-to.
+            # Leave empty/commented out to build without a remote layer cache.
+            - name: NODEVAULT_BUILD_CACHE_REF
+              value: "harbor.lab.local/nodevault-cache/layers:latest"
 
           securityContext:
             privileged: false

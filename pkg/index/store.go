@@ -467,6 +467,31 @@ func (s *Store) GetToolImageRecordByDigest(imageDigest string) (ToolImageRecord,
 	return ToolImageRecord{}, fmt.Errorf("%w: image_digest=%q", ErrNotFound, imageDigest)
 }
 
+// GetLatestToolImageRecordByRef returns the most recently pushed ToolImageRecord
+// whose ImageRef equals ref (multiple builds can share the same tag — e.g. a
+// version tag reused across rebuilds, or :latest across any tool version).
+// Returns ErrNotFound if no record has this ref.
+func (s *Store) GetLatestToolImageRecordByRef(ref string) (ToolImageRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var latest ToolImageRecord
+	found := false
+	for i := range s.idx.ToolImageRecords {
+		if s.idx.ToolImageRecords[i].ImageRef != ref {
+			continue
+		}
+		if !found || s.idx.ToolImageRecords[i].PushedAt.After(latest.PushedAt) {
+			latest = s.idx.ToolImageRecords[i]
+			found = true
+		}
+	}
+	if !found {
+		return ToolImageRecord{}, fmt.Errorf("%w: image_ref=%q", ErrNotFound, ref)
+	}
+	return latest, nil
+}
+
 // ListToolImageRecordsByBuildID returns all image records for the given BuildID.
 // Returns an empty slice (not an error) if none match.
 func (s *Store) ListToolImageRecordsByBuildID(buildID string) ([]ToolImageRecord, error) {

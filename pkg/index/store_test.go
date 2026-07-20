@@ -611,6 +611,39 @@ func TestAppendToolImageRecord_SameDigestDifferentBuildID_BothRecorded(t *testin
 	}
 }
 
+// TestGetLatestToolImageRecordByRef_ReturnsMostRecent guards the #27 tag-
+// reassignment-detection path: when the same ImageRef (e.g. a reused
+// version tag) has multiple records — a rebuild moved it to a new digest —
+// the most recently pushed one must win.
+func TestGetLatestToolImageRecordByRef_ReturnsMostRecent(t *testing.T) {
+	s := newStore(t)
+	const ref = "harbor.example.com/library/bwa:0.7.17"
+	older := index.ToolImageRecord{ImageDigest: "sha256:older", ImageRef: ref, BuildID: "build-a", PushedAt: time.Unix(100, 0).UTC()}
+	newer := index.ToolImageRecord{ImageDigest: "sha256:newer", ImageRef: ref, BuildID: "build-b", PushedAt: time.Unix(200, 0).UTC()}
+	if err := s.AppendToolImageRecord(older); err != nil {
+		t.Fatalf("append older: %v", err)
+	}
+	if err := s.AppendToolImageRecord(newer); err != nil {
+		t.Fatalf("append newer: %v", err)
+	}
+
+	got, err := s.GetLatestToolImageRecordByRef(ref)
+	if err != nil {
+		t.Fatalf("GetLatestToolImageRecordByRef: %v", err)
+	}
+	if got.ImageDigest != "sha256:newer" {
+		t.Errorf("ImageDigest = %q, want sha256:newer (the more recently pushed record)", got.ImageDigest)
+	}
+}
+
+func TestGetLatestToolImageRecordByRef_NotFound(t *testing.T) {
+	s := newStore(t)
+	_, err := s.GetLatestToolImageRecordByRef("no/such:ref")
+	if !errors.Is(err, index.ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
 func TestGetToolImageRecordByDigest_NotFound(t *testing.T) {
 	s := newStore(t)
 	_, err := s.GetToolImageRecordByDigest("nonexistent")

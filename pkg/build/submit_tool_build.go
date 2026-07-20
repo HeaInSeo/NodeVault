@@ -219,12 +219,13 @@ func (s *Service) runSubmittedBuild(
 		s.failSubmittedBuild(rec, errors.New("build backend unavailable"))
 		return
 	}
-	destination := fmt.Sprintf("%s/library/%s:latest", registryAddr(), sanitizeName(req.GetToolName()))
+	destination, isVersioned := primaryBuildDestination(req.GetToolName(), req.GetVersion())
 	_, digest, layerCacheHit, err := s.builder.Build(ctx, req.GetDockerfileContent(), destination)
 	if err != nil {
 		s.failSubmittedBuild(rec, err)
 		return
 	}
+	s.warnIfTagReassigned(destination, digest)
 	if _, err := s.buildState.Transition(rec.BuildID, buildstate.StatusPushing, "", time.Now().UTC()); err != nil {
 		s.abandonSubmittedBuild(rec, "pushing", err)
 		return
@@ -235,6 +236,9 @@ func (s *Service) runSubmittedBuild(
 	s.recordBuildSuccess(rec.BuildID, rec.RequestedAt, digest, destination, layerCacheHit)
 
 	logFn := func(msg string) { slog.Info("submitted build", "build_id", rec.BuildID, "msg", msg) }
+	if isVersioned {
+		s.pushLatestAlias(ctx, destination, req.GetToolName(), logFn)
+	}
 	s.postBuildRegistration(ctx, req, destination, digest, logFn)
 
 	_, _ = s.buildState.Transition(rec.BuildID, buildstate.StatusSucceeded, "", time.Now().UTC())

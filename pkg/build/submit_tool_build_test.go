@@ -240,6 +240,10 @@ func (b *cancelableBuilder) Build(
 	return "", "", false, ctx.Err()
 }
 
+func (*cancelableBuilder) PushTag(_ context.Context, _, _ string) (digest string, err error) {
+	return "", nil
+}
+
 func (*cancelableBuilder) Close() error { return nil }
 
 func TestCancelToolBuild_MarksInterrupted(t *testing.T) {
@@ -292,6 +296,10 @@ func (b *subprocessBuilder) Build(
 	defer close(b.exited)
 	<-ctx.Done()
 	return "", "", false, ctx.Err()
+}
+
+func (*subprocessBuilder) PushTag(_ context.Context, _, _ string) (digest string, err error) {
+	return "", nil
 }
 
 func (*subprocessBuilder) Close() error { return nil }

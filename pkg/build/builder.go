@@ -30,6 +30,13 @@ type Builder interface {
 	Build(
 		ctx context.Context, dockerfileContent, outputRef string,
 	) (imageID, digest string, layerCacheHit bool, err error)
+	// PushTag pushes the already-built local image referenced by localRef to
+	// an additional destination tag, without rebuilding — used to also push
+	// a version-pinned tag alongside Build's primary :latest push (see #27:
+	// a tag-based pull of :latest could otherwise silently return a
+	// different build than intended; NodeVault's own tracking is
+	// digest/casHash-keyed and was never affected by this).
+	PushTag(ctx context.Context, localRef, destination string) (digest string, err error)
 	Close() error
 }
 
@@ -45,6 +52,10 @@ func (disabledBuilder) Build(
 	_ context.Context, _, _ string,
 ) (imageID, digest string, layerCacheHit bool, err error) {
 	return "", "", false, ErrBuildBackendDisabled
+}
+
+func (disabledBuilder) PushTag(_ context.Context, _, _ string) (digest string, err error) {
+	return "", ErrBuildBackendDisabled
 }
 
 func (disabledBuilder) Close() error { return nil }
@@ -120,6 +131,18 @@ func (b *podbridge5Builder) Build(
 		return "", "", layerCacheHit, fmt.Errorf("push image: %w", err)
 	}
 	return imageID, remoteDigest, layerCacheHit, nil
+}
+
+// PushTag pushes the already-built local image referenced by localRef (the
+// outputRef a prior Build call used) to an additional destination, without
+// rebuilding. The two tags point at the same content, so the returned
+// digest is expected to match Build's.
+func (b *podbridge5Builder) PushTag(ctx context.Context, localRef, destination string) (string, error) {
+	digest, err := podbridge5.PushImage(ctx, b.store, localRef, destination)
+	if err != nil {
+		return "", fmt.Errorf("push additional tag: %w", err)
+	}
+	return digest, nil
 }
 
 // detectLayerCacheHit reports whether a captured Buildah build log shows at

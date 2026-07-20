@@ -59,12 +59,23 @@ type mockBuilder struct {
 	digest        string
 	layerCacheHit bool
 	err           error
+
+	pushTagErr   error
+	pushTagCalls []string // destinations passed to PushTag, in call order
 }
 
 func (m *mockBuilder) Build(
 	_ context.Context, _, _ string,
 ) (imageID, digest string, layerCacheHit bool, err error) {
 	return m.imageID, m.digest, m.layerCacheHit, m.err
+}
+
+func (m *mockBuilder) PushTag(_ context.Context, _, destination string) (digest string, err error) {
+	m.pushTagCalls = append(m.pushTagCalls, destination)
+	if m.pushTagErr != nil {
+		return "", m.pushTagErr
+	}
+	return m.digest, nil
 }
 
 func (m *mockBuilder) Close() error {
@@ -245,6 +256,12 @@ func (c *countCallBuilder) Build(
 ) (imageID, digest string, layerCacheHit bool, err error) {
 	*c.calls++
 	return c.inner.Build(ctx, dockerfile, outputRef)
+}
+
+func (c *countCallBuilder) PushTag(
+	ctx context.Context, localRef, destination string,
+) (digest string, err error) {
+	return c.inner.PushTag(ctx, localRef, destination)
 }
 
 func (c *countCallBuilder) Close() error { return c.inner.Close() }
@@ -534,5 +551,179 @@ func TestDisabledBuilder_Close(t *testing.T) {
 	b := disabledBuilder{}
 	if err := b.Close(); err != nil {
 		t.Errorf("Close should return nil, got %v", err)
+	}
+}
+
+// ─── versioned tagging (#27) ──────────────────────────────────────────────────
+
+func TestSanitizeTag_PreservesAlreadySafeVersions(t *testing.T) {
+	for _, v := range []string{"0.7.17", "1.2.3-r1", "2026.07"} {
+		if got := sanitizeTag(v); got != v {
+			t.Errorf("sanitizeTag(%q) = %q, want unchanged", v, got)
+		}
+	}
+}
+
+// TestSanitizeTag_DifferentInputsNeverCollide guards the exact scenario
+// flagged in review: naive character substitution alone would map both
+// "1.0+cuda" and "1.0/cuda" to "1.0-cuda", silently conflating two
+// different versions under one tag.
+func TestSanitizeTag_DifferentInputsNeverCollide(t *testing.T) {
+	inputs := []string{"1.0+cuda", "1.0/cuda", "v1.0+cuda/12", "1.0 alpha", "../../../latest"}
+	seen := make(map[string]string, len(inputs))
+	for _, in := range inputs {
+		got := sanitizeTag(in)
+		if got == "" {
+			t.Errorf("sanitizeTag(%q) = \"\", want a non-empty tag", in)
+			continue
+		}
+		if prior, ok := seen[got]; ok {
+			t.Errorf("sanitizeTag collision: %q and %q both produced %q", prior, in, got)
+		}
+		seen[got] = in
+	}
+}
+
+func TestSanitizeTag_EmptyInput(t *testing.T) {
+	if got := sanitizeTag(""); got != "" {
+		t.Errorf("sanitizeTag(\"\") = %q, want \"\"", got)
+	}
+}
+
+func TestPrimaryBuildDestination_UsesVersionWhenAvailable(t *testing.T) {
+	dest, isVersioned := primaryBuildDestination("bwa", "0.7.17")
+	if !isVersioned {
+		t.Fatal("isVersioned = false, want true")
+	}
+	if !strings.HasSuffix(dest, ":0.7.17") {
+		t.Errorf("destination = %q, want suffix :0.7.17", dest)
+	}
+}
+
+func TestPrimaryBuildDestination_FallsBackToLatestWhenVersionEmpty(t *testing.T) {
+	dest, isVersioned := primaryBuildDestination("bwa", "")
+	if isVersioned {
+		t.Fatal("isVersioned = true, want false")
+	}
+	if !strings.HasSuffix(dest, ":latest") {
+		t.Errorf("destination = %q, want suffix :latest", dest)
+	}
+}
+
+// TestBuildAndRegister_VersionedBuild_PushesLatestAlias verifies the primary
+// build/push targets the version-pinned tag, and :latest is pushed
+// separately as a best-effort alias — the inverse of the original (broken)
+// design where every build only ever pushed :latest.
+func TestBuildAndRegister_VersionedBuild_PushesLatestAlias(t *testing.T) {
+	builder := &mockBuilder{digest: "sha256:versioned"}
+	svc := &Service{builder: builder}
+	stream := newFakeStream()
+	req := &nfv1.BuildRequest{
+		RequestId:         "req-ver-1",
+		ToolName:          "bwa",
+		Version:           "0.7.17",
+		DockerfileContent: validPolicyDockerfile,
+	}
+
+	if err := svc.BuildAndRegister(req, stream); err != nil {
+		t.Fatalf("BuildAndRegister: %v", err)
+	}
+
+	var pushedDigest string
+	for _, ev := range stream.events {
+		if ev.Kind == nfv1.BuildEventKind_BUILD_EVENT_KIND_JOB_CREATED {
+			if !strings.Contains(ev.Message, ":0.7.17") {
+				t.Errorf("JOB_CREATED message = %q, want the version-pinned destination", ev.Message)
+			}
+		}
+		if ev.Kind == nfv1.BuildEventKind_BUILD_EVENT_KIND_DIGEST_ACQUIRED {
+			pushedDigest = ev.Digest
+		}
+	}
+	if pushedDigest != "sha256:versioned" {
+		t.Errorf("DIGEST_ACQUIRED digest = %q", pushedDigest)
+	}
+	if len(builder.pushTagCalls) != 1 || !strings.HasSuffix(builder.pushTagCalls[0], ":latest") {
+		t.Errorf("PushTag calls = %v, want exactly one call to a :latest destination", builder.pushTagCalls)
+	}
+}
+
+// TestBuildAndRegister_NoVersion_NoLatestAliasPush verifies that when no
+// version is available, Build's primary destination is already :latest, so
+// no separate PushTag call happens (nothing to alias).
+func TestBuildAndRegister_NoVersion_NoLatestAliasPush(t *testing.T) {
+	builder := &mockBuilder{digest: "sha256:novers"}
+	svc := &Service{builder: builder}
+	stream := newFakeStream()
+	req := &nfv1.BuildRequest{
+		RequestId:         "req-novers-1",
+		ToolName:          "bwa",
+		DockerfileContent: validPolicyDockerfile,
+	}
+
+	if err := svc.BuildAndRegister(req, stream); err != nil {
+		t.Fatalf("BuildAndRegister: %v", err)
+	}
+	if len(builder.pushTagCalls) != 0 {
+		t.Errorf("PushTag calls = %v, want none", builder.pushTagCalls)
+	}
+}
+
+// TestBuildAndRegister_LatestAliasPushFails_BuildStillSucceeds is the
+// partial-failure case from review: a version tag push failure must fail
+// the build (it's Build's primary destination, already covered by
+// TestBuildAndRegister_BuilderError), but a :latest alias push failure must
+// NOT — the build itself already succeeded and latest is a convenience
+// pointer, not the authoritative reference.
+func TestBuildAndRegister_LatestAliasPushFails_BuildStillSucceeds(t *testing.T) {
+	builder := &mockBuilder{digest: "sha256:aliasfail", pushTagErr: errors.New("registry unavailable")}
+	svc := &Service{builder: builder}
+	stream := newFakeStream()
+	req := &nfv1.BuildRequest{
+		RequestId:         "req-aliasfail-1",
+		ToolName:          "bwa",
+		Version:           "0.7.17",
+		DockerfileContent: validPolicyDockerfile,
+	}
+
+	if err := svc.BuildAndRegister(req, stream); err != nil {
+		t.Fatalf("BuildAndRegister: %v, want nil — latest alias failure must be non-fatal", err)
+	}
+	found := false
+	for _, k := range stream.kindsSent() {
+		if k == nfv1.BuildEventKind_BUILD_EVENT_KIND_SUCCEEDED {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected SUCCEEDED event despite latest alias push failure")
+	}
+}
+
+// TestWarnIfTagReassigned_DoesNotErrorOrPanic exercises the tag-reassignment
+// detection path (rebuild of the same version producing a different
+// digest): warnIfTagReassigned must not error or block recording, and the
+// prior build's record must remain queryable afterward (ToolImageRecord's
+// (ImageDigest, BuildID) composite key already guarantees this — see the
+// bare-conda-package-bypass fix commit).
+func TestWarnIfTagReassigned_DoesNotErrorOrPanic(t *testing.T) {
+	store, err := index.NewAt(t.TempDir())
+	if err != nil {
+		t.Fatalf("index.NewAt: %v", err)
+	}
+	svc := &Service{builder: &mockBuilder{}, indexStore: store}
+	const dest = "harbor.example.com/library/bwa:0.7.17"
+
+	svc.recordBuildSuccess("build-1", mustParseTime(t), "sha256:first", dest, false)
+	svc.warnIfTagReassigned(dest, "sha256:second") // must not panic/error
+	svc.recordBuildSuccess("build-2", mustParseTime(t), "sha256:second", dest, false)
+
+	first, err := store.GetToolBuildRecordByBuildID("build-1")
+	if err != nil || first.ImageDigest != "sha256:first" {
+		t.Errorf("build-1 record lost or wrong after reassignment: %+v, err=%v", first, err)
+	}
+	latest, err := store.GetLatestToolImageRecordByRef(dest)
+	if err != nil || latest.ImageDigest != "sha256:second" {
+		t.Errorf("GetLatestToolImageRecordByRef(%q) = %+v, err=%v, want sha256:second", dest, latest, err)
 	}
 }

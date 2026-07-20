@@ -6,6 +6,8 @@ package build
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -141,7 +143,7 @@ func (s *Service) BuildAndRegister(req *nfv1.BuildRequest, stream grpc.ServerStr
 		"tool_name", req.GetToolName(),
 	)
 
-	destination := fmt.Sprintf("%s/library/%s:latest", registryAddr(), sanitizeName(req.ToolName))
+	destination, isVersioned := primaryBuildDestination(req.ToolName, req.Version)
 
 	// buildID identifies this single build execution for ToolBuildRecord/ToolImageRecord.
 	// Derived from RequestId + start time to reduce collision risk across retries that
@@ -161,6 +163,7 @@ func (s *Service) BuildAndRegister(req *nfv1.BuildRequest, stream grpc.ServerStr
 		s.recordBuildFailure(buildID, buildStartedAt, err)
 		return fmt.Errorf("image build: %w", err)
 	}
+	s.warnIfTagReassigned(destination, digest)
 
 	s.recordBuildSuccess(buildID, buildStartedAt, digest, destination, layerCacheHit)
 	metrics.BuildSuccessTotal.Add(1)
@@ -179,6 +182,9 @@ func (s *Service) BuildAndRegister(req *nfv1.BuildRequest, stream grpc.ServerStr
 	// L3/L4 validation is delegated to NodeSentinel via EnqueueValidationWork inside
 	// postBuildRegistration. NodeVault no longer creates K8s Jobs directly.
 	logSend := func(msg string) { _ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_LOG, msg) }
+	if isVersioned {
+		s.pushLatestAlias(ctx, destination, req.ToolName, logSend)
+	}
 	s.postBuildRegistration(ctx, req, destination, digest, logSend)
 
 	_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_SUCCEEDED,
@@ -389,4 +395,114 @@ func sanitizeName(s string) string {
 		result = result[:50]
 	}
 	return result
+}
+
+// sanitizeTag makes a string safe for use as an image tag component (e.g. a
+// version in <tool>:<version>). Unlike sanitizeName, dots are preserved —
+// Docker's tag grammar allows them and versions commonly use them
+// ("0.7.17"). If the input needed any character substituted or trimmed, a
+// short content hash of the original is appended: two different inputs can
+// otherwise collapse to the same sanitized string (e.g. "1.0+cuda" and
+// "1.0/cuda" both naively become "1.0-cuda"), which would silently conflate
+// two different versions under one tag — unacceptable for a reproducibility
+// gate. Inputs that are already tag-safe as-is are returned unchanged.
+func sanitizeTag(s string) string {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range trimmed {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	clean := strings.Trim(b.String(), "-.")
+	if clean == trimmed {
+		return truncateTag(clean)
+	}
+	sum := sha256.Sum256([]byte(trimmed))
+	suffix := hex.EncodeToString(sum[:])[:8]
+	if clean == "" {
+		return suffix
+	}
+	return truncateTag(clean) + "-" + suffix
+}
+
+func truncateTag(s string) string {
+	const maxLen = 90 // leaves room for a "-" + 8-char hash suffix under Docker's 128-char tag limit
+	if len(s) > maxLen {
+		return s[:maxLen]
+	}
+	return s
+}
+
+// versionedDestination returns the version-pinned tag for a build (see issue
+// #27: every build previously pushed only to <tool>:latest, so a tag-based
+// pull — as opposed to NodeVault's own digest/casHash-keyed tracking, which
+// was never affected — could silently return a different build than
+// intended). ok is false when version is empty, since there's nothing
+// meaningful to tag with.
+func versionedDestination(toolName, version string) (destination string, ok bool) {
+	tag := sanitizeTag(version)
+	if tag == "" {
+		return "", false
+	}
+	return fmt.Sprintf("%s/library/%s:%s", registryAddr(), sanitizeName(toolName), tag), true
+}
+
+func latestDestination(toolName string) string {
+	return fmt.Sprintf("%s/library/%s:latest", registryAddr(), sanitizeName(toolName))
+}
+
+// primaryBuildDestination returns the tag Build() builds and pushes as this
+// build's authoritative reference: the version-pinned tag when a usable
+// version is available, otherwise :latest. A failure to push this tag fails
+// the build — unlike the :latest alias (see pushLatestAlias), which is a
+// convenience pointer only.
+func primaryBuildDestination(toolName, version string) (destination string, isVersioned bool) {
+	if dest, ok := versionedDestination(toolName, version); ok {
+		return dest, true
+	}
+	return latestDestination(toolName), false
+}
+
+// warnIfTagReassigned logs (does not fail the build — see #27's decision to
+// allow rebuild-of-the-same-version for now, with a warning rather than a
+// hard reject) when destination previously pointed at a different digest.
+// ToolImageRecord's (ImageDigest, BuildID) composite key already preserves
+// every prior build's own record regardless of tag movement, so no history
+// is lost either way — this only adds visibility into the reassignment.
+func (s *Service) warnIfTagReassigned(destination, digest string) {
+	if s.indexStore == nil {
+		return
+	}
+	prior, err := s.indexStore.GetLatestToolImageRecordByRef(destination)
+	if err != nil || prior.ImageDigest == "" || prior.ImageDigest == digest {
+		return
+	}
+	slog.Warn("tag reassigned to a different digest",
+		"destination", destination, "previous_digest", prior.ImageDigest, "new_digest", digest)
+}
+
+// pushLatestAlias best-effort pushes the :latest convenience tag alongside a
+// version-pinned primaryDestination. latest is NOT NodeVault's identity
+// source (that's digest/casHash — ToolImageRecord.ImageDigest remains
+// authoritative regardless of which tag this build used); it only ever
+// reflects whichever build most recently completed this push — not
+// necessarily the highest version, and not a validated/certified image.
+// Under concurrent builds of different versions, the ordering of two
+// pushLatestAlias calls (not build start order, not version order)
+// determines the end state. A failure here does not fail the build.
+func (s *Service) pushLatestAlias(ctx context.Context, primaryDestination, toolName string, logFn func(string)) {
+	dest := latestDestination(toolName)
+	if _, err := s.builder.PushTag(ctx, primaryDestination, dest); err != nil {
+		slog.Warn("push latest alias failed", "destination", dest, "err", err)
+		logFn("latest alias push failed (build itself succeeded): " + err.Error())
+		return
+	}
+	logFn("image also tagged: " + dest)
 }

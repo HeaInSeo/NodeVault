@@ -4,15 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc/metadata"
 
+	"github.com/HeaInSeo/NodeVault/pkg/buildstate"
 	"github.com/HeaInSeo/NodeVault/pkg/catalog"
 	"github.com/HeaInSeo/NodeVault/pkg/index"
 	"github.com/HeaInSeo/NodeVault/pkg/registryconfig"
+	nsv1 "github.com/HeaInSeo/NodeVault/protos/nodesentinel/v1"
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
@@ -463,8 +466,10 @@ func TestPostBuildRegistration_ReferrerPushFailure_TriggersReconcile(t *testing.
 
 	var logs []string
 	req := &nfv1.BuildRequest{RequestId: "req-1", ToolName: "test-tool", Version: "1.0.0"}
-	svc.postBuildRegistration(context.Background(), req, "harbor.example.com/library/test-tool@sha256:deadbeef", "sha256:deadbeef",
-		func(msg string) { logs = append(logs, msg) })
+	if err := svc.postBuildRegistration(context.Background(), req, "harbor.example.com/library/test-tool@sha256:deadbeef", "sha256:deadbeef",
+		func(msg string) { logs = append(logs, msg) }); err != nil {
+		t.Fatalf("postBuildRegistration: %v (registration itself must succeed; only the referrer push fails)", err)
+	}
 
 	if len(rec.calledWith) != 1 {
 		t.Fatalf("expected ReconcileOne called once despite referrer push failure, got %d calls: %v", len(rec.calledWith), rec.calledWith)
@@ -489,6 +494,128 @@ func TestPostBuildRegistration_ReferrerPushFailure_TriggersReconcile(t *testing.
 	}
 	if entries[0].LifecyclePhase != index.PhaseActive {
 		t.Errorf("LifecyclePhase: got %q, want Active (referrer push failure must not affect lifecycle_phase)", entries[0].LifecyclePhase)
+	}
+}
+
+// fakeSentinel counts EnqueueValidationWork calls, for asserting registration
+// failure skips sentinel enqueue entirely (#23).
+type fakeSentinel struct {
+	calls int
+}
+
+func (f *fakeSentinel) EnqueueValidationWork(
+	_ context.Context, _ *nsv1.EnqueueValidationWorkRequest,
+) (*nsv1.EnqueueValidationWorkResponse, error) {
+	f.calls++
+	return &nsv1.EnqueueValidationWorkResponse{JobId: "job-1", Status: "Queued"}, nil
+}
+
+// TestPostBuildRegistration_RegisterToolFailure_ReturnsErrorAndSkipsSentinelEnqueue
+// is #23's core regression guard: a genuine RegisterTool failure (here,
+// deterministically, by deleting the catalog's backing directory so its
+// CAS write fails) must surface as an error from postBuildRegistration, and
+// must not enqueue NodeSentinel validation work for a tool that was never
+// actually registered.
+func TestPostBuildRegistration_RegisterToolFailure_ReturnsErrorAndSkipsSentinelEnqueue(t *testing.T) {
+	store, err := index.NewAt(t.TempDir())
+	if err != nil {
+		t.Fatalf("index.NewAt: %v", err)
+	}
+	catDir := t.TempDir()
+	cat := catalog.NewCatalogAt(catDir)
+	if err := os.RemoveAll(catDir); err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+	registrySvc := catalog.NewToolRegistryService(cat, store)
+	sentinel := &fakeSentinel{}
+	svc := &Service{registry: registrySvc, indexStore: store, sentinel: sentinel}
+
+	req := &nfv1.BuildRequest{RequestId: "req-1", ToolName: "test-tool", Version: "1.0.0"}
+	regErr := svc.postBuildRegistration(context.Background(), req,
+		"harbor.example.com/library/test-tool:1.0.0", "sha256:deadbeef", func(string) {})
+	if regErr == nil {
+		t.Fatal("expected an error when the catalog directory does not exist")
+	}
+	if sentinel.calls != 0 {
+		t.Errorf("sentinel enqueue calls = %d, want 0 (must not enqueue for an unregistered tool)", sentinel.calls)
+	}
+}
+
+// TestBuildAndRegister_RegistrationFailure_EmitsFAILEDNotSUCCEEDED verifies
+// the legacy streaming path: a registration failure must emit FAILED (not
+// SUCCEEDED) and return an error, with the digest already acquired earlier
+// in the stream preserved in the FAILED event's message.
+func TestBuildAndRegister_RegistrationFailure_EmitsFAILEDNotSUCCEEDED(t *testing.T) {
+	store, err := index.NewAt(t.TempDir())
+	if err != nil {
+		t.Fatalf("index.NewAt: %v", err)
+	}
+	catDir := t.TempDir()
+	cat := catalog.NewCatalogAt(catDir)
+	if err := os.RemoveAll(catDir); err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+	registrySvc := catalog.NewToolRegistryService(cat, store)
+	svc := &Service{builder: &mockBuilder{digest: "sha256:regfail"}, registry: registrySvc, indexStore: store}
+	stream := newFakeStream()
+	req := &nfv1.BuildRequest{
+		RequestId:         "req-regfail-1",
+		ToolName:          "bwa",
+		DockerfileContent: validPolicyDockerfile,
+	}
+
+	if err := svc.BuildAndRegister(req, stream); err == nil {
+		t.Fatal("BuildAndRegister: expected an error when registration fails")
+	}
+
+	var failedMsg string
+	sawSucceeded := false
+	for _, ev := range stream.events {
+		switch ev.Kind {
+		case nfv1.BuildEventKind_BUILD_EVENT_KIND_SUCCEEDED:
+			sawSucceeded = true
+		case nfv1.BuildEventKind_BUILD_EVENT_KIND_FAILED:
+			failedMsg = ev.Message
+		}
+	}
+	if sawSucceeded {
+		t.Error("SUCCEEDED must not be emitted when registration fails")
+	}
+	if !strings.Contains(failedMsg, "sha256:regfail") {
+		t.Errorf("FAILED message = %q, want it to preserve the already-pushed digest", failedMsg)
+	}
+}
+
+// TestSubmitToolBuild_RegistrationFailure_TransitionsToFailedWithDigestPreserved
+// verifies the SubmitToolBuild/WatchToolBuild path: a registration failure
+// must transition buildstate to Failed (not Succeeded), and the terminal
+// event must still carry the image ref/digest that SetArtifact already
+// persisted before registration was attempted.
+func TestSubmitToolBuild_RegistrationFailure_TransitionsToFailedWithDigestPreserved(t *testing.T) {
+	svc := newSubmitTestService(t)
+	catDir := t.TempDir()
+	cat := catalog.NewCatalogAt(catDir)
+	if err := os.RemoveAll(catDir); err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+	svc.registry = catalog.NewToolRegistryService(cat, svc.indexStore)
+
+	if _, err := svc.SubmitToolBuild(context.Background(), &nfv1.SubmitToolBuildRequest{
+		RequestId: "build-regfail", ToolSpecDigest: "spec-123",
+	}); err != nil {
+		t.Fatalf("SubmitToolBuild: %v", err)
+	}
+
+	stream := newFakeStream()
+	if err := svc.WatchToolBuild(&nfv1.WatchToolBuildRequest{BuildId: "build-regfail"}, stream); err != nil {
+		t.Fatalf("WatchToolBuild: %v", err)
+	}
+	last := stream.events[len(stream.events)-1]
+	if last.GetStatus() != string(buildstate.StatusFailed) {
+		t.Fatalf("final status = %q, want Failed", last.GetStatus())
+	}
+	if last.GetImageDigest() == "" {
+		t.Error("ImageDigest should remain populated on the FAILED terminal event")
 	}
 }
 

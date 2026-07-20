@@ -185,7 +185,16 @@ func (s *Service) BuildAndRegister(req *nfv1.BuildRequest, stream grpc.ServerStr
 	if isVersioned {
 		s.pushLatestAlias(ctx, destination, req.ToolName, logSend)
 	}
-	s.postBuildRegistration(ctx, req, destination, digest, logSend)
+	if regErr := s.postBuildRegistration(ctx, req, destination, digest, logSend); regErr != nil {
+		// Image build+push already succeeded (digest above) — only cataloging
+		// failed. Reported as FAILED, not SUCCEEDED: an unregistered tool is
+		// not discoverable/usable, so the whole operation did not complete
+		// (see #23). The image itself is not rebuilt; retrying resubmits the
+		// same destination/digest and only registration needs to succeed.
+		_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_FAILED,
+			fmt.Sprintf("image pushed to %s@%s but registration failed: %v", destination, digest, regErr))
+		return fmt.Errorf("post-build registration: %w", regErr)
+	}
 
 	_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_SUCCEEDED,
 		fmt.Sprintf("build+register complete: %s@%s", destination, digest))
@@ -249,15 +258,29 @@ func (s *Service) recordBuildSuccess(buildID string, startedAt time.Time, digest
 // BuildAndRegister (streaming RPC) and runSubmittedBuild (async goroutine).
 // logFn receives informational messages for the caller's output channel; it
 // must not be nil.
+//
+// Returns an error only for a genuine RegisterTool RPC failure: a pushed
+// image that never became a catalog entry isn't a usable tool, so the whole
+// operation must be treated as failed even though the image build+push
+// itself succeeded (see #23) — callers must not report SUCCEEDED in that
+// case. destination/digest are already durable by this point (index
+// ToolBuildRecord/ToolImageRecord via recordBuildSuccess, and for
+// SubmitToolBuild, buildstate.SetArtifact), so nothing about the completed
+// build/push is lost by surfacing this as a failure.
+//
+// s.registry == nil is a construction-time invariant NewService already
+// enforces (never nil in production — see its own nil check); it is not
+// treated as a failure here so unit tests that don't need a full registry
+// mock keep working.
 func (s *Service) postBuildRegistration(
 	ctx context.Context,
 	req *nfv1.BuildRequest,
 	destination, digest string,
 	logFn func(string),
-) {
+) error {
 	if s.registry == nil {
 		logFn("registration skipped: no registry configured")
-		return
+		return nil
 	}
 	regResp, regErr := s.registry.RegisterTool(ctx, &nfv1.RegisterToolRequest{
 		RequestId:        req.GetRequestId(),
@@ -270,14 +293,13 @@ func (s *Service) postBuildRegistration(
 		BuildKind:        req.GetKind(),
 	})
 	if regErr != nil {
-		logFn("registration warning: " + regErr.Error())
-	} else {
-		logFn("tool registered: cas=" + regResp.CasHash)
+		return fmt.Errorf("register tool: %w", regErr)
 	}
+	logFn("tool registered: cas=" + regResp.CasHash)
 
 	// spec referrer push — non-fatal; integrity_health reconcile retries on failure.
 	// integrity_health is updated ONLY via ReconcileOne (reconcile axis — authority map).
-	if regErr == nil && s.indexStore != nil {
+	if s.indexStore != nil {
 		imageRepo := fmt.Sprintf("%s/library/%s", registryAddr(), sanitizeName(req.GetToolName()))
 		referrerDigest, refErr := oras.PushToolSpecReferrer(ctx, imageRepo, digest, regResp.Tool)
 		if refErr != nil {
@@ -322,11 +344,10 @@ func (s *Service) postBuildRegistration(
 	}
 
 	// NodeSentinel enqueue — non-fatal; validation is deferred if enqueue fails.
+	// Only reached once registration has succeeded (regErr == nil, checked
+	// above), so there is always a real CasHash to enqueue against — no
+	// validation work is queued for a tool that was never registered.
 	if s.sentinel != nil {
-		casHash := ""
-		if regErr == nil {
-			casHash = regResp.CasHash
-		}
 		imageRepo := destination
 		if idx := strings.LastIndex(destination, "@"); idx != -1 {
 			imageRepo = destination[:idx]
@@ -337,7 +358,7 @@ func (s *Service) postBuildRegistration(
 			ImageDigest:      digest,
 			ToolName:         req.GetToolName(),
 			Version:          req.GetVersion(),
-			CasHash:          casHash,
+			CasHash:          regResp.CasHash,
 			RequestedActions: []string{"smoke_run"},
 		}
 		enqCtx, enqCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -350,6 +371,7 @@ func (s *Service) postBuildRegistration(
 			logFn("sentinel job enqueued: " + enqResp.JobId)
 		}
 	}
+	return nil
 }
 
 func (s *Service) buildExecution(layerCacheHit bool) *index.BuildExecution {

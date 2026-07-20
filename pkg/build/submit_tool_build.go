@@ -239,7 +239,19 @@ func (s *Service) runSubmittedBuild(
 	if isVersioned {
 		s.pushLatestAlias(ctx, destination, req.GetToolName(), logFn)
 	}
-	s.postBuildRegistration(ctx, req, destination, digest, logFn)
+	if regErr := s.postBuildRegistration(ctx, req, destination, digest, logFn); regErr != nil {
+		// Image build+push already succeeded — SetArtifact above already
+		// persisted ImageRef/ImageDigest on this buildstate record, so they
+		// remain visible on the FAILED terminal event too (buildStateEvent
+		// always includes them regardless of status). Only cataloging
+		// failed: reported as Failed, not Succeeded, since an unregistered
+		// tool is not discoverable/usable (see #23). Retrying resubmits the
+		// same destination/digest; the image itself is not rebuilt.
+		slog.Error("submitted build registration failed", "build_id", rec.BuildID, "err", regErr)
+		msg := fmt.Sprintf("image pushed to %s@%s but registration failed: %v", destination, digest, regErr)
+		_, _ = s.buildState.Transition(rec.BuildID, buildstate.StatusFailed, msg, time.Now().UTC())
+		return
+	}
 
 	_, _ = s.buildState.Transition(rec.BuildID, buildstate.StatusSucceeded, "", time.Now().UTC())
 }

@@ -104,7 +104,8 @@ grpcurl -plaintext -import-path protos -proto nodevault/v1/nodevault.proto \
 # ResolveToolSpec → SubmitToolBuild → WatchToolBuild 전체 경로 확인 예시는
 # 2026-07-15 smoke test 기록 참조 — raw_spec에 image_uri(＠sha256 pinned)와
 # dockerfile_content를 함께 넣어야 한다(ResolveToolSpec은 raw_spec의
-# base_image/base_image_uri/image_uri 키에서만 base image digest를 읽는다).
+# image_uri 키에서만 base image digest를 읽는다 — base_image/base_image_uri
+# alias는 실제 producer가 없어 issue #28로 제거됨).
 ```
 
 ## 확인 항목

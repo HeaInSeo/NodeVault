@@ -95,7 +95,7 @@ func TestToolSpecDigest_IndependentFromLegacyCasHash(t *testing.T) {
 func TestResolve_ExtractsPinnedBaseImage(t *testing.T) {
 	resolved, err := Resolve(Request{
 		ToolName: "bwa",
-		RawSpec:  `{"base_image":"alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tool_name":"bwa"}`,
+		RawSpec:  `{"image_uri":"alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tool_name":"bwa"}`,
 	}, Context{})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -108,6 +108,23 @@ func TestResolve_ExtractsPinnedBaseImage(t *testing.T) {
 	}
 	if resolved.RecipeInputsDigest == "" || resolved.BuildPlanDigest == "" || resolved.ToolSpecDigest == "" {
 		t.Fatalf("expected all digests to be populated: %+v", resolved)
+	}
+}
+
+// TestResolve_BaseImageAndBaseImageUriAliasesNoLongerRecognized guards
+// against re-introducing the removed base_image/base_image_uri raw_spec
+// aliases (issue #28): image_uri is the only field NodeKit's raw_spec
+// generator produces (docs/TOOL_CONTRACT_V0_2.md), so a raw_spec using
+// either legacy alias instead of image_uri must be treated as unpinned.
+func TestResolve_BaseImageAndBaseImageUriAliasesNoLongerRecognized(t *testing.T) {
+	for _, key := range []string{"base_image", "base_image_uri"} {
+		t.Run(key, func(t *testing.T) {
+			rawSpec := `{"` + key + `":"alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tool_name":"bwa"}`
+			_, err := Resolve(Request{ToolName: "bwa", RawSpec: rawSpec}, Context{})
+			if err == nil {
+				t.Fatalf("Resolve should reject a raw_spec pinned only via the legacy %q key", key)
+			}
+		})
 	}
 }
 

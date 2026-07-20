@@ -160,25 +160,24 @@ func canonicalSpec(rawSpec string) (string, error) {
 	return string(canonical), nil
 }
 
-// BaseImagePin extracts a pinned base image digest from common raw_spec field names.
-// It does not contact a registry; unpinned refs return an empty digest.
+// BaseImagePin extracts a pinned base image digest from raw_spec's image_uri
+// field — the only base-image field NodeKit's raw_spec generator produces
+// (docs/TOOL_CONTRACT_V0_2.md). It does not contact a registry; unpinned
+// refs return an empty digest.
 func BaseImagePin(rawSpec string) (baseImageRef, baseImageDigest string) {
 	var decoded map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(rawSpec)), &decoded); err != nil {
 		return "", ""
 	}
-	for _, key := range []string{"base_image", "base_image_uri", "image_uri"} {
-		ref, ok := decoded[key].(string)
-		if !ok {
-			continue
-		}
-		ref = strings.TrimSpace(ref)
-		if ref == "" {
-			continue
-		}
-		return ref, digestFromImageRef(ref)
+	ref, ok := decoded["image_uri"].(string)
+	if !ok {
+		return "", ""
 	}
-	return "", ""
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "", ""
+	}
+	return ref, digestFromImageRef(ref)
 }
 
 func digestFromImageRef(ref string) string {

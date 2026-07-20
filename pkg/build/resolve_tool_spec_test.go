@@ -93,7 +93,7 @@ func TestResolveToolSpec_StoresInIndex(t *testing.T) {
 	resp, err := s.ResolveToolSpec(context.Background(), &nfv1.ToolSpecRequest{
 		ToolName: resolveTestToolName,
 		Version:  "2.2.1",
-		RawSpec:  `{"base_image":"alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tool_name":"bwa-mem2","version":"2.2.1"}`,
+		RawSpec:  `{"image_uri":"alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tool_name":"bwa-mem2","version":"2.2.1"}`,
 	})
 	if err != nil {
 		t.Fatalf("ResolveToolSpec: %v", err)
@@ -103,7 +103,7 @@ func TestResolveToolSpec_StoresInIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetResolvedToolSpecByDigest: %v", err)
 	}
-	if got.RawSpec != `{"base_image":"alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tool_name":"bwa-mem2","version":"2.2.1"}` {
+	if got.RawSpec != `{"image_uri":"alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tool_name":"bwa-mem2","version":"2.2.1"}` {
 		t.Fatalf("RawSpec not preserved: %q", got.RawSpec)
 	}
 	if got.ToolName != resolveTestToolName || got.Version != "2.2.1" {

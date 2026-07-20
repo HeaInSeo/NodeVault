@@ -54,6 +54,13 @@ type Store struct {
 // ErrNotFound is returned when a build record does not exist.
 var ErrNotFound = errors.New("buildstate: record not found")
 
+// ErrAlreadyTerminal is returned by Transition when the build has already
+// reached a terminal status. This is a benign race (e.g. CancelToolBuild and
+// the build's own goroutine both attempting a terminal transition), not a
+// storage failure — callers should treat it differently from any other
+// Transition error.
+var ErrAlreadyTerminal = errors.New("buildstate: build already terminal")
+
 // Open creates or opens a SQLite build state database at path.
 func Open(path string) (*Store, error) {
 	cleanPath := filepath.Clean(path)
@@ -220,7 +227,9 @@ func (s *Store) Transition(buildID string, next Status, failureReason string, no
 		return Record{}, err
 	}
 	if terminal(current.Status) {
-		return Record{}, fmt.Errorf("buildstate: build %q already terminal: %s", buildID, current.Status)
+		return Record{}, fmt.Errorf(
+			"buildstate: build %q already terminal (%s): %w", buildID, current.Status, ErrAlreadyTerminal,
+		)
 	}
 
 	if _, execErr := tx.ExecContext(

@@ -391,3 +391,151 @@ func TestAbandonSubmittedBuild_RecordsDurableFailure(t *testing.T) {
 		t.Error("ToolBuildRecord.FailureReason is empty, want a reason mentioning the stage and underlying error")
 	}
 }
+
+// ─── issue #26: WatchToolBuild must not hang forever when buildstate writes fail ───
+//
+// These simulate a buildstate.Transition write failure directly (the same
+// technique TestAbandonSubmittedBuild_RecordsDurableFailure uses) rather
+// than injecting a real SQLite fault, then drive WatchToolBuild's real poll
+// loop against it. watchPollInterval is 100ms, so a correct fix must
+// terminate these within a couple of poll ticks — a regression back to the
+// old unconditional "if unchanged, keep waiting" behavior would hang until
+// the test's own timeout instead.
+
+func newAbandonableBuild(t *testing.T, svc *Service, buildID string) buildstate.Record {
+	t.Helper()
+	rec, _, err := svc.buildState.CreateOrGet(buildID, "spec-123", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("CreateOrGet: %v", err)
+	}
+	if _, err := svc.buildState.Transition(buildID, buildstate.StatusBuilding, "", time.Now().UTC()); err != nil {
+		t.Fatalf("Transition to Building: %v", err)
+	}
+	entry := &activeBuild{cancel: func() {}, done: make(chan struct{})}
+	svc.activeMu.Lock()
+	if svc.active == nil {
+		svc.active = make(map[string]*activeBuild)
+	}
+	svc.active[buildID] = entry
+	svc.activeMu.Unlock()
+	rec.Status = buildstate.StatusBuilding
+	return rec
+}
+
+func watchAsync(svc *Service, buildID string) <-chan error {
+	result := make(chan error, 1)
+	go func() {
+		result <- svc.WatchToolBuild(&nfv1.WatchToolBuildRequest{BuildId: buildID}, newFakeStream())
+	}()
+	return result
+}
+
+func TestWatchToolBuild_AbandonedWhileWatcherWaiting_TerminatesWithInternalError(t *testing.T) {
+	svc := newSubmitTestService(t)
+	rec := newAbandonableBuild(t, svc, "build-abandon-watching")
+
+	result := watchAsync(svc, "build-abandon-watching")
+	// Give the watcher time to reach its poll loop before abandoning, so
+	// this genuinely exercises "already waiting" rather than racing it.
+	time.Sleep(20 * time.Millisecond)
+	svc.abandonSubmittedBuild(rec, "building", errors.New("simulated buildstate write failure"))
+
+	select {
+	case err := <-result:
+		if status.Code(err) != codes.Internal {
+			t.Fatalf("WatchToolBuild error got %v, want codes.Internal", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("WatchToolBuild did not terminate after the build was abandoned")
+	}
+}
+
+func TestWatchToolBuild_LateConnectAfterAbandon_TerminatesWithInternalError(t *testing.T) {
+	svc := newSubmitTestService(t)
+	rec := newAbandonableBuild(t, svc, "build-abandon-late")
+	svc.abandonSubmittedBuild(rec, "building", errors.New("simulated buildstate write failure"))
+
+	result := watchAsync(svc, "build-abandon-late")
+	select {
+	case err := <-result:
+		if status.Code(err) != codes.Internal {
+			t.Fatalf("WatchToolBuild error got %v, want codes.Internal", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("WatchToolBuild did not terminate for a build already abandoned before it connected")
+	}
+}
+
+func TestWatchToolBuild_MultipleWatchers_AllTerminateOnAbandon(t *testing.T) {
+	svc := newSubmitTestService(t)
+	rec := newAbandonableBuild(t, svc, "build-abandon-multi")
+
+	watcherA := watchAsync(svc, "build-abandon-multi")
+	watcherB := watchAsync(svc, "build-abandon-multi")
+	time.Sleep(20 * time.Millisecond)
+	svc.abandonSubmittedBuild(rec, "building", errors.New("simulated buildstate write failure"))
+
+	for name, ch := range map[string]<-chan error{"A": watcherA, "B": watcherB} {
+		select {
+		case err := <-ch:
+			if status.Code(err) != codes.Internal {
+				t.Fatalf("watcher %s error got %v, want codes.Internal", name, err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("watcher %s did not terminate after the build was abandoned", name)
+		}
+	}
+}
+
+func TestFinalizeSubmittedBuild_SuccessRemovesActiveEntry(t *testing.T) {
+	svc := newSubmitTestService(t)
+	if _, err := svc.SubmitToolBuild(context.Background(), &nfv1.SubmitToolBuildRequest{
+		RequestId:      "build-finalize-success",
+		ToolSpecDigest: "spec-123",
+	}); err != nil {
+		t.Fatalf("SubmitToolBuild: %v", err)
+	}
+	// The mock builder completes synchronously-ish; poll briefly for the
+	// background goroutine to reach its terminal transition.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		svc.activeMu.Lock()
+		_, tracked := svc.active["build-finalize-success"]
+		svc.activeMu.Unlock()
+		if !tracked {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	svc.activeMu.Lock()
+	_, tracked := svc.active["build-finalize-success"]
+	svc.activeMu.Unlock()
+	if tracked {
+		t.Error("active entry should be removed once the build reaches a durable terminal state")
+	}
+	got, err := svc.buildState.Get("build-finalize-success")
+	if err != nil {
+		t.Fatalf("buildState.Get: %v", err)
+	}
+	if got.Status != buildstate.StatusSucceeded {
+		t.Fatalf("status got %q, want Succeeded", got.Status)
+	}
+}
+
+func TestActiveBuildFail_ClosesDoneAtMostOnce(t *testing.T) {
+	entry := &activeBuild{cancel: func() {}, done: make(chan struct{})}
+	firstErr := errors.New("first failure")
+	secondErr := errors.New("second failure")
+
+	entry.fail(firstErr)
+	entry.fail(secondErr) // must not panic on double-close, must not overwrite err
+
+	select {
+	case <-entry.done:
+	default:
+		t.Fatal("done should be closed after fail")
+	}
+	if !errors.Is(entry.err, firstErr) {
+		t.Fatalf("err got %v, want the first failure to win", entry.err)
+	}
+}

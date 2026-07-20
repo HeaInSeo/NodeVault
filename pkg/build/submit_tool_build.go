@@ -94,6 +94,17 @@ func (s *Service) WatchToolBuild(
 				return status.Errorf(codes.Internal, "get build state: %v", err)
 			}
 			if rec.UpdatedAt.Equal(lastUpdated) {
+				// Durable state hasn't moved. This is the normal case for a
+				// build that's still genuinely running, but it's also what
+				// a build stuck forever because its own buildstate write
+				// failed looks like from here — the write that would have
+				// made progress visible is exactly the one that failed. The
+				// active-build registry is the only place that failure is
+				// recorded, so check it before deciding to keep waiting.
+				if failErr := s.activeBuildFailure(req.GetBuildId()); failErr != nil {
+					return status.Errorf(codes.Internal,
+						"build %s abandoned: buildstate could not be updated: %v", req.GetBuildId(), failErr)
+				}
 				continue
 			}
 			if sendErr := stream.Send(buildStateEvent(rec)); sendErr != nil {
@@ -104,6 +115,26 @@ func (s *Service) WatchToolBuild(
 				return nil
 			}
 		}
+	}
+}
+
+// activeBuildFailure reports the failure recorded for buildID's in-flight
+// goroutine, if any is currently tracked. Returns nil when the build is
+// still running normally, when it already finished through the normal
+// durable-terminal path (its entry is removed then), or when it hasn't
+// failed.
+func (s *Service) activeBuildFailure(buildID string) error {
+	s.activeMu.Lock()
+	entry := s.active[buildID]
+	s.activeMu.Unlock()
+	if entry == nil {
+		return nil
+	}
+	select {
+	case <-entry.done:
+		return entry.err
+	default:
+		return nil
 	}
 }
 
@@ -179,21 +210,22 @@ func buildRequestFromResolved(buildID string, spec index.ResolvedToolSpec) (*nfv
 //nolint:gocritic // hugeParam: by-value snapshot is intentional — goroutine-safe, no shared mutation.
 func (s *Service) startSubmittedBuild(rec buildstate.Record, req *nfv1.BuildRequest) {
 	ctx, cancel := context.WithCancel(context.Background())
+	entry := &activeBuild{cancel: cancel, done: make(chan struct{})}
 	s.activeMu.Lock()
 	if s.active == nil {
-		s.active = make(map[string]context.CancelFunc)
+		s.active = make(map[string]*activeBuild)
 	}
-	s.active[rec.BuildID] = cancel
+	s.active[rec.BuildID] = entry
 	s.activeMu.Unlock()
 	go s.runSubmittedBuild(ctx, cancel, rec, req)
 }
 
 func (s *Service) cancelSubmittedBuild(buildID string) {
 	s.activeMu.Lock()
-	cancel := s.active[buildID]
+	entry := s.active[buildID]
 	s.activeMu.Unlock()
-	if cancel != nil {
-		cancel()
+	if entry != nil {
+		entry.cancel()
 	}
 }
 
@@ -202,11 +234,6 @@ func (s *Service) runSubmittedBuild(
 	ctx context.Context, cancel context.CancelFunc, rec buildstate.Record, req *nfv1.BuildRequest,
 ) {
 	defer cancel()
-	defer func() {
-		s.activeMu.Lock()
-		delete(s.active, rec.BuildID)
-		s.activeMu.Unlock()
-	}()
 	if _, err := s.buildState.Transition(rec.BuildID, buildstate.StatusResolving, "", time.Now().UTC()); err != nil {
 		s.abandonSubmittedBuild(rec, "resolving", err)
 		return
@@ -249,21 +276,55 @@ func (s *Service) runSubmittedBuild(
 		// same destination/digest; the image itself is not rebuilt.
 		slog.Error("submitted build registration failed", "build_id", rec.BuildID, "err", regErr)
 		msg := fmt.Sprintf("image pushed to %s@%s but registration failed: %v", destination, digest, regErr)
-		_, _ = s.buildState.Transition(rec.BuildID, buildstate.StatusFailed, msg, time.Now().UTC())
+		s.finalizeSubmittedBuild(rec, "registering", buildstate.StatusFailed, msg)
 		return
 	}
 
-	_, _ = s.buildState.Transition(rec.BuildID, buildstate.StatusSucceeded, "", time.Now().UTC())
+	s.finalizeSubmittedBuild(rec, "succeeding", buildstate.StatusSucceeded, "")
 }
 
 //nolint:gocritic // hugeParam: by-value snapshot is intentional — read-only helper, no pointer needed.
 func (s *Service) failSubmittedBuild(rec buildstate.Record, buildErr error) {
 	if errors.Is(buildErr, context.Canceled) {
-		_, _ = s.buildState.Transition(rec.BuildID, buildstate.StatusInterrupted, "canceled", time.Now().UTC())
+		s.finalizeSubmittedBuild(rec, "interrupting", buildstate.StatusInterrupted, "canceled")
 		return
 	}
 	s.recordBuildFailure(rec.BuildID, rec.RequestedAt, buildErr)
-	_, _ = s.buildState.Transition(rec.BuildID, buildstate.StatusFailed, buildErr.Error(), time.Now().UTC())
+	s.finalizeSubmittedBuild(rec, "failing", buildstate.StatusFailed, buildErr.Error())
+}
+
+// finalizeSubmittedBuild attempts the terminal buildstate transition for a
+// completed build. If the write succeeds, buildstate is the authoritative
+// durable record and the active-build entry is removed — any WatchToolBuild
+// caller sees the terminal state on its next poll through the normal
+// durable-read path. If the write itself fails, that's handled exactly like
+// any other mid-build buildstate write failure (see abandonSubmittedBuild):
+// the entry is kept and its failure broadcast instead of the error being
+// silently discarded.
+//
+// A Transition failure reporting the build already terminal is not an
+// abandonment — it means another caller (CancelToolBuild, most likely)
+// already wrote a terminal status for this build first. That's a normal
+// race, not a storage failure, and the durable record is already reachable
+// through the ordinary poll loop.
+//
+//nolint:gocritic // hugeParam: by-value snapshot is intentional — read-only helper, no pointer needed.
+func (s *Service) finalizeSubmittedBuild(
+	rec buildstate.Record, atStage string, next buildstate.Status, message string,
+) {
+	if _, err := s.buildState.Transition(rec.BuildID, next, message, time.Now().UTC()); err != nil {
+		if errors.Is(err, buildstate.ErrAlreadyTerminal) {
+			s.activeMu.Lock()
+			delete(s.active, rec.BuildID)
+			s.activeMu.Unlock()
+			return
+		}
+		s.abandonSubmittedBuild(rec, atStage, err)
+		return
+	}
+	s.activeMu.Lock()
+	delete(s.active, rec.BuildID)
+	s.activeMu.Unlock()
 }
 
 // abandonSubmittedBuild handles the case where buildState.Transition itself
@@ -271,17 +332,33 @@ func (s *Service) failSubmittedBuild(rec buildstate.Record, buildErr error) {
 // terminal state through the same store that just failed to write, so a
 // WatchToolBuild caller would otherwise hang with no further events forever.
 // This makes the failure loud (slog.Error, unlike the best-effort slog.Warn
-// used elsewhere for non-critical writes) and records it in pkg/index — a
+// used elsewhere for non-critical writes), records it in pkg/index — a
 // separate store from buildstate — so there is at least one durable,
-// queryable record of the failure even though buildstate's own record is
-// stuck at whatever status it last reached.
+// queryable record of the failure, and broadcasts it through the
+// active-build registry so any WatchToolBuild caller, present or future,
+// learns the build was abandoned instead of polling a buildstate record
+// stuck at whatever status it last reached forever.
+//
+// Deliberately does not remove the build's entry from s.active: a
+// WatchToolBuild caller that connects (or next polls) after this point must
+// still be able to find the entry and observe the failure. The entry
+// persists until process restart (see issue #26 follow-up for TTL/cap on
+// abandoned entries — not needed today since NodeVault is single-replica
+// and abandonment is rare).
 //
 //nolint:gocritic // hugeParam: by-value snapshot is intentional — read-only helper, no pointer needed.
 func (s *Service) abandonSubmittedBuild(rec buildstate.Record, atStage string, transitionErr error) {
 	slog.Error("buildstate transition failed; build abandoned at this stage and will not reach a terminal state",
 		"build_id", rec.BuildID, "stage", atStage, "err", transitionErr)
-	s.recordBuildFailure(rec.BuildID, rec.RequestedAt,
-		fmt.Errorf("buildstate transition to %s failed: %w", atStage, transitionErr))
+	wrapped := fmt.Errorf("buildstate transition to %s failed: %w", atStage, transitionErr)
+	s.recordBuildFailure(rec.BuildID, rec.RequestedAt, wrapped)
+
+	s.activeMu.Lock()
+	entry := s.active[rec.BuildID]
+	s.activeMu.Unlock()
+	if entry != nil {
+		entry.fail(wrapped)
+	}
 }
 
 //nolint:gocritic // hugeParam: by-value snapshot is intentional — read-only helper, no pointer lifetime risk.

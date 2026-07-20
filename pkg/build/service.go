@@ -58,10 +58,33 @@ type Service struct {
 	indexStore        *index.Store
 	buildState        *buildstate.Store
 	activeMu          sync.Mutex
-	active            map[string]context.CancelFunc
+	active            map[string]*activeBuild
 	reconciler        ReconcileTriggerer // nil = no eager reconcile
 	sentinel          SentinelEnqueuer   // nil = no L3/L4 enqueue
 	baseImageResolver baseImageResolver  // nil = lazily uses registry.NewClient()
+}
+
+// activeBuild tracks one in-flight runSubmittedBuild goroutine: cancel stops
+// it (CancelToolBuild), and done/err let WatchToolBuild learn that the
+// goroutine gave up because a buildstate write itself failed — the one
+// failure mode buildstate's own durable record can never reveal, since it's
+// the write that failed. done is closed at most once (via once) so multiple
+// concurrent WatchToolBuild callers can all observe it.
+type activeBuild struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+	err    error
+	once   sync.Once
+}
+
+// fail records err and closes done, waking any WatchToolBuild callers
+// selecting on it. Safe to call more than once; only the first call has an
+// effect.
+func (b *activeBuild) fail(err error) {
+	b.once.Do(func() {
+		b.err = err
+		close(b.done)
+	})
 }
 
 // NewService creates a BuildService backed by podbridge5.
@@ -89,7 +112,7 @@ func NewService(
 	}
 	return &Service{
 		builder: builder, registry: registry,
-		indexStore: store, buildState: stateStore, active: make(map[string]context.CancelFunc), reconciler: reconciler,
+		indexStore: store, buildState: stateStore, active: make(map[string]*activeBuild), reconciler: reconciler,
 	}, nil
 }
 
@@ -104,8 +127,8 @@ func NewDisabledService() *Service {
 // Close releases the underlying image build storage.
 func (s *Service) Close() error {
 	s.activeMu.Lock()
-	for _, cancel := range s.active {
-		cancel()
+	for _, entry := range s.active {
+		entry.cancel()
 	}
 	s.activeMu.Unlock()
 	if s.builder == nil {

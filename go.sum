@@ -10,8 +10,8 @@ github.com/BurntSushi/toml v1.6.0 h1:dRaEfpa2VI55EwlIW72hMRHdWouJeRF7TPYhI+AUQjk
 github.com/BurntSushi/toml v1.6.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
 github.com/HeaInSeo/kube-slint v1.6.0 h1:z0DrjrXyaYIUnT94XARBosOCS26//OgigwFH+VQetFw=
 github.com/HeaInSeo/kube-slint v1.6.0/go.mod h1:JOuCMKQzXBde5e/NDx5xfO3IqLmykYkz7Io2tpY3YjA=
-github.com/HeaInSeo/podbridge5 v0.1.8 h1:0sbywIC9tp6DO4m5/caamQh5IyrEnlNNAmk/RkVAaSc=
-github.com/HeaInSeo/podbridge5 v0.1.8/go.mod h1:DTkm6vapKYiah9VG0omEIHR+c+nF3eGeBsWPz28Csec=
+github.com/HeaInSeo/podbridge5 v0.1.9 h1:nlIpJUq72iMpi2MKuzTGCS5WvQOZYUUKLulAJfpPPiY=
+github.com/HeaInSeo/podbridge5 v0.1.9/go.mod h1:DTkm6vapKYiah9VG0omEIHR+c+nF3eGeBsWPz28Csec=
 github.com/HeaInSeo/sori v0.8.0-rc5 h1:HcQCvSLmLbTLS2JgCR2B3IBkArc2A5myOhKRWe7IXZk=
 github.com/HeaInSeo/sori v0.8.0-rc5/go.mod h1:VQ0a4l8mpbM3tc64LwmhUiPkAff/G3DBolSdA2/tEhM=
 github.com/HeaInSeo/utils v0.0.7 h1:YSGKsFGybK57G0esXz4H8HtNWvndijf/86txQADzQlE=

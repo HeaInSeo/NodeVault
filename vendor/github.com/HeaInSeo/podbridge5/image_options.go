@@ -75,6 +75,14 @@ type UserNamespaceBuildConfig struct {
 	// set up a build-time network namespace (e.g. rootless netavark/setns
 	// restrictions in some user-namespace hosts).
 	NetworkConfiguration define.NetworkConfigurationPolicy
+	// BuildLog, if set, receives Buildah's build progress output (the same
+	// text normally written to stdout) in addition to Buildah's own
+	// default logging — nil preserves prior behavior (Buildah defaults to
+	// os.Stdout internally when BuildOptions.Out is nil). Callers that also
+	// want console output must include it themselves, e.g.
+	// io.MultiWriter(os.Stdout, &buf); this field does not replace stdout
+	// unless the caller omits it from that MultiWriter.
+	BuildLog io.Writer
 }
 
 // NewUserNamespaceBuildConfig returns an explicit, portable starting point for
@@ -269,6 +277,9 @@ func UserNamespaceImageBuildOptions(config UserNamespaceBuildConfig) (define.Bui
 	buildOpts.Layers = true
 	buildOpts.RemoveIntermediateCtrs = true
 	buildOpts.ConfigureNetwork = config.NetworkConfiguration
+	if config.BuildLog != nil {
+		buildOpts.Out = config.BuildLog
+	}
 	return buildOpts, nil
 }
 

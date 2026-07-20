@@ -1,10 +1,13 @@
 package build
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 
 	"github.com/HeaInSeo/podbridge5"
 	"go.podman.io/storage"
@@ -20,9 +23,13 @@ const buildContextDir = "/tmp/nodevault-build/context"
 // Builder builds and pushes a container image from Dockerfile content.
 // outputRef is the full destination reference, e.g. "harbor.example.com/myimage:latest".
 // Build builds the image, pushes it to the registry, and returns the remote digest
-// as reported by the registry after push.
+// as reported by the registry after push, plus whether any build step was
+// served from cache (local layer reuse or, when NODEVAULT_BUILD_CACHE_REF is
+// set, the remote Harbor cache).
 type Builder interface {
-	Build(ctx context.Context, dockerfileContent, outputRef string) (imageID, digest string, err error)
+	Build(
+		ctx context.Context, dockerfileContent, outputRef string,
+	) (imageID, digest string, layerCacheHit bool, err error)
 	Close() error
 }
 
@@ -34,8 +41,10 @@ var ErrBuildBackendDisabled = errors.New("build backend disabled by configuratio
 // without initializing podbridge5 / containers-storage.
 type disabledBuilder struct{}
 
-func (disabledBuilder) Build(_ context.Context, _, _ string) (imageID, digest string, err error) {
-	return "", "", ErrBuildBackendDisabled
+func (disabledBuilder) Build(
+	_ context.Context, _, _ string,
+) (imageID, digest string, layerCacheHit bool, err error) {
+	return "", "", false, ErrBuildBackendDisabled
 }
 
 func (disabledBuilder) Close() error { return nil }
@@ -74,9 +83,16 @@ func newPodbridge5Builder() (Builder, error) {
 	return &podbridge5Builder{store: store}, nil
 }
 
+// buildahCacheHitLogMarker is the exact text Buildah's imagebuildah executor
+// writes when a build step is served from cache (go.podman.io/buildah/
+// imagebuildah/stage_executor.go's logCacheHit: "--> Using cache <id>").
+// Not a stable public API — if Buildah changes this string, cache-hit
+// detection silently stops firing rather than breaking the build itself.
+const buildahCacheHitLogMarker = "--> Using cache"
+
 func (b *podbridge5Builder) Build(
 	ctx context.Context, dockerfileContent, outputRef string,
-) (imageID, remoteDigest string, err error) {
+) (imageID, remoteDigest string, layerCacheHit bool, err error) {
 	// ContextDirectory must not be left at podbridge5's "." default, which
 	// resolves to the container root ("/"). Buildah wraps the build context
 	// in its own overlay and forces the "userxattr" mount option whenever
@@ -85,20 +101,33 @@ func (b *podbridge5Builder) Build(
 	// capabilities, and nesting a userxattr overlay on top of containerd's
 	// nouserxattr root overlay fails with EINVAL. buildContextDir sits on the
 	// /tmp emptyDir mount (see deploy/03-nodevault.yaml), so no nesting occurs.
+	var buildLog bytes.Buffer
 	cfg := podbridge5.UserNamespaceBuildConfig{
 		OutputRef:        outputRef,
 		ContextDirectory: buildContextDir,
 		CacheRef:         layerCacheRef(),
+		// Tee to stdout to preserve existing kubectl logs/journalctl build
+		// progress visibility; the buffer is only for cache-hit detection.
+		BuildLog: io.MultiWriter(os.Stdout, &buildLog),
 	}
 	imageID, _, err = podbridge5.BuildDockerfileContentUserNamespace(ctx, b.store, dockerfileContent, cfg)
 	if err != nil {
-		return "", "", fmt.Errorf("build image: %w", err)
+		return "", "", false, fmt.Errorf("build image: %w", err)
 	}
+	layerCacheHit = detectLayerCacheHit(buildLog.String())
 	remoteDigest, err = podbridge5.PushImage(ctx, b.store, outputRef, outputRef)
 	if err != nil {
-		return "", "", fmt.Errorf("push image: %w", err)
+		return "", "", layerCacheHit, fmt.Errorf("push image: %w", err)
 	}
-	return imageID, remoteDigest, nil
+	return imageID, remoteDigest, layerCacheHit, nil
+}
+
+// detectLayerCacheHit reports whether a captured Buildah build log shows at
+// least one step served from cache (buildahCacheHitLogMarker), whether that
+// was the remote Harbor cache (NODEVAULT_BUILD_CACHE_REF / --cache-from) or
+// plain local layer reuse (--layers, always enabled).
+func detectLayerCacheHit(buildLog string) bool {
+	return strings.Contains(buildLog, buildahCacheHitLogMarker)
 }
 
 // layerCacheRef returns the operator-configured Harbor cache reference for

@@ -154,7 +154,7 @@ func (s *Service) BuildAndRegister(req *nfv1.BuildRequest, stream grpc.ServerStr
 	_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_JOB_CREATED, "image build starting: "+destination)
 	slog.Info("image build starting", "destination", destination)
 
-	_, digest, err := s.builder.Build(ctx, req.DockerfileContent, destination)
+	_, digest, layerCacheHit, err := s.builder.Build(ctx, req.DockerfileContent, destination)
 	if err != nil {
 		metrics.BuildFailureTotal.Add(1)
 		_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_FAILED, err.Error())
@@ -162,7 +162,7 @@ func (s *Service) BuildAndRegister(req *nfv1.BuildRequest, stream grpc.ServerStr
 		return fmt.Errorf("image build: %w", err)
 	}
 
-	s.recordBuildSuccess(buildID, buildStartedAt, digest, destination)
+	s.recordBuildSuccess(buildID, buildStartedAt, digest, destination, layerCacheHit)
 	metrics.BuildSuccessTotal.Add(1)
 	slog.Info("image build succeeded", "destination", destination, "digest", digest)
 	_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_PUSH_SUCCEEDED, "image pushed to "+destination)
@@ -195,7 +195,7 @@ func (s *Service) recordBuildFailure(buildID string, startedAt time.Time, buildE
 	rec := index.ToolBuildRecord{
 		BuildID:       buildID,
 		Backend:       s.builderBackendName(),
-		Execution:     s.buildExecution(),
+		Execution:     s.buildExecution(false),
 		StartedAt:     startedAt,
 		CompletedAt:   time.Now().UTC(),
 		Success:       false,
@@ -209,7 +209,7 @@ func (s *Service) recordBuildFailure(buildID string, startedAt time.Time, buildE
 // recordBuildSuccess persists a successful ToolBuildRecord and the corresponding
 // ToolImageRecord to the index, if a Store is wired. Best-effort: a recording
 // failure is logged but never fails the RPC — the image has already been pushed.
-func (s *Service) recordBuildSuccess(buildID string, startedAt time.Time, digest, imageRef string) {
+func (s *Service) recordBuildSuccess(buildID string, startedAt time.Time, digest, imageRef string, layerCacheHit bool) {
 	if s.indexStore == nil {
 		return
 	}
@@ -218,7 +218,7 @@ func (s *Service) recordBuildSuccess(buildID string, startedAt time.Time, digest
 		BuildID:     buildID,
 		ImageDigest: digest,
 		Backend:     s.builderBackendName(),
-		Execution:   s.buildExecution(),
+		Execution:   s.buildExecution(layerCacheHit),
 		StartedAt:   startedAt,
 		CompletedAt: completedAt,
 		Success:     true,
@@ -346,7 +346,7 @@ func (s *Service) postBuildRegistration(
 	}
 }
 
-func (s *Service) buildExecution() *index.BuildExecution {
+func (s *Service) buildExecution(layerCacheHit bool) *index.BuildExecution {
 	if s.builderBackendName() != backendInPodBuildah {
 		return nil
 	}
@@ -354,6 +354,7 @@ func (s *Service) buildExecution() *index.BuildExecution {
 	exec := &index.BuildExecution{
 		Mode: backendInPodBuildah, HostUsers: &hostUsers,
 		StorageDriver: "overlay", Isolation: "chroot",
+		LayerCacheHit: &layerCacheHit,
 	}
 	if ref := layerCacheRef(); ref != "" {
 		exec.CacheRef = ref

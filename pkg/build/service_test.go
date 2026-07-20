@@ -55,15 +55,16 @@ func (f *fakeStream) kindsSent() []nfv1.BuildEventKind {
 // ─── mockBuilder ─────────────────────────────────────────────────────────────
 
 type mockBuilder struct {
-	imageID string
-	digest  string
-	err     error
+	imageID       string
+	digest        string
+	layerCacheHit bool
+	err           error
 }
 
 func (m *mockBuilder) Build(
 	_ context.Context, _, _ string,
-) (imageID, digest string, err error) {
-	return m.imageID, m.digest, m.err
+) (imageID, digest string, layerCacheHit bool, err error) {
+	return m.imageID, m.digest, m.layerCacheHit, m.err
 }
 
 func (m *mockBuilder) Close() error {
@@ -239,7 +240,9 @@ type countCallBuilder struct {
 	calls *int
 }
 
-func (c *countCallBuilder) Build(ctx context.Context, dockerfile, outputRef string) (imageID, digest string, err error) {
+func (c *countCallBuilder) Build(
+	ctx context.Context, dockerfile, outputRef string,
+) (imageID, digest string, layerCacheHit bool, err error) {
 	*c.calls++
 	return c.inner.Build(ctx, dockerfile, outputRef)
 }
@@ -336,7 +339,7 @@ func TestRecordBuildSuccess_WritesToolBuildRecordAndToolImageRecord(t *testing.T
 	svc := &Service{builder: &mockBuilder{}, indexStore: store}
 
 	startedAt := mustParseTime(t)
-	svc.recordBuildSuccess("build-xyz", startedAt, "sha256:imgdigest", "harbor.example.com/library/tool:latest")
+	svc.recordBuildSuccess("build-xyz", startedAt, "sha256:imgdigest", "harbor.example.com/library/tool:latest", true)
 
 	rec, gerr := store.GetToolBuildRecordByBuildID("build-xyz")
 	if gerr != nil {
@@ -350,6 +353,9 @@ func TestRecordBuildSuccess_WritesToolBuildRecordAndToolImageRecord(t *testing.T
 	}
 	if rec.Execution == nil || rec.Execution.Mode != backendInPodBuildah || rec.Execution.HostUsers == nil || *rec.Execution.HostUsers {
 		t.Fatalf("Execution: got %+v, want in-pod-buildah with host_users=false", rec.Execution)
+	}
+	if rec.Execution.LayerCacheHit == nil || !*rec.Execution.LayerCacheHit {
+		t.Errorf("Execution.LayerCacheHit: got %v, want true", rec.Execution.LayerCacheHit)
 	}
 	if rec.Backend != backendInPodBuildah {
 		t.Errorf("Backend: got %q, want in-pod-buildah", rec.Backend)
@@ -396,7 +402,7 @@ func TestRecordBuildFailure_WritesFailedToolBuildRecord(t *testing.T) {
 func TestRecordBuildSuccess_NilIndexStore_NoOp(t *testing.T) {
 	svc := &Service{builder: &mockBuilder{}}
 	// Must not panic.
-	svc.recordBuildSuccess("build-noop", mustParseTime(t), "sha256:x", "ref")
+	svc.recordBuildSuccess("build-noop", mustParseTime(t), "sha256:x", "ref", false)
 	svc.recordBuildFailure("build-noop-2", mustParseTime(t), errors.New("err"))
 }
 

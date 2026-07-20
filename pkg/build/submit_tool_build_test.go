@@ -232,10 +232,12 @@ type cancelableBuilder struct {
 	started chan struct{}
 }
 
-func (b *cancelableBuilder) Build(ctx context.Context, _, _ string) (imageID, digest string, err error) {
+func (b *cancelableBuilder) Build(
+	ctx context.Context, _, _ string,
+) (imageID, digest string, layerCacheHit bool, err error) {
 	close(b.started)
 	<-ctx.Done()
-	return "", "", ctx.Err()
+	return "", "", false, ctx.Err()
 }
 
 func (*cancelableBuilder) Close() error { return nil }
@@ -283,11 +285,13 @@ type subprocessBuilder struct {
 // Build simulates a Builder whose underlying podbridge5/Buildah subprocess
 // only stops once ctx is canceled; exited closing models the subprocess's
 // kill/wait cleanup completing, not just Build returning.
-func (b *subprocessBuilder) Build(ctx context.Context, _, _ string) (imageID, digest string, err error) {
+func (b *subprocessBuilder) Build(
+	ctx context.Context, _, _ string,
+) (imageID, digest string, layerCacheHit bool, err error) {
 	close(b.started)
 	defer close(b.exited)
 	<-ctx.Done()
-	return "", "", ctx.Err()
+	return "", "", false, ctx.Err()
 }
 
 func (*subprocessBuilder) Close() error { return nil }

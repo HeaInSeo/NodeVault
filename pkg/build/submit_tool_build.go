@@ -220,7 +220,7 @@ func (s *Service) runSubmittedBuild(
 		return
 	}
 	destination := fmt.Sprintf("%s/library/%s:latest", registryAddr(), sanitizeName(req.GetToolName()))
-	_, digest, err := s.builder.Build(ctx, req.GetDockerfileContent(), destination)
+	_, digest, layerCacheHit, err := s.builder.Build(ctx, req.GetDockerfileContent(), destination)
 	if err != nil {
 		s.failSubmittedBuild(rec, err)
 		return
@@ -232,7 +232,7 @@ func (s *Service) runSubmittedBuild(
 	if _, err := s.buildState.SetArtifact(rec.BuildID, destination, digest, time.Now().UTC()); err != nil {
 		slog.Warn("buildstate set artifact failed", "build_id", rec.BuildID, "err", err)
 	}
-	s.recordBuildSuccess(rec.BuildID, rec.RequestedAt, digest, destination)
+	s.recordBuildSuccess(rec.BuildID, rec.RequestedAt, digest, destination, layerCacheHit)
 
 	logFn := func(msg string) { slog.Info("submitted build", "build_id", rec.BuildID, "msg", msg) }
 	s.postBuildRegistration(ctx, req, destination, digest, logFn)

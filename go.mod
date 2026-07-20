@@ -20,6 +20,7 @@ require (
 	github.com/HeaInSeo/podbridge5 v0.1.9
 	github.com/HeaInSeo/sori v0.8.0-rc5
 	github.com/mattn/go-sqlite3 v1.14.45
+	github.com/openshift/imagebuilder v1.2.21
 	go.podman.io/storage v1.63.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -134,7 +135,6 @@ require (
 	github.com/opencontainers/runtime-spec v1.3.0 // indirect
 	github.com/opencontainers/runtime-tools v0.9.1-0.20260316125833-8a4db579f5c8 // indirect
 	github.com/opencontainers/selinux v1.15.1 // indirect
-	github.com/openshift/imagebuilder v1.2.21 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pkg/sftp v1.13.10 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect

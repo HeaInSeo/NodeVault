@@ -3,15 +3,27 @@ package build
 import (
 	"errors"
 	"fmt"
+	"path"
 	"strings"
+
+	imagebuilder "github.com/openshift/imagebuilder"
+	dockerfilecommand "github.com/openshift/imagebuilder/dockerfile/command"
+	dockerfileparser "github.com/openshift/imagebuilder/dockerfile/parser"
 
 	"github.com/HeaInSeo/NodeVault/pkg/resolve"
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
-// ValidateBuildRequest is NodeVault's final build gate. NodeKit may run the
-// same checks earlier for UX, but NodeVault must re-check before Buildah sees
-// client-authored Dockerfile content.
+// ValidateBuildRequest is NodeVault's pre-build admission gate: a fast,
+// static rejection of Dockerfile content that is obviously non-compliant
+// before Buildah ever runs. NodeKit may run the same checks earlier for UX.
+//
+// This is deliberately NOT the final trust boundary. Static analysis of
+// Dockerfile text cannot see what a base image already contains (e.g. a
+// base image that ships curl pre-installed), and shell-form RUN content is
+// inherently ambiguous in the general case. The authoritative check on what
+// actually ends up in the built image belongs to post-build image content
+// inspection (tracked separately; see docs/PLATFORM_SCHEDULE.md Sprint 10).
 func ValidateBuildRequest(req *nfv1.BuildRequest) error {
 	if req == nil {
 		return errors.New("build request is required")
@@ -45,36 +57,69 @@ func validateToolSpecBuildRequest(req *nfv1.BuildRequest) error {
 	return nil
 }
 
+// parseDockerfileAST parses Dockerfile content with the same parser Buildah
+// itself uses internally (go.podman.io/buildah imports
+// github.com/openshift/imagebuilder for its own Dockerfile handling).
+// Reusing it — instead of a hand-rolled line/instruction splitter — means
+// NodeVault's understanding of comments, line continuations, escape
+// directives, heredocs, and exec-form vs shell-form RUN instructions cannot
+// drift from what Buildah will actually build.
+func parseDockerfileAST(content string) (*dockerfileparser.Node, error) {
+	result, err := dockerfileparser.Parse(strings.NewReader(content))
+	if err != nil {
+		return nil, fmt.Errorf("parse dockerfile: %w", err)
+	}
+	return result.AST, nil
+}
+
+// nodeArgs walks a parsed instruction's argument chain into a plain slice.
+// For whitespace-delimited instructions (FROM, EXPOSE, ...) each element is
+// one token. For exec-form RUN/CMD/ENTRYPOINT (RUN ["a", "b"]) each element
+// is one JSON array entry — the literal argv Buildah will invoke, no shell
+// involved. For single-string instructions (USER, WORKDIR, shell-form RUN)
+// there is exactly one element holding the whole instruction body.
+func nodeArgs(node *dockerfileparser.Node) []string {
+	var args []string
+	for n := node.Next; n != nil; n = n.Next {
+		args = append(args, n.Value)
+	}
+	return args
+}
+
 func validateDockerfilePolicy(content string, allowRuntimeTools []string, allowRuntimeToolsReason string) error {
-	lines := logicalDockerfileLines(content)
+	ast, err := parseDockerfileAST(content)
+	if err != nil {
+		return err
+	}
+
 	totalFromCount := 0
-	for _, line := range lines {
-		if instruction, _ := dockerfileInstruction(line); instruction == "FROM" {
+	for _, node := range ast.Children {
+		if node.Value == dockerfilecommand.From {
 			totalFromCount++
 		}
 	}
 
 	fromCount := 0
-	for _, line := range lines {
-		instruction, rest := dockerfileInstruction(line)
-		switch instruction {
-		case "FROM":
+	for _, node := range ast.Children {
+		switch node.Value {
+		case dockerfilecommand.From:
 			fromCount++
-			if err := validateFromInstruction(rest); err != nil {
+			if err := validateFromInstruction(nodeArgs(node)); err != nil {
 				return err
 			}
-		case "USER":
-			if err := validateUserInstruction(rest); err != nil {
+		case dockerfilecommand.User:
+			if err := validateUserInstruction(nodeArgs(node)); err != nil {
 				return err
 			}
-		case "RUN":
-			if err := validateCondaPinsInRunInstruction(rest); err != nil {
+		case dockerfilecommand.Run:
+			runText := strings.Join(nodeArgs(node), " ")
+			if err := validateCondaPinsInRunInstruction(runText); err != nil {
 				return err
 			}
 			// Runtime tool policy applies only to the final stage — earlier
 			// build stages may freely use fetch/build tools.
 			if fromCount == totalFromCount {
-				if err := validateFinalStageRuntimeTools(rest, allowRuntimeTools, allowRuntimeToolsReason); err != nil {
+				if err := validateFinalStageRuntimeTools(node, allowRuntimeTools, allowRuntimeToolsReason); err != nil {
 					return err
 				}
 			}
@@ -115,50 +160,166 @@ var riskyRuntimeTools = map[string]bool{
 // installs (e.g. "apt-get install curl") or directly invokes (e.g. "curl ...")
 // a risky runtime tool, unless the tool is explicitly exempted via
 // allow_runtime_tools with a non-empty allow_runtime_tools_reason.
-func validateFinalStageRuntimeTools(rest string, allowRuntimeTools []string, allowRuntimeToolsReason string) error {
+func validateFinalStageRuntimeTools(
+	node *dockerfileparser.Node, allowRuntimeTools []string, allowRuntimeToolsReason string,
+) error {
 	allowed := make(map[string]bool, len(allowRuntimeTools))
 	for _, tool := range allowRuntimeTools {
 		allowed[tool] = true
 	}
-	for _, segment := range shellSegments(rest) {
-		fields := strings.Fields(segment)
-		if len(fields) == 0 {
-			continue
+
+	original := strings.Join(nodeArgs(node), " ")
+	var segments [][]string
+	if node.Attributes["json"] {
+		// Exec-form RUN — args are the literal argv Buildah will invoke
+		// directly (no shell), so there is exactly one "segment": the argv
+		// itself. No shell tokenizing or metacharacter splitting applies.
+		segments = [][]string{nodeArgs(node)}
+	} else {
+		var err error
+		segments, err = shellCommandSegments(original)
+		if err != nil {
+			return fmt.Errorf("RUN %q: %w", original, err)
 		}
-		tool := cleanShellToken(fields[0])
-		if !riskyRuntimeTools[tool] {
-			continue
+	}
+
+	for _, fields := range segments {
+		if err := checkSegmentForRiskyTools(original, fields, allowed, allowRuntimeToolsReason); err != nil {
+			return err
 		}
-		if allowed[tool] && strings.TrimSpace(allowRuntimeToolsReason) != "" {
-			continue
-		}
-		return fmt.Errorf(
-			"RUN %q uses runtime tool %q in the final image stage; "+
-				"add it to allow_runtime_tools with allow_runtime_tools_reason, or remove it", rest, tool,
-		)
 	}
 	return nil
 }
 
-// shellSegments splits a shell-form RUN instruction on &&, ||, |, and ;
-// separators into individual command invocations.
-func shellSegments(rest string) []string {
-	var segments []string
+// shellCommandSegments tokenizes a shell-form RUN instruction using the same
+// word-splitting/quoting rules as Buildah's own Dockerfile parser (which
+// imports github.com/openshift/imagebuilder directly), then splits the
+// result on &&, ||, |, and ; into individual command invocations. Using the
+// real tokenizer instead of strings.Fields means a separator that appears
+// inside a quoted string, e.g. RUN echo "a && b", is not mistaken for a
+// command boundary.
+func shellCommandSegments(rest string) ([][]string, error) {
+	words, err := imagebuilder.ProcessWords(rest, nil)
+	if err != nil {
+		return nil, err
+	}
+	var segments [][]string
 	var current []string
-	for _, field := range strings.Fields(rest) {
-		if isShellSeparator(cleanShellToken(field)) {
+	for _, word := range words {
+		if isShellSeparator(word) {
 			if len(current) > 0 {
-				segments = append(segments, strings.Join(current, " "))
+				segments = append(segments, current)
 				current = nil
 			}
 			continue
 		}
-		current = append(current, field)
+		current = append(current, word)
 	}
 	if len(current) > 0 {
-		segments = append(segments, strings.Join(current, " "))
+		segments = append(segments, current)
 	}
-	return segments
+	return segments, nil
+}
+
+// checkSegmentForRiskyTools inspects one command invocation (already split
+// on shell separators). It unwraps command-prefix wrappers (env, exec) and
+// recurses into "sh -c '<script>'"/"bash -c '<script>'" invocations so that
+// a risky tool hidden behind a wrapper is still caught, matching what
+// Buildah will actually execute.
+func checkSegmentForRiskyTools(
+	original string, fields []string, allowed map[string]bool, allowRuntimeToolsReason string,
+) error {
+	fields = unwrapCommandPrefix(fields)
+	if len(fields) == 0 {
+		return nil
+	}
+
+	if script, ok := shDashCArgument(fields); ok {
+		innerSegments, err := shellCommandSegments(script)
+		if err != nil {
+			return fmt.Errorf("RUN %q: %w", original, err)
+		}
+		for _, inner := range innerSegments {
+			if err := checkSegmentForRiskyTools(original, inner, allowed, allowRuntimeToolsReason); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	tool := path.Base(fields[0])
+	if !riskyRuntimeTools[tool] {
+		return nil
+	}
+	if allowed[tool] && strings.TrimSpace(allowRuntimeToolsReason) != "" {
+		return nil
+	}
+	return fmt.Errorf(
+		"RUN %q uses runtime tool %q in the final image stage; "+
+			"add it to allow_runtime_tools with allow_runtime_tools_reason, or remove it", original, tool,
+	)
+}
+
+// unwrapCommandPrefix skips leading wrapper commands that re-invoke another
+// program without being the risky tool themselves — "env" (sets environment
+// variables before exec'ing its argument) and "exec" (replaces the current
+// process with its argument) — so e.g. "RUN env FOO=bar curl ..." is
+// evaluated as "curl ...", not "env ...".
+func unwrapCommandPrefix(fields []string) []string {
+	for len(fields) > 0 {
+		switch path.Base(fields[0]) {
+		case "exec":
+			fields = fields[1:]
+		case "env":
+			fields = unwrapEnvFlags(fields[1:])
+		default:
+			return fields
+		}
+	}
+	return fields
+}
+
+// unwrapEnvFlags skips past env's own flags and NAME=VALUE assignments to
+// find the command env actually invokes, e.g.
+// "env -i FOO=bar curl ..." -> ["curl", ...].
+func unwrapEnvFlags(fields []string) []string {
+	for len(fields) > 0 {
+		f := fields[0]
+		switch {
+		case f == "-i" || f == "--ignore-environment":
+			fields = fields[1:]
+		case f == "-u" || f == "--unset":
+			fields = fields[1:]
+			if len(fields) > 0 {
+				fields = fields[1:]
+			}
+		case strings.Contains(f, "=") && !strings.HasPrefix(f, "-"):
+			fields = fields[1:]
+		default:
+			return fields
+		}
+	}
+	return fields
+}
+
+// shDashCArgument recognizes "sh -c '<script>'" / "bash -c '<script>'" /
+// "dash -c '<script>'" and returns the script argument, so callers can
+// recurse into it instead of treating "sh"/"bash" as the invoked tool.
+func shDashCArgument(fields []string) (string, bool) {
+	switch path.Base(fields[0]) {
+	case "sh", "bash", "dash":
+	default:
+		return "", false
+	}
+	for i := 1; i < len(fields); i++ {
+		if fields[i] == "-c" {
+			if i+1 < len(fields) {
+				return fields[i+1], true
+			}
+			return "", false
+		}
+	}
+	return "", false
 }
 
 // validateCondaPinsInEnvironmentSpec pin-validates only list items under a
@@ -293,58 +454,11 @@ func isShellSeparator(token string) bool {
 	}
 }
 
-func logicalDockerfileLines(content string) []string {
-	var lines []string
-	var current strings.Builder
-	for _, raw := range strings.Split(content, "\n") {
-		line := strings.TrimSpace(raw)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		continued := strings.HasSuffix(line, `\`)
-		if continued {
-			line = strings.TrimSpace(strings.TrimSuffix(line, `\`))
-		}
-		if current.Len() > 0 {
-			current.WriteByte(' ')
-		}
-		current.WriteString(line)
-		if !continued {
-			lines = append(lines, current.String())
-			current.Reset()
-		}
-	}
-	if current.Len() > 0 {
-		lines = append(lines, current.String())
-	}
-	return lines
-}
-
-func dockerfileInstruction(line string) (instruction, rest string) {
-	fields := strings.Fields(line)
-	if len(fields) == 0 {
-		return "", ""
-	}
-	instruction = strings.ToUpper(fields[0])
-	return instruction, strings.TrimSpace(line[len(fields[0]):])
-}
-
-func validateFromInstruction(rest string) error {
-	fields := strings.Fields(rest)
-	if len(fields) == 0 {
+func validateFromInstruction(args []string) error {
+	if len(args) == 0 {
 		return errors.New("FROM instruction requires an image reference")
 	}
-	imageRef := ""
-	for i := 0; i < len(fields); i++ {
-		if strings.HasPrefix(fields[i], "--") {
-			continue
-		}
-		imageRef = fields[i]
-		break
-	}
-	if imageRef == "" {
-		return errors.New("FROM instruction requires an image reference")
-	}
+	imageRef := args[0]
 	if strings.Contains(imageRef, "$") {
 		return fmt.Errorf("FROM image %q must not use variables", imageRef)
 	}
@@ -379,16 +493,15 @@ func fromUsesLatestTag(ref string) bool {
 	return lastColon > lastSlash && image[lastColon+1:] == "latest"
 }
 
-func validateUserInstruction(rest string) error {
-	user := strings.TrimSpace(rest)
-	if user == "" {
+func validateUserInstruction(args []string) error {
+	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
 		return errors.New("USER instruction requires a user")
 	}
+	user := strings.TrimSpace(args[0])
 	if strings.Contains(user, "$") {
 		return fmt.Errorf("USER %q must not use variables", user)
 	}
-	fields := strings.Fields(user)
-	identity := fields[0]
+	identity := strings.Fields(user)[0]
 	for _, part := range strings.Split(identity, ":") {
 		if part == "0" || strings.EqualFold(part, "root") {
 			return fmt.Errorf("USER %q must not be root", identity)

@@ -370,3 +370,98 @@ func TestValidateBuildRequest_ToolSpecRejectsInvalidBaseImageDigestWhenPresent(t
 		t.Fatalf("ValidateBuildRequest error got %v, want base image digest rejection", err)
 	}
 }
+
+// ─── Known bypasses of the naive strings.Fields-based tokenizer (issue #24 review) ──
+//
+// These reproduce the specific bypass techniques the review called out, each
+// of which evaded the old strings.Fields-based scanner. The fix replaces
+// hand-rolled line/instruction splitting with github.com/openshift/imagebuilder
+// (the same Dockerfile parser Buildah itself uses) and adds
+// wrapper-unwrapping/path-basename handling on top of it.
+
+func TestValidateBuildRequest_ExecFormRunRiskyTool_Rejected(t *testing.T) {
+	// RUN ["curl", ...] (JSON/exec-form) used to evade detection entirely:
+	// strings.Fields on the raw text "[\"curl\"," produced a token that
+	// never matched the risky-tool map.
+	req := &nfv1.BuildRequest{
+		ToolName:          "bwa",
+		DockerfileContent: "FROM alpine:3.20@" + validDigestA + "\nRUN [\"curl\", \"-fsSL\", \"https://example.com/tool\"]",
+	}
+	err := ValidateBuildRequest(req)
+	if err == nil || !strings.Contains(err.Error(), "curl") {
+		t.Fatalf("ValidateBuildRequest error got %v, want rejection naming curl (exec-form RUN)", err)
+	}
+}
+
+func TestValidateBuildRequest_PathPrefixedRiskyTool_Rejected(t *testing.T) {
+	// RUN /usr/bin/curl ... used to evade detection because the check
+	// compared the full path against the bare tool name "curl".
+	req := &nfv1.BuildRequest{
+		ToolName:          "bwa",
+		DockerfileContent: "FROM alpine:3.20@" + validDigestA + "\nRUN /usr/bin/curl -fsSL https://example.com/tool",
+	}
+	err := ValidateBuildRequest(req)
+	if err == nil || !strings.Contains(err.Error(), "curl") {
+		t.Fatalf("ValidateBuildRequest error got %v, want rejection naming curl (absolute path)", err)
+	}
+}
+
+func TestValidateBuildRequest_EnvWrappedRiskyTool_Rejected(t *testing.T) {
+	// RUN env FOO=bar curl ... used to evade detection because fields[0]
+	// was "env", not "curl".
+	req := &nfv1.BuildRequest{
+		ToolName:          "bwa",
+		DockerfileContent: "FROM alpine:3.20@" + validDigestA + "\nRUN env FOO=bar curl -fsSL https://example.com/tool",
+	}
+	err := ValidateBuildRequest(req)
+	if err == nil || !strings.Contains(err.Error(), "curl") {
+		t.Fatalf("ValidateBuildRequest error got %v, want rejection naming curl (env wrapper)", err)
+	}
+}
+
+func TestValidateBuildRequest_ExecWrappedRiskyTool_Rejected(t *testing.T) {
+	req := &nfv1.BuildRequest{
+		ToolName:          "bwa",
+		DockerfileContent: "FROM alpine:3.20@" + validDigestA + "\nRUN exec curl -fsSL https://example.com/tool",
+	}
+	err := ValidateBuildRequest(req)
+	if err == nil || !strings.Contains(err.Error(), "curl") {
+		t.Fatalf("ValidateBuildRequest error got %v, want rejection naming curl (exec wrapper)", err)
+	}
+}
+
+func TestValidateBuildRequest_ShDashCWrappedRiskyTool_Rejected(t *testing.T) {
+	// RUN sh -c 'curl ...' used to evade detection because only "sh" was
+	// checked against the risky-tool list, never the quoted script content.
+	req := &nfv1.BuildRequest{
+		ToolName:          "bwa",
+		DockerfileContent: "FROM alpine:3.20@" + validDigestA + "\nRUN sh -c 'curl -fsSL https://example.com/tool'",
+	}
+	err := ValidateBuildRequest(req)
+	if err == nil || !strings.Contains(err.Error(), "curl") {
+		t.Fatalf("ValidateBuildRequest error got %v, want rejection naming curl (sh -c wrapper)", err)
+	}
+}
+
+func TestValidateBuildRequest_QuotedSeparatorNotMistakenForCommandBoundary(t *testing.T) {
+	// RUN echo "a && b" must not be split into two commands at the "&&"
+	// inside the quoted string — this exercises the switch from
+	// strings.Fields to the real shell tokenizer for segment splitting.
+	req := &nfv1.BuildRequest{
+		ToolName:          "bwa",
+		DockerfileContent: "FROM alpine:3.20@" + validDigestA + "\nRUN echo \"a && b\"",
+	}
+	if err := ValidateBuildRequest(req); err != nil {
+		t.Fatalf("ValidateBuildRequest: %v (quoted && must not be treated as a command separator)", err)
+	}
+}
+
+func TestValidateBuildRequest_ExecFormRunCleanImage_Passes(t *testing.T) {
+	req := &nfv1.BuildRequest{
+		ToolName:          "bwa",
+		DockerfileContent: "FROM alpine:3.20@" + validDigestA + "\nRUN [\"echo\", \"built\"]",
+	}
+	if err := ValidateBuildRequest(req); err != nil {
+		t.Fatalf("ValidateBuildRequest: %v", err)
+	}
+}

@@ -355,11 +355,11 @@ NodeKit→NodeVault 라이브 재현성 테스트(`docs/NODEKIT_LIVE_RECIPE_REPR
 - [x] 기존 `TestValidateBuildRequest_AcceptsCondaInstallWithBuildString` 회귀 없음(conda/mamba/micromamba 제외로 확인)
 - [x] `go test -tags "$(BUILDTAGS)" ./...` 통과, `make lint` 경고 없음(신규 코드 0경고 — 사전 존재 경고 2건은 범위 밖)
 
-### Sprint 10 — P2b: post-build 최종 이미지 콘텐츠 스캔 (podbridge5 이슈 선행)
+### Sprint 10 — P2b: post-build 최종 이미지 콘텐츠 스캔
 
 **목표**: Sprint 9가 놓치는 "base 이미지가 이미 risky tool 포함" 케이스를 실제 빌드된 이미지에서 탐지한다(AC-SB-04 완전 충족, AC-SB-02 완결).
 
-**선행 조건**: `HeaInSeo/podbridge5` [issue #2](https://github.com/HeaInSeo/podbridge5/issues/2) — 이미지 filesystem 콘텐츠를 exec 없이 export/조회하는 공개 API 요청. 확인 결과 내부 export 로직(`image.go`의 `saveImage`, `images.Export` 기반 tar/tar.gz)은 이미 존재하지만 비공개(소문자)라 NodeVault에서 호출 불가 — 필요한 것은 podbridge5 쪽 작은 공개 API PR 수준.
+**선행 조건**: ~~`HeaInSeo/podbridge5` issue #2~~ — **해결됨(v0.1.8, 2026-07-13)**. `SaveImage(ctx, path, imageName, imageID, compress)`/`ImageArchivePath(basePath, imageName, compress)`가 공개 API로 노출되어 NodeVault vendor(v0.1.9)에 이미 포함되어 있다. 더 이상 이 스프린트를 막는 선행 조건이 없다 — issue [#32](https://github.com/HeaInSeo/NodeVault/issues/32)로 추적.
 
 **결정**
 

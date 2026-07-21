@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  BUILD_TAGS: "exclude_graphdriver_btrfs containers_image_openpgp exclude_graphdriver_devicemapper"
+  BUILD_TAGS: "exclude_graphdriver_btrfs exclude_graphdriver_devicemapper"
   GO_VERSION_FILE: go.mod
 
 jobs:

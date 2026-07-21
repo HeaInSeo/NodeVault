@@ -7,7 +7,12 @@
 FROM quay.io/buildah/stable:latest AS builder
 
 ENV GO_VERSION=1.25.12
-RUN dnf install -y gcc && \
+# gpgme-devel/libassuan-devel: go.podman.io/image/v5's default (cgo-based)
+# signature mechanism needs these headers now that containers_image_openpgp
+# is no longer set below (#29) — without the tag it would otherwise fall
+# through to the pure-Go x/crypto/openpgp implementation NodeVault doesn't
+# need. Matches the "Ensure CGo system dependencies" step in ci.yml.
+RUN dnf install -y gcc gpgme-devel libassuan-devel && \
     curl -fsSL https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz \
     | tar -C /usr/local -xz
 
@@ -25,7 +30,7 @@ COPY . .
 
 RUN go build \
     -mod=vendor \
-    -tags "exclude_graphdriver_btrfs containers_image_openpgp exclude_graphdriver_devicemapper" \
+    -tags "exclude_graphdriver_btrfs exclude_graphdriver_devicemapper" \
     -ldflags="-s -w" \
     -o /bin/nodevault \
     ./cmd/controlplane/...

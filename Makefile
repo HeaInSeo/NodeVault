@@ -14,9 +14,11 @@ PROTO_OUT     ?= ./gen/go
 PROTO_SRC     ?= ./protos
 
 # ── 컨테이너 빌드 관련 태그 ───────────────────────────────────────────────────
-# btrfs-progs-devel, gpgme-devel C 헤더 없이도 빌드 가능하도록
-# containers/storage, containers/image의 선택적 드라이버를 제외한다.
-BUILDTAGS ?= exclude_graphdriver_btrfs containers_image_openpgp exclude_graphdriver_devicemapper
+# btrfs-progs-devel, device-mapper C 헤더 없이도 빌드 가능하도록
+# containers/storage의 선택적 드라이버를 제외한다. gpgme-devel/libassuan-devel은
+# CI와 Dockerfile 빌더 스테이지 양쪽에 이미 설치되어 있어(#29), 기본 gpgme(cgo)
+# 서명 메커니즘을 그대로 쓴다 — 로컬에서 이 패키지들이 없는 환경은 빌드가 실패한다.
+BUILDTAGS ?= exclude_graphdriver_btrfs exclude_graphdriver_devicemapper
 
 # ── infra-lab / Harbor 설정 ──────────────────────────────────────────
 # infra-lab은 환경별로 ../infra-lab/state/<env-name>/kubeconfig에 kubeconfig를

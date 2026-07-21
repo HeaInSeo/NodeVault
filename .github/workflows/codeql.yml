@@ -27,6 +27,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
+      # Deliberately keeps containers_image_openpgp, unlike ci.yml/Makefile/
+      # Dockerfile (#29): this job runs on ubuntu-latest with no gpgme-devel/
+      # libassuan-devel install step, and the tag avoids that cgo dependency
+      # by making go.podman.io/image/v5 use its pure-Go signature mechanism
+      # instead. CodeQL only needs NodeVault's own source to compile for
+      # analysis; the vendored dependency's internal signature-mechanism
+      # choice doesn't affect what gets scanned.
       BUILD_TAGS: "exclude_graphdriver_btrfs containers_image_openpgp exclude_graphdriver_devicemapper"
     strategy:
       fail-fast: false

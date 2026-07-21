@@ -17,13 +17,9 @@ package build
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"testing"
 	"time"
-
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
@@ -37,63 +33,55 @@ func integrationAddr() string {
 	return defaultIntegrationAddr
 }
 
-func TestBuildAndRegister_SimpleDockerfile(t *testing.T) {
-	if os.Getenv("KUBECONFIG") == "" {
-		t.Skip("KUBECONFIG not set — skipping integration test")
-	}
+// TestSubmitToolBuild_SimpleDockerfile is the ResolveToolSpec -> SubmitToolBuild
+// -> WatchToolBuild equivalent of the removed legacy BuildAndRegister
+// integration test (issue #15): a simple Dockerfile must build, push, and
+// reach a Succeeded terminal event carrying the pushed digest.
+func TestSubmitToolBuild_SimpleDockerfile(t *testing.T) {
+	skipUnlessIntegration(t)
+	client := newIntegrationBuildClient(t)
 
-	conn, err := grpc.NewClient(integrationAddr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		t.Fatalf("grpc.NewClient: %v", err)
-	}
-	defer conn.Close()
-
-	client := nfv1.NewBuildServiceClient(conn)
-
-	req := &nfv1.BuildRequest{
-		RequestId:        fmt.Sprintf("inttest-%d", time.Now().UnixMilli()),
-		ToolDefinitionId: "test-tool-001",
-		ToolName:         "test-alpine-tool",
-		ImageUri:         "docker.io/library/alpine:3.19",
-		DockerfileContent: `FROM alpine:3.19 AS builder
-RUN echo "hello nodeforge" > /hello.txt
-`,
-	}
+	toolName := "test-alpine-tool"
+	dockerfile := "FROM alpine:3.20@" + alpine320Digest + "\n" +
+		`RUN echo "hello nodevault" > /hello.txt` + "\n" +
+		"USER 1000"
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 
-	stream, err := client.BuildAndRegister(ctx, req)
+	digest := resolveIntegrationToolSpec(ctx, t, client, toolName, dockerfile)
+
+	resp, err := client.SubmitToolBuild(ctx, &nfv1.SubmitToolBuildRequest{
+		RequestId:      fmt.Sprintf("inttest-%d", time.Now().UnixMilli()),
+		ToolSpecDigest: digest,
+	})
 	if err != nil {
-		t.Fatalf("BuildAndRegister RPC: %v", err)
+		t.Fatalf("SubmitToolBuild: %v", err)
 	}
 
-	var finalDigest string
-	var succeeded bool
+	stream, err := client.WatchToolBuild(ctx, &nfv1.WatchToolBuildRequest{BuildId: resp.GetBuildId()})
+	if err != nil {
+		t.Fatalf("WatchToolBuild: %v", err)
+	}
 
+	var finalDigest, finalStatus string
 	for {
 		ev, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
 		if err != nil {
 			t.Fatalf("stream.Recv: %v", err)
 		}
-
-		t.Logf("[%s] %s", ev.Kind, ev.Message)
-
-		switch ev.Kind {
-		case nfv1.BuildEventKind_BUILD_EVENT_KIND_DIGEST_ACQUIRED:
-			finalDigest = ev.Digest
-		case nfv1.BuildEventKind_BUILD_EVENT_KIND_SUCCEEDED:
-			succeeded = true
-		case nfv1.BuildEventKind_BUILD_EVENT_KIND_FAILED:
-			t.Fatalf("build failed: %s", ev.Message)
+		t.Logf("[%s] %s", ev.GetStatus(), ev.GetMessage())
+		finalStatus = ev.GetStatus()
+		if ev.GetImageDigest() != "" {
+			finalDigest = ev.GetImageDigest()
+		}
+		if finalStatus == "Succeeded" || finalStatus == "Failed" || finalStatus == "Interrupted" {
+			break
 		}
 	}
 
-	if !succeeded {
-		t.Fatal("build did not succeed")
+	if finalStatus != "Succeeded" {
+		t.Fatalf("final status = %q, want Succeeded", finalStatus)
 	}
 	if finalDigest == "" {
 		t.Fatal("no digest acquired")
@@ -101,73 +89,61 @@ RUN echo "hello nodeforge" > /hello.txt
 	t.Logf("Gate passed: digest=%s", finalDigest)
 }
 
-// TestBuildAndRegister_BadDockerfile verifies that a Dockerfile with a failing
-// RUN command causes NodeForge to emit BUILD_EVENT_KIND_FAILED and NOT succeed.
+// TestSubmitToolBuild_BadDockerfile is the ResolveToolSpec -> SubmitToolBuild
+// -> WatchToolBuild equivalent of the removed legacy BuildAndRegister bad-Dockerfile
+// integration test: a Dockerfile with a failing RUN command must reach a
+// Failed terminal event, never Succeeded.
 //
-// Regression guard: BUILD_EVENT_KIND_FAILED must be returned (not a silent hang
-// or a spurious SUCCEEDED) when the in-Pod Buildah build fails.
-func TestBuildAndRegister_BadDockerfile(t *testing.T) {
-	if os.Getenv("KUBECONFIG") == "" {
-		t.Skip("KUBECONFIG not set — skipping integration test")
-	}
+// Regression guard: the terminal status must be Failed (not a silent hang or
+// a spurious Succeeded) when the in-Pod Buildah build fails.
+func TestSubmitToolBuild_BadDockerfile(t *testing.T) {
+	skipUnlessIntegration(t)
+	client := newIntegrationBuildClient(t)
 
-	conn, err := grpc.NewClient(integrationAddr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		t.Fatalf("grpc.NewClient: %v", err)
-	}
-	defer conn.Close()
-
-	client := nfv1.NewBuildServiceClient(conn)
-
-	req := &nfv1.BuildRequest{
-		RequestId:        fmt.Sprintf("inttest-bad-%d", time.Now().UnixMilli()),
-		ToolDefinitionId: "test-tool-bad",
-		ToolName:         "test-bad-dockerfile",
-		ImageUri:         "docker.io/library/alpine:3.19",
-		// Intentionally broken: the command makes the in-Pod Buildah build fail.
-		DockerfileContent: `FROM alpine:3.19 AS builder
-RUN nonexistent_command_xyz --fail
-`,
-	}
+	toolName := "test-bad-dockerfile"
+	// Intentionally broken: the command makes the in-Pod Buildah build fail.
+	dockerfile := "FROM alpine:3.20@" + alpine320Digest + "\n" +
+		"RUN nonexistent_command_xyz --fail\n" +
+		"USER 1000"
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 
-	stream, err := client.BuildAndRegister(ctx, req)
+	digest := resolveIntegrationToolSpec(ctx, t, client, toolName, dockerfile)
+
+	resp, err := client.SubmitToolBuild(ctx, &nfv1.SubmitToolBuildRequest{
+		RequestId:      fmt.Sprintf("inttest-bad-%d", time.Now().UnixMilli()),
+		ToolSpecDigest: digest,
+	})
 	if err != nil {
-		t.Fatalf("BuildAndRegister RPC: %v", err)
+		t.Fatalf("SubmitToolBuild: %v", err)
 	}
 
-	var gotFailed bool
-	var gotSucceeded bool
+	stream, err := client.WatchToolBuild(ctx, &nfv1.WatchToolBuildRequest{BuildId: resp.GetBuildId()})
+	if err != nil {
+		t.Fatalf("WatchToolBuild: %v", err)
+	}
 
+	var finalStatus string
 	for {
 		ev, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
 		if err != nil {
 			// A gRPC-level error after some events is also a failure signal.
 			t.Logf("stream.Recv error (may be expected on failure path): %v", err)
-			gotFailed = true
 			break
 		}
-
-		t.Logf("[%s] %s", ev.Kind, ev.Message)
-
-		switch ev.Kind {
-		case nfv1.BuildEventKind_BUILD_EVENT_KIND_FAILED:
-			gotFailed = true
-		case nfv1.BuildEventKind_BUILD_EVENT_KIND_SUCCEEDED:
-			gotSucceeded = true
+		t.Logf("[%s] %s", ev.GetStatus(), ev.GetMessage())
+		finalStatus = ev.GetStatus()
+		if finalStatus == "Succeeded" || finalStatus == "Failed" || finalStatus == "Interrupted" {
+			break
 		}
 	}
 
-	if gotSucceeded {
+	if finalStatus == "Succeeded" {
 		t.Fatal("build unexpectedly succeeded with a broken Dockerfile")
 	}
-	if !gotFailed {
-		t.Fatal("expected BUILD_EVENT_KIND_FAILED but did not receive it")
+	if finalStatus != "Failed" {
+		t.Fatalf("final status = %q, want Failed", finalStatus)
 	}
-	t.Log("Failure gate passed: BUILD_EVENT_KIND_FAILED received as expected")
+	t.Log("Failure gate passed: Failed status received as expected")
 }

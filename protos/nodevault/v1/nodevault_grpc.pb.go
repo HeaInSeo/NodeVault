@@ -159,26 +159,17 @@ var PolicyService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	BuildService_BuildAndRegister_FullMethodName = "/nodevault.v1.BuildService/BuildAndRegister"
-	BuildService_ResolveToolSpec_FullMethodName  = "/nodevault.v1.BuildService/ResolveToolSpec"
-	BuildService_SubmitToolBuild_FullMethodName  = "/nodevault.v1.BuildService/SubmitToolBuild"
-	BuildService_WatchToolBuild_FullMethodName   = "/nodevault.v1.BuildService/WatchToolBuild"
-	BuildService_CancelToolBuild_FullMethodName  = "/nodevault.v1.BuildService/CancelToolBuild"
-	BuildService_ResolveRecipe_FullMethodName    = "/nodevault.v1.BuildService/ResolveRecipe"
+	BuildService_ResolveToolSpec_FullMethodName = "/nodevault.v1.BuildService/ResolveToolSpec"
+	BuildService_SubmitToolBuild_FullMethodName = "/nodevault.v1.BuildService/SubmitToolBuild"
+	BuildService_WatchToolBuild_FullMethodName  = "/nodevault.v1.BuildService/WatchToolBuild"
+	BuildService_CancelToolBuild_FullMethodName = "/nodevault.v1.BuildService/CancelToolBuild"
+	BuildService_ResolveRecipe_FullMethodName   = "/nodevault.v1.BuildService/ResolveRecipe"
 )
 
 // BuildServiceClient is the client API for BuildService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type BuildServiceClient interface {
-	// Deprecated: Do not use.
-	// Deprecated: use ResolveToolSpec + SubmitToolBuild + WatchToolBuild.
-	// BuildAndRegister stays available only while NodeKit UI/library callers
-	// still submit legacy BuildRequest messages. option deprecated = true below
-	// surfaces this as a real compiler-level deprecation marker in generated
-	// clients (e.g. C#'s [Obsolete]), not just a comment, so callers get a
-	// build warning rather than having to notice a doc string.
-	BuildAndRegister(ctx context.Context, in *BuildRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BuildEvent], error)
 	// ResolveToolSpec normalizes the submitted raw_spec and computes its
 	// content digest (tool_spec_digest). It never selects or rewrites the
 	// author's package/build/base-image choice — that choice must already be
@@ -202,26 +193,6 @@ func NewBuildServiceClient(cc grpc.ClientConnInterface) BuildServiceClient {
 	return &buildServiceClient{cc}
 }
 
-// Deprecated: Do not use.
-func (c *buildServiceClient) BuildAndRegister(ctx context.Context, in *BuildRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BuildEvent], error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &BuildService_ServiceDesc.Streams[0], BuildService_BuildAndRegister_FullMethodName, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	x := &grpc.GenericClientStream[BuildRequest, BuildEvent]{ClientStream: stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
-		return nil, err
-	}
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
-	return x, nil
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type BuildService_BuildAndRegisterClient = grpc.ServerStreamingClient[BuildEvent]
-
 func (c *buildServiceClient) ResolveToolSpec(ctx context.Context, in *ToolSpecRequest, opts ...grpc.CallOption) (*ResolvedToolSpecResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ResolvedToolSpecResponse)
@@ -244,7 +215,7 @@ func (c *buildServiceClient) SubmitToolBuild(ctx context.Context, in *SubmitTool
 
 func (c *buildServiceClient) WatchToolBuild(ctx context.Context, in *WatchToolBuildRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BuildEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &BuildService_ServiceDesc.Streams[1], BuildService_WatchToolBuild_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &BuildService_ServiceDesc.Streams[0], BuildService_WatchToolBuild_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -285,14 +256,6 @@ func (c *buildServiceClient) ResolveRecipe(ctx context.Context, in *ResolveRecip
 // All implementations must embed UnimplementedBuildServiceServer
 // for forward compatibility.
 type BuildServiceServer interface {
-	// Deprecated: Do not use.
-	// Deprecated: use ResolveToolSpec + SubmitToolBuild + WatchToolBuild.
-	// BuildAndRegister stays available only while NodeKit UI/library callers
-	// still submit legacy BuildRequest messages. option deprecated = true below
-	// surfaces this as a real compiler-level deprecation marker in generated
-	// clients (e.g. C#'s [Obsolete]), not just a comment, so callers get a
-	// build warning rather than having to notice a doc string.
-	BuildAndRegister(*BuildRequest, grpc.ServerStreamingServer[BuildEvent]) error
 	// ResolveToolSpec normalizes the submitted raw_spec and computes its
 	// content digest (tool_spec_digest). It never selects or rewrites the
 	// author's package/build/base-image choice — that choice must already be
@@ -316,9 +279,6 @@ type BuildServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedBuildServiceServer struct{}
 
-func (UnimplementedBuildServiceServer) BuildAndRegister(*BuildRequest, grpc.ServerStreamingServer[BuildEvent]) error {
-	return status.Error(codes.Unimplemented, "method BuildAndRegister not implemented")
-}
 func (UnimplementedBuildServiceServer) ResolveToolSpec(context.Context, *ToolSpecRequest) (*ResolvedToolSpecResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolveToolSpec not implemented")
 }
@@ -354,17 +314,6 @@ func RegisterBuildServiceServer(s grpc.ServiceRegistrar, srv BuildServiceServer)
 	}
 	s.RegisterService(&BuildService_ServiceDesc, srv)
 }
-
-func _BuildService_BuildAndRegister_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(BuildRequest)
-	if err := stream.RecvMsg(m); err != nil {
-		return err
-	}
-	return srv.(BuildServiceServer).BuildAndRegister(m, &grpc.GenericServerStream[BuildRequest, BuildEvent]{ServerStream: stream})
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type BuildService_BuildAndRegisterServer = grpc.ServerStreamingServer[BuildEvent]
 
 func _BuildService_ResolveToolSpec_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ToolSpecRequest)
@@ -474,11 +423,6 @@ var BuildService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams: []grpc.StreamDesc{
-		{
-			StreamName:    "BuildAndRegister",
-			Handler:       _BuildService_BuildAndRegister_Handler,
-			ServerStreams: true,
-		},
 		{
 			StreamName:    "WatchToolBuild",
 			Handler:       _BuildService_WatchToolBuild_Handler,

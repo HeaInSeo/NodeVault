@@ -74,10 +74,11 @@ NodePalette의 최종 배치 위치와 독립 배포 방식은 별도 결정 사
 
 ## Write Path — 툴 이미지
 
-외부 NodeKit이 `BuildRequest`를 전송하면 Kubernetes data-plane 안의 NodeVault가 수행하는 순서:
+외부 NodeKit이 `ResolveToolSpec`으로 raw_spec을 digest화한 뒤 `SubmitToolBuild`를 호출하면
+Kubernetes data-plane 안의 NodeVault가 수행하는 순서(진행 상황은 `WatchToolBuild` 스트림으로 노출):
 
 ```
-1. gRPC 수신 (BuildService.BuildAndRegister)
+1. gRPC 수신 (BuildService.SubmitToolBuild)
 2. L2: podbridge5로 이미지 빌드 → Harbor push → digest 획득
 3. L3: K8s dry-run (Job manifest 검증)
 4. L4: K8s smoke run (실제 컨테이너 실행 확인)
@@ -142,7 +143,7 @@ index의 상태는 두 축으로 분리한다. **절대 같은 필드에 섞지 
 
 | 요청 | 현재 구현 |
 |------|-----------|
-| 툴 이미지 빌드 요청 | `BuildService.BuildAndRegister` (gRPC) |
+| 툴 이미지 빌드 요청 | `BuildService.ResolveToolSpec` + `SubmitToolBuild` + `WatchToolBuild` (gRPC, issue #15로 legacy `BuildAndRegister` 제거) |
 | 툴 목록 조회 (AdminToolList) | `GET /v1/catalog/tools` (NodePalette REST) via `HttpCatalogClient` |
 | 데이터 목록 조회 (AdminDataList) | `GET /v1/catalog/data` (NodePalette REST) — 현재 빈 목록 |
 | 데이터 등록 요청 | 미구현 (P3 TODO-12) |

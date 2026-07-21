@@ -65,7 +65,14 @@ const (
 //   - reconcile_error_delta == 0  (no reconcile errors — regression check)
 //   - reconcile_slow_delta == 0   (testSlowReconcile=1h never fires in a 25s window)
 //   - build_failure_delta == 0    (NODEVAULT_BUILD_BACKEND=disabled: no build is
-//     submitted during this window, so the failure counter must not move)
+//     submitted during this window, so neither counter must move)
+//   - build_success_delta == 0    (symmetric with build_failure_delta — added
+//     after discovering the legacy BuildAndRegister RPC was the only code path
+//     ever incrementing nodevault_build_success_total/nodevault_build_failure_total;
+//     runSubmittedBuild never did until issue #15's removal moved emission to
+//     finalizeSubmittedBuild. Both deltas gated here so a future regression that
+//     silently orphans either counter's emission site is caught structurally,
+//     not just by code review.)
 //
 // Also gates two signals outside the reconcile-loop counters:
 //   - startup latency (process start -> healthz ready) <= startupLatencyBudget
@@ -137,6 +144,7 @@ func TestNodeVaultSlintGate(t *testing.T) {
 	assertEQ(t, results, "reconcile_error_delta", 0)
 	assertEQ(t, results, "reconcile_slow_delta", 0)
 	assertEQ(t, results, "build_failure_delta", 0)
+	assertEQ(t, results, "build_success_delta", 0)
 
 	if pingResult.calls == 0 {
 		t.Error("gRPC ping probe made 0 calls during the observation window")
@@ -185,6 +193,14 @@ func nodevaultSpecs() []spec.SLISpec {
 			Unit:    "count",
 			Kind:    "delta_counter",
 			Inputs:  []spec.MetricRef{spec.UnsafePromKey("nodevault_build_failure_total")},
+			Compute: spec.ComputeSpec{Mode: spec.ComputeDelta},
+		},
+		{
+			ID:      "build_success_delta",
+			Title:   "Build Successes",
+			Unit:    "count",
+			Kind:    "delta_counter",
+			Inputs:  []spec.MetricRef{spec.UnsafePromKey("nodevault_build_success_total")},
 			Compute: spec.ComputeSpec{Mode: spec.ComputeDelta},
 		},
 	}

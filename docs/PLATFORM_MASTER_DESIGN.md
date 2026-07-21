@@ -230,7 +230,7 @@ Retracted ─[운영자 Delete + Harbor GC]▶ Deleted
 
 NodeVault가 podbridge5를 **K8s Pod 내부에서 in-process로 직접 실행**.
 `hostUsers: false` + `allowPrivilegeEscalation: false` 환경에서 overlay storage driver + chroot isolation으로 검증 완료 (seoy 클러스터, 2026-06-22).
-K8s Job으로 위임하지 않는다. rootless 실패 시 privileged fallback 없음 — 코드 및 테스트(`TestBuildAndRegister_RootlessFailure_NoPrivilegedFallback`)로 확인.
+K8s Job으로 위임하지 않는다. rootless 실패 시 privileged fallback 없음 — 코드 및 테스트(`TestSubmitToolBuild_BuilderErrorNoRetry_TransitionsToFailed`, legacy `BuildAndRegister` 제거(issue #15) 후 SubmitToolBuild 경로로 이관)로 확인.
 
 ### 4.9 Recipe 재현성 해소 (ResolveRecipe)
 
@@ -420,14 +420,14 @@ expected: /out/result.txt exists=true, count=1, totalBytes>0
 
 **완료 판정 기준**:
 - [x] `go build ./pkg/profiler/...` 성공
-- [ ] `TestBuildAndRegister_ProfilerHookCalled` 통과
+- [ ] `TestSubmitToolBuild_ProfilerHookCalled` 통과 (구 이름 `TestBuildAndRegister_ProfilerHookCalled` — legacy RPC 제거, issue #15)
 - [ ] `TestProfiler_OutputCapture` 통과
 - [x] `TestValidationHash_Deterministic` 통과
 - [x] `TestValidationHash_ExcludesObservedResourcesByDefault` 통과
 - [x] `TestValidationHash_OnlyForSuccessfulFunctionalValidation` 통과
 - [x] `TestValidator_InfraFailureClassification` 통과
 - [x] `TestProfiler_TimeoutProducesInconclusiveProfile` 통과
-- [ ] `TestBuildAndRegister_WithProfile` 통합 테스트 통과
+- [ ] `TestSubmitToolBuild_WithProfile` 통합 테스트 통과 (구 이름 `TestBuildAndRegister_WithProfile` — legacy RPC 제거, issue #15)
 - [ ] `TestCasHashStability` 통과 (기존 casHash 불변 재확인)
 - [x] `go test ./...` 전체 통과 (2026-06-28)
 
@@ -480,7 +480,7 @@ expected: /out/result.txt exists=true, count=1, totalBytes>0
 
 | 작업 | 상태 | 비고 |
 |------|------|------|
-| `make deploy-infralab` + seoy e2e 통합 테스트 | ✓ 완료 (2026-06-22) | TestBuildAndRegister_SimpleDockerfile 통과 |
+| `make deploy-infralab` + seoy e2e 통합 테스트 | ✓ 완료 (2026-06-22) | 당시 이름 TestBuildAndRegister_SimpleDockerfile 통과 (현재 TestSubmitToolBuild_SimpleDockerfile — legacy RPC 제거, issue #15) |
 | sori/utils module path 정리 | ✓ 완료 | `HeaInSeo/sori v0.8.0-rc4`, `HeaInSeo/utils v0.0.7` |
 | pkg/profiler/ 타입 설계 확정 | ✗ 미완료 | OBSERVED_PROFILE_SPEC.md §3 기준 — Sprint 2 착수 전 확인 필요 |
 

@@ -608,10 +608,10 @@ Legacy BuildRequest
 
 **완료 판정**
 
-- [ ] NodeKit legacy BuildRequest usage 0
+- [x] NodeKit legacy BuildRequest usage 0 (2026-07-21 재확인, 위 참조)
 - [x] `BuildAndRegister` RPC가 deprecated 표시 상태
 - [x] legacy `BuildAndRegister` 호출 시 warning 로그 기록
-- [ ] legacy usage 0 확인 후 제거 ADR 작성
+- [x] legacy usage 0 확인 후 실제 RPC 제거 완료(2026-07-21, issue #15) — `BuildAndRegister` 메서드/proto RPC 삭제, `BuildAndRegister`만 증가시키던 `nodevault_build_success_total`/`nodevault_build_failure_total`을 `runSubmittedBuild`의 공통 terminal 지점(`finalizeSubmittedBuild`)으로 이관, kube-slint 게이트에 `build_success_delta`도 대칭 추가
 
 ---
 

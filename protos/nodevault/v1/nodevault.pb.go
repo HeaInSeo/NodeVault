@@ -4293,9 +4293,8 @@ const file_nodevault_v1_nodevault_proto_rawDesc = "" +
 	"\x17BUILD_EVENT_KIND_FAILED\x10\a2\xbb\x01\n" +
 	"\rPolicyService\x12S\n" +
 	"\x0fGetPolicyBundle\x12$.nodevault.v1.GetPolicyBundleRequest\x1a\x1a.nodevault.v1.PolicyBundle\x12U\n" +
-	"\fListPolicies\x12!.nodevault.v1.ListPoliciesRequest\x1a\".nodevault.v1.ListPoliciesResponse2\xa6\x04\n" +
-	"\fBuildService\x12O\n" +
-	"\x10BuildAndRegister\x12\x1a.nodevault.v1.BuildRequest\x1a\x18.nodevault.v1.BuildEvent\"\x03\x88\x02\x010\x01\x12X\n" +
+	"\fListPolicies\x12!.nodevault.v1.ListPoliciesRequest\x1a\".nodevault.v1.ListPoliciesResponse2\xd5\x03\n" +
+	"\fBuildService\x12X\n" +
 	"\x0fResolveToolSpec\x12\x1d.nodevault.v1.ToolSpecRequest\x1a&.nodevault.v1.ResolvedToolSpecResponse\x12^\n" +
 	"\x0fSubmitToolBuild\x12$.nodevault.v1.SubmitToolBuildRequest\x1a%.nodevault.v1.SubmitToolBuildResponse\x12Q\n" +
 	"\x0eWatchToolBuild\x12#.nodevault.v1.WatchToolBuildRequest\x1a\x18.nodevault.v1.BuildEvent0\x01\x12^\n" +
@@ -4425,50 +4424,48 @@ var file_nodevault_v1_nodevault_proto_depIdxs = []int32{
 	53, // 25: nodevault.v1.ListCertifiedToolsResponse.tools:type_name -> nodevault.v1.CertifiedToolEntry
 	6,  // 26: nodevault.v1.PolicyService.GetPolicyBundle:input_type -> nodevault.v1.GetPolicyBundleRequest
 	8,  // 27: nodevault.v1.PolicyService.ListPolicies:input_type -> nodevault.v1.ListPoliciesRequest
-	23, // 28: nodevault.v1.BuildService.BuildAndRegister:input_type -> nodevault.v1.BuildRequest
-	11, // 29: nodevault.v1.BuildService.ResolveToolSpec:input_type -> nodevault.v1.ToolSpecRequest
-	13, // 30: nodevault.v1.BuildService.SubmitToolBuild:input_type -> nodevault.v1.SubmitToolBuildRequest
-	15, // 31: nodevault.v1.BuildService.WatchToolBuild:input_type -> nodevault.v1.WatchToolBuildRequest
-	16, // 32: nodevault.v1.BuildService.CancelToolBuild:input_type -> nodevault.v1.CancelToolBuildRequest
-	21, // 33: nodevault.v1.BuildService.ResolveRecipe:input_type -> nodevault.v1.ResolveRecipeRequest
-	25, // 34: nodevault.v1.ValidateService.DryRun:input_type -> nodevault.v1.DryRunRequest
-	27, // 35: nodevault.v1.ValidateService.SmokeRun:input_type -> nodevault.v1.SmokeRunRequest
-	29, // 36: nodevault.v1.ToolRegistryService.RegisterTool:input_type -> nodevault.v1.RegisterToolRequest
-	31, // 37: nodevault.v1.ToolRegistryService.GetTool:input_type -> nodevault.v1.GetToolRequest
-	32, // 38: nodevault.v1.ToolRegistryService.ListTools:input_type -> nodevault.v1.ListToolsRequest
-	35, // 39: nodevault.v1.ToolRegistryService.RetractTool:input_type -> nodevault.v1.RetractToolRequest
-	37, // 40: nodevault.v1.ToolRegistryService.DeleteTool:input_type -> nodevault.v1.DeleteToolRequest
-	39, // 41: nodevault.v1.DataRegistryService.RegisterData:input_type -> nodevault.v1.DataRegisterRequest
-	41, // 42: nodevault.v1.DataRegistryService.GetData:input_type -> nodevault.v1.GetDataRequest
-	42, // 43: nodevault.v1.DataRegistryService.ListData:input_type -> nodevault.v1.ListDataRequest
-	49, // 44: nodevault.v1.ValidationResultService.SubmitToolCheckRecord:input_type -> nodevault.v1.ToolCheckRecordRequest
-	50, // 45: nodevault.v1.ValidationResultService.SubmitToolScanRecord:input_type -> nodevault.v1.ToolScanRecordRequest
-	52, // 46: nodevault.v1.ValidationResultService.ListCertifiedTools:input_type -> nodevault.v1.ListCertifiedToolsRequest
-	55, // 47: nodevault.v1.PingService.Ping:input_type -> nodevault.v1.PingRequest
-	7,  // 48: nodevault.v1.PolicyService.GetPolicyBundle:output_type -> nodevault.v1.PolicyBundle
-	10, // 49: nodevault.v1.PolicyService.ListPolicies:output_type -> nodevault.v1.ListPoliciesResponse
-	24, // 50: nodevault.v1.BuildService.BuildAndRegister:output_type -> nodevault.v1.BuildEvent
-	12, // 51: nodevault.v1.BuildService.ResolveToolSpec:output_type -> nodevault.v1.ResolvedToolSpecResponse
-	14, // 52: nodevault.v1.BuildService.SubmitToolBuild:output_type -> nodevault.v1.SubmitToolBuildResponse
-	24, // 53: nodevault.v1.BuildService.WatchToolBuild:output_type -> nodevault.v1.BuildEvent
-	17, // 54: nodevault.v1.BuildService.CancelToolBuild:output_type -> nodevault.v1.CancelToolBuildResponse
-	22, // 55: nodevault.v1.BuildService.ResolveRecipe:output_type -> nodevault.v1.ResolveRecipeResponse
-	26, // 56: nodevault.v1.ValidateService.DryRun:output_type -> nodevault.v1.DryRunResult
-	28, // 57: nodevault.v1.ValidateService.SmokeRun:output_type -> nodevault.v1.SmokeRunResult
-	30, // 58: nodevault.v1.ToolRegistryService.RegisterTool:output_type -> nodevault.v1.RegisterToolResponse
-	34, // 59: nodevault.v1.ToolRegistryService.GetTool:output_type -> nodevault.v1.RegisteredToolDefinition
-	33, // 60: nodevault.v1.ToolRegistryService.ListTools:output_type -> nodevault.v1.ListToolsResponse
-	36, // 61: nodevault.v1.ToolRegistryService.RetractTool:output_type -> nodevault.v1.RetractToolResponse
-	38, // 62: nodevault.v1.ToolRegistryService.DeleteTool:output_type -> nodevault.v1.DeleteToolResponse
-	40, // 63: nodevault.v1.DataRegistryService.RegisterData:output_type -> nodevault.v1.DataRegisterResponse
-	44, // 64: nodevault.v1.DataRegistryService.GetData:output_type -> nodevault.v1.RegisteredDataDefinition
-	43, // 65: nodevault.v1.DataRegistryService.ListData:output_type -> nodevault.v1.ListDataResponse
-	51, // 66: nodevault.v1.ValidationResultService.SubmitToolCheckRecord:output_type -> nodevault.v1.SubmitRecordResponse
-	51, // 67: nodevault.v1.ValidationResultService.SubmitToolScanRecord:output_type -> nodevault.v1.SubmitRecordResponse
-	54, // 68: nodevault.v1.ValidationResultService.ListCertifiedTools:output_type -> nodevault.v1.ListCertifiedToolsResponse
-	56, // 69: nodevault.v1.PingService.Ping:output_type -> nodevault.v1.PingResponse
-	48, // [48:70] is the sub-list for method output_type
-	26, // [26:48] is the sub-list for method input_type
+	11, // 28: nodevault.v1.BuildService.ResolveToolSpec:input_type -> nodevault.v1.ToolSpecRequest
+	13, // 29: nodevault.v1.BuildService.SubmitToolBuild:input_type -> nodevault.v1.SubmitToolBuildRequest
+	15, // 30: nodevault.v1.BuildService.WatchToolBuild:input_type -> nodevault.v1.WatchToolBuildRequest
+	16, // 31: nodevault.v1.BuildService.CancelToolBuild:input_type -> nodevault.v1.CancelToolBuildRequest
+	21, // 32: nodevault.v1.BuildService.ResolveRecipe:input_type -> nodevault.v1.ResolveRecipeRequest
+	25, // 33: nodevault.v1.ValidateService.DryRun:input_type -> nodevault.v1.DryRunRequest
+	27, // 34: nodevault.v1.ValidateService.SmokeRun:input_type -> nodevault.v1.SmokeRunRequest
+	29, // 35: nodevault.v1.ToolRegistryService.RegisterTool:input_type -> nodevault.v1.RegisterToolRequest
+	31, // 36: nodevault.v1.ToolRegistryService.GetTool:input_type -> nodevault.v1.GetToolRequest
+	32, // 37: nodevault.v1.ToolRegistryService.ListTools:input_type -> nodevault.v1.ListToolsRequest
+	35, // 38: nodevault.v1.ToolRegistryService.RetractTool:input_type -> nodevault.v1.RetractToolRequest
+	37, // 39: nodevault.v1.ToolRegistryService.DeleteTool:input_type -> nodevault.v1.DeleteToolRequest
+	39, // 40: nodevault.v1.DataRegistryService.RegisterData:input_type -> nodevault.v1.DataRegisterRequest
+	41, // 41: nodevault.v1.DataRegistryService.GetData:input_type -> nodevault.v1.GetDataRequest
+	42, // 42: nodevault.v1.DataRegistryService.ListData:input_type -> nodevault.v1.ListDataRequest
+	49, // 43: nodevault.v1.ValidationResultService.SubmitToolCheckRecord:input_type -> nodevault.v1.ToolCheckRecordRequest
+	50, // 44: nodevault.v1.ValidationResultService.SubmitToolScanRecord:input_type -> nodevault.v1.ToolScanRecordRequest
+	52, // 45: nodevault.v1.ValidationResultService.ListCertifiedTools:input_type -> nodevault.v1.ListCertifiedToolsRequest
+	55, // 46: nodevault.v1.PingService.Ping:input_type -> nodevault.v1.PingRequest
+	7,  // 47: nodevault.v1.PolicyService.GetPolicyBundle:output_type -> nodevault.v1.PolicyBundle
+	10, // 48: nodevault.v1.PolicyService.ListPolicies:output_type -> nodevault.v1.ListPoliciesResponse
+	12, // 49: nodevault.v1.BuildService.ResolveToolSpec:output_type -> nodevault.v1.ResolvedToolSpecResponse
+	14, // 50: nodevault.v1.BuildService.SubmitToolBuild:output_type -> nodevault.v1.SubmitToolBuildResponse
+	24, // 51: nodevault.v1.BuildService.WatchToolBuild:output_type -> nodevault.v1.BuildEvent
+	17, // 52: nodevault.v1.BuildService.CancelToolBuild:output_type -> nodevault.v1.CancelToolBuildResponse
+	22, // 53: nodevault.v1.BuildService.ResolveRecipe:output_type -> nodevault.v1.ResolveRecipeResponse
+	26, // 54: nodevault.v1.ValidateService.DryRun:output_type -> nodevault.v1.DryRunResult
+	28, // 55: nodevault.v1.ValidateService.SmokeRun:output_type -> nodevault.v1.SmokeRunResult
+	30, // 56: nodevault.v1.ToolRegistryService.RegisterTool:output_type -> nodevault.v1.RegisterToolResponse
+	34, // 57: nodevault.v1.ToolRegistryService.GetTool:output_type -> nodevault.v1.RegisteredToolDefinition
+	33, // 58: nodevault.v1.ToolRegistryService.ListTools:output_type -> nodevault.v1.ListToolsResponse
+	36, // 59: nodevault.v1.ToolRegistryService.RetractTool:output_type -> nodevault.v1.RetractToolResponse
+	38, // 60: nodevault.v1.ToolRegistryService.DeleteTool:output_type -> nodevault.v1.DeleteToolResponse
+	40, // 61: nodevault.v1.DataRegistryService.RegisterData:output_type -> nodevault.v1.DataRegisterResponse
+	44, // 62: nodevault.v1.DataRegistryService.GetData:output_type -> nodevault.v1.RegisteredDataDefinition
+	43, // 63: nodevault.v1.DataRegistryService.ListData:output_type -> nodevault.v1.ListDataResponse
+	51, // 64: nodevault.v1.ValidationResultService.SubmitToolCheckRecord:output_type -> nodevault.v1.SubmitRecordResponse
+	51, // 65: nodevault.v1.ValidationResultService.SubmitToolScanRecord:output_type -> nodevault.v1.SubmitRecordResponse
+	54, // 66: nodevault.v1.ValidationResultService.ListCertifiedTools:output_type -> nodevault.v1.ListCertifiedToolsResponse
+	56, // 67: nodevault.v1.PingService.Ping:output_type -> nodevault.v1.PingResponse
+	47, // [47:68] is the sub-list for method output_type
+	26, // [26:47] is the sub-list for method input_type
 	26, // [26:26] is the sub-list for extension type_name
 	26, // [26:26] is the sub-list for extension extendee
 	0,  // [0:26] is the sub-list for field type_name

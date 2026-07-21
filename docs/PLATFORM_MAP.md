@@ -1,8 +1,8 @@
 # Platform Map
 
-버전: 1.4  
+버전: 1.5  
 작성일: 2026-04-18  
-갱신일: 2026-07-20 (Dockerfile validator를 "최종 신뢰 경계"에서 "pre-build admission 게이트"로 재정의, post-build 검사(Sprint 10)가 실제 최종 경계임을 명시(issue #24); spec referrer TODO-07 완료 반영; Harbor 주소 harbor.lab.local로 수정; NodeKit gRPC 클라이언트를 GrpcToolSpecClient로 수정(issue #25) — 그 외 항목은 미검증 상태로 남아 있을 수 있음)  
+갱신일: 2026-07-21 (legacy `BuildAndRegister` RPC 제거 반영(issue #15) — NodeKit이 2026-07-14/16에 완전히 마이그레이션 완료해 실사용자 0건 확인 후 제거; Dockerfile validator를 "최종 신뢰 경계"에서 "pre-build admission 게이트"로 재정의, post-build 검사(Sprint 10)가 실제 최종 경계임을 명시(issue #24); spec referrer TODO-07 완료 반영; Harbor 주소 harbor.lab.local로 수정; NodeKit gRPC 클라이언트를 GrpcToolSpecClient로 수정(issue #25) — 그 외 항목은 미검증 상태로 남아 있을 수 있음)  
 목적: **개발 세션 시작 시 이 파일 하나로 전체 플랫폼 맥락 파악**
 
 → 전체 일정/작업 큐: [PLATFORM_SCHEDULE.md](PLATFORM_SCHEDULE.md)
@@ -39,7 +39,7 @@
     └── NodeKit WasmPolicyChecker가 로컬 실행
     └── NodeVault PolicyService가 번들 배포
 
-NodeKit의 L1 검증은 authoring UX를 위한 1차 피드백이다. NodeVault는 `SubmitToolBuild`/legacy `BuildAndRegister`에서 `builder.Build()` 전에 Go native Dockerfile validator(`github.com/openshift/imagebuilder` — Buildah 자신이 쓰는 파서 재사용)를 실행하는 pre-build admission 게이트다. 이는 최종 신뢰 경계가 아니다 — Dockerfile 텍스트 정적 분석만으로는 base 이미지가 이미 포함한 콘텐츠를 볼 수 없다(issue #24). 실제 빌드된 이미지 콘텐츠에 대한 post-build 검사가 최종 신뢰 경계이며, `PLATFORM_SCHEDULE.md` Sprint 10으로 별도 추적한다. DockGuard WASM 직접 실행은 아직 NodeVault build path에 연결되지 않았고, 정책 drift 축소를 위한 후속 작업으로 추적한다.
+NodeKit의 L1 검증은 authoring UX를 위한 1차 피드백이다. NodeVault는 `SubmitToolBuild`에서 `builder.Build()` 전에 Go native Dockerfile validator(`github.com/openshift/imagebuilder` — Buildah 자신이 쓰는 파서 재사용)를 실행하는 pre-build admission 게이트다. 이는 최종 신뢰 경계가 아니다 — Dockerfile 텍스트 정적 분석만으로는 base 이미지가 이미 포함한 콘텐츠를 볼 수 없다(issue #24). 실제 빌드된 이미지 콘텐츠에 대한 post-build 검사가 최종 신뢰 경계이며, `PLATFORM_SCHEDULE.md` Sprint 10으로 별도 추적한다. DockGuard WASM 직접 실행은 아직 NodeVault build path에 연결되지 않았고, 정책 drift 축소를 위한 후속 작업으로 추적한다.
 
 [DagEdit]  ── C#/Avalonia 파이프라인 빌더
     └── NodePalette와 연결 없음 ← P5 이후 과제

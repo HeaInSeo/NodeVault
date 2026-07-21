@@ -48,7 +48,7 @@ NodeVault가 받아서 서버 쪽 final build gate를 통과한 뒤 podbridge5 i
 
 ### 현재 상태: 동작 중
 
-- `pkg/build/service.go:BuildAndRegister` 와 `pkg/build/submit_tool_build.go:SubmitToolBuild` 는 `req.DockerfileContent` 를 rewrite하지 않는다.
+- `pkg/build/submit_tool_build.go:SubmitToolBuild`(legacy `BuildAndRegister`는 issue #15로 제거)는 `req.DockerfileContent` 를 rewrite하지 않는다.
 - 현재 Dockerfile build path는 `BUILD_KIND_UNSPECIFIED`(legacy compatibility)와 `BUILD_KIND_TOOLSPEC`만 지원한다. `BUILD_KIND_TOOLFUNCTIONSPEC`은 API 모델에는 있지만 function-image builder가 생기기 전까지 build gate에서 거부한다.
 - NodeVault final build gate: `builder.Build()` 전에 Dockerfile 정책을 재검증한다. 최소 정책은 모든 `FROM` digest pin, `latest` 금지, digest 형식(`sha256:<64 hex>`) 검증, root/변수 기반 `USER` 차단이다.
 - L1 검증(NodeKit): 사용자 친화적 authoring 피드백. NodeVault final gate를 대체하지 않는다.
@@ -201,7 +201,7 @@ referrer spec JSON 구조 (NODEVAULT_DESIGN.md / TOOL_CONTRACT_V0_2.md 기반):
 - `pkg/oras/referrer.go:PushToolSpecReferrer` — sori 라이브러리 wrapping으로 Harbor에 toolspec referrer push
 - `pkg/index/schema.go:Entry.SpecReferrerDigest` — referrer digest 저장 필드
 - `pkg/index/store.go:SetSpecReferrerDigest` — digest 갱신 메서드
-- `pkg/build/service.go:BuildAndRegister` — 등록 후 referrer push → `integrity_health = Partial → Healthy` 전이 (non-fatal)
+- `pkg/build/service.go:postBuildRegistration`(legacy `BuildAndRegister`가 이 흐름을 쓰던 시절의 호출부, issue #15로 제거 — 현재는 `runSubmittedBuild`에서 호출) — 등록 후 referrer push → `integrity_health = Partial → Healthy` 전이 (non-fatal)
 - 의존성: `github.com/HeaInSeo/sori v0.8.0-rc4`
 
 **v0.3에서 추가될 referrer** (Sprint 1~):

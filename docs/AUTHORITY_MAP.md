@@ -37,7 +37,7 @@ Index commit 판단과 실행은 NodeVault only.
 ```
 NodeVault                          NodeVault
     │                                  │
-    │── BuildAndRegister() gRPC ──────▶│
+    │── SubmitToolBuild() gRPC ───────▶│  (legacy BuildAndRegister() removed, issue #15)
     │                                  │
     │  [빌드 Job 실행]                  │
     │  [L2 push 완료]                   │

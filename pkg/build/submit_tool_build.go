@@ -16,6 +16,7 @@ import (
 
 	"github.com/HeaInSeo/NodeVault/pkg/buildstate"
 	"github.com/HeaInSeo/NodeVault/pkg/index"
+	"github.com/HeaInSeo/NodeVault/pkg/metrics"
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
@@ -322,9 +323,27 @@ func (s *Service) finalizeSubmittedBuild(
 		s.abandonSubmittedBuild(rec, atStage, err)
 		return
 	}
+	recordBuildOutcomeMetric(next)
 	s.activeMu.Lock()
 	delete(s.active, rec.BuildID)
 	s.activeMu.Unlock()
+}
+
+// recordBuildOutcomeMetric increments the operational build-outcome counter
+// for a durably-confirmed terminal transition — called exactly once per
+// build, only after buildState.Transition itself has succeeded (a write
+// that failed isn't a confirmed outcome; see abandonSubmittedBuild). Only
+// Succeeded/Failed are tracked, matching what the now-removed legacy
+// BuildAndRegister RPC used to record (issue #15) — Interrupted (user
+// cancel, or a process-restart recovery sweep) is deliberately excluded so
+// operators can distinguish real build failures from cancellation.
+func recordBuildOutcomeMetric(status buildstate.Status) {
+	switch status {
+	case buildstate.StatusSucceeded:
+		metrics.BuildSuccessTotal.Add(1)
+	case buildstate.StatusFailed:
+		metrics.BuildFailureTotal.Add(1)
+	}
 }
 
 // abandonSubmittedBuild handles the case where buildState.Transition itself

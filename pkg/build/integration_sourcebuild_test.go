@@ -27,10 +27,10 @@ import (
 )
 
 // alpine320Digest is docker.io/library/alpine:3.20's manifest-list digest,
-// pinned because ResolveToolSpec requires a real @sha256-pinned base image
-// (unlike the legacy BuildAndRegister path used elsewhere in this package).
-// If this test starts failing with a pull/manifest error, re-resolve the
-// current digest for the alpine:3.20 tag and update this constant.
+// pinned because ResolveToolSpec requires raw_spec's image_uri to already
+// carry a real @sha256-pinned base image. If this test starts failing with a
+// pull/manifest error, re-resolve the current digest for the alpine:3.20 tag
+// and update this constant.
 const alpine320Digest = "sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
 
 // golang121Digest is docker.io/library/golang:1.21's manifest-list digest,

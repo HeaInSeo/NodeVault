@@ -3,7 +3,9 @@ package build
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -537,5 +539,179 @@ func TestActiveBuildFail_ClosesDoneAtMostOnce(t *testing.T) {
 	}
 	if !errors.Is(entry.err, firstErr) {
 		t.Fatalf("err got %v, want the first failure to win", entry.err)
+	}
+}
+
+// ─── SubmitToolBuild-path coverage for behaviors formerly tested only via the
+// now-removed legacy BuildAndRegister RPC (issue #15) ─────────────────────────
+//
+// These preserve the same assertions the deleted TestBuildAndRegister_* tests
+// made, adapted to the SubmitToolBuild/WatchToolBuild terminal-event model —
+// runSubmittedBuild shares the exact same builder.Build call, recordBuildFailure,
+// pushLatestAlias, and warnIfTagReassigned functions BuildAndRegister used, so
+// this is the same underlying behavior observed through the current API.
+
+// TestSubmitToolBuild_BuilderErrorNoRetry_TransitionsToFailed verifies that a
+// build error (including a rootless/user-namespace failure) causes exactly one
+// Build call (no privileged-fallback retry — NodeVault has no such logic) and
+// a Failed terminal state, never Succeeded.
+func TestSubmitToolBuild_BuilderErrorNoRetry_TransitionsToFailed(t *testing.T) {
+	svc := newSubmitTestService(t)
+	buildCalls := 0
+	rootlessErr := fmt.Errorf(
+		"build image: error building at STEP 2: error processing " +
+			"RUN mknod /dev/test c 1 3: exit status 1: mknod: /dev/test: Operation not permitted",
+	)
+	svc.builder = &countCallBuilder{inner: &mockBuilder{err: rootlessErr}, calls: &buildCalls}
+
+	if _, err := svc.SubmitToolBuild(context.Background(), &nfv1.SubmitToolBuildRequest{
+		RequestId: "build-builder-err", ToolSpecDigest: "spec-123",
+	}); err != nil {
+		t.Fatalf("SubmitToolBuild: %v", err)
+	}
+	stream := newFakeStream()
+	if err := svc.WatchToolBuild(&nfv1.WatchToolBuildRequest{BuildId: "build-builder-err"}, stream); err != nil {
+		t.Fatalf("WatchToolBuild: %v", err)
+	}
+	last := stream.events[len(stream.events)-1]
+	if last.GetStatus() != string(buildstate.StatusFailed) {
+		t.Fatalf("final status = %q, want Failed", last.GetStatus())
+	}
+	if buildCalls != 1 {
+		t.Errorf("Build called %d times, want exactly 1 — no privileged retry", buildCalls)
+	}
+}
+
+// TestSubmitToolBuild_BuilderError_RecordsFailedToolBuildRecord verifies a
+// build failure is durably recorded in the index with Success=false.
+func TestSubmitToolBuild_BuilderError_RecordsFailedToolBuildRecord(t *testing.T) {
+	svc := newSubmitTestService(t)
+	svc.builder = &mockBuilder{err: fmt.Errorf("image build backend: exec format error")}
+
+	if _, err := svc.SubmitToolBuild(context.Background(), &nfv1.SubmitToolBuildRequest{
+		RequestId: "build-record-fail", ToolSpecDigest: "spec-123",
+	}); err != nil {
+		t.Fatalf("SubmitToolBuild: %v", err)
+	}
+	stream := newFakeStream()
+	if err := svc.WatchToolBuild(&nfv1.WatchToolBuildRequest{BuildId: "build-record-fail"}, stream); err != nil {
+		t.Fatalf("WatchToolBuild: %v", err)
+	}
+
+	got, err := svc.indexStore.GetToolBuildRecordByBuildID("build-record-fail")
+	if err != nil {
+		t.Fatalf("GetToolBuildRecordByBuildID: %v", err)
+	}
+	if got.Success {
+		t.Error("ToolBuildRecord.Success = true, want false")
+	}
+	if got.FailureReason == "" {
+		t.Error("ToolBuildRecord.FailureReason is empty")
+	}
+}
+
+// TestSubmitToolBuild_DisabledService_ReturnsUnavailable verifies spike mode
+// (NODEVAULT_BUILD_BACKEND=disabled, NewDisabledService) rejects a submit
+// cleanly instead of reaching a nil builder — the server itself stays alive,
+// only this RPC fails.
+func TestSubmitToolBuild_DisabledService_ReturnsUnavailable(t *testing.T) {
+	svc := NewDisabledService()
+	_, err := svc.SubmitToolBuild(context.Background(), &nfv1.SubmitToolBuildRequest{
+		RequestId: "build-disabled-1", ToolSpecDigest: "spec-123",
+	})
+	if err == nil {
+		t.Fatal("expected an error from a disabled build backend, got nil")
+	}
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("status got %v, want Unavailable", status.Code(err))
+	}
+}
+
+// TestSubmitToolBuild_VersionedBuild_PushesLatestAlias verifies the primary
+// build/push targets the version-pinned tag, and :latest is pushed
+// separately as a best-effort alias.
+func TestSubmitToolBuild_VersionedBuild_PushesLatestAlias(t *testing.T) {
+	svc := newSubmitTestService(t)
+	builder := &mockBuilder{digest: "sha256:versioned"}
+	svc.builder = builder
+	if err := svc.indexStore.AppendResolvedToolSpec(index.ResolvedToolSpec{
+		ToolSpecDigest: "spec-versioned", ToolName: "bwa-mem2", Version: "0.7.17",
+		RawSpec:    `{"tool_name":"bwa-mem2","version":"0.7.17","dockerfile_content":"FROM alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nRUN true"}`,
+		ResolvedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("AppendResolvedToolSpec: %v", err)
+	}
+
+	if _, err := svc.SubmitToolBuild(context.Background(), &nfv1.SubmitToolBuildRequest{
+		RequestId: "build-ver-1", ToolSpecDigest: "spec-versioned",
+	}); err != nil {
+		t.Fatalf("SubmitToolBuild: %v", err)
+	}
+	stream := newFakeStream()
+	if err := svc.WatchToolBuild(&nfv1.WatchToolBuildRequest{BuildId: "build-ver-1"}, stream); err != nil {
+		t.Fatalf("WatchToolBuild: %v", err)
+	}
+	last := stream.events[len(stream.events)-1]
+	if last.GetStatus() != string(buildstate.StatusSucceeded) {
+		t.Fatalf("final status = %q, want Succeeded", last.GetStatus())
+	}
+	if !strings.Contains(last.GetImageRef(), ":0.7.17") {
+		t.Errorf("ImageRef = %q, want the version-pinned destination", last.GetImageRef())
+	}
+	if len(builder.pushTagCalls) != 1 || !strings.HasSuffix(builder.pushTagCalls[0], ":latest") {
+		t.Errorf("PushTag calls = %v, want exactly one call to a :latest destination", builder.pushTagCalls)
+	}
+}
+
+// TestSubmitToolBuild_NoVersion_NoLatestAliasPush verifies that when no
+// version is available, Build's primary destination is already :latest, so
+// no separate PushTag call happens.
+func TestSubmitToolBuild_NoVersion_NoLatestAliasPush(t *testing.T) {
+	svc := newSubmitTestService(t)
+	builder := &mockBuilder{digest: "sha256:novers"}
+	svc.builder = builder
+
+	if _, err := svc.SubmitToolBuild(context.Background(), &nfv1.SubmitToolBuildRequest{
+		RequestId: "build-novers-1", ToolSpecDigest: "spec-123",
+	}); err != nil {
+		t.Fatalf("SubmitToolBuild: %v", err)
+	}
+	stream := newFakeStream()
+	if err := svc.WatchToolBuild(&nfv1.WatchToolBuildRequest{BuildId: "build-novers-1"}, stream); err != nil {
+		t.Fatalf("WatchToolBuild: %v", err)
+	}
+	if len(builder.pushTagCalls) != 0 {
+		t.Errorf("PushTag calls = %v, want none", builder.pushTagCalls)
+	}
+}
+
+// TestSubmitToolBuild_LatestAliasPushFails_BuildStillSucceeds verifies a
+// :latest alias push failure does not fail the build — the version-pinned
+// primary destination already succeeded, and latest is a best-effort
+// convenience pointer, not the authoritative reference.
+func TestSubmitToolBuild_LatestAliasPushFails_BuildStillSucceeds(t *testing.T) {
+	svc := newSubmitTestService(t)
+	builder := &mockBuilder{digest: "sha256:aliasfail", pushTagErr: errors.New("registry unavailable")}
+	svc.builder = builder
+	if err := svc.indexStore.AppendResolvedToolSpec(index.ResolvedToolSpec{
+		ToolSpecDigest: "spec-aliasfail", ToolName: "bwa-mem2", Version: "0.7.17",
+		RawSpec:    `{"tool_name":"bwa-mem2","version":"0.7.17","dockerfile_content":"FROM alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nRUN true"}`,
+		ResolvedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("AppendResolvedToolSpec: %v", err)
+	}
+
+	if _, err := svc.SubmitToolBuild(context.Background(), &nfv1.SubmitToolBuildRequest{
+		RequestId: "build-aliasfail-1", ToolSpecDigest: "spec-aliasfail",
+	}); err != nil {
+		t.Fatalf("SubmitToolBuild: %v", err)
+	}
+	stream := newFakeStream()
+	if err := svc.WatchToolBuild(&nfv1.WatchToolBuildRequest{BuildId: "build-aliasfail-1"}, stream); err != nil {
+		t.Fatalf("WatchToolBuild: %v", err)
+	}
+	last := stream.events[len(stream.events)-1]
+	if last.GetStatus() != string(buildstate.StatusSucceeded) {
+		t.Fatalf("final status = %q, want Succeeded despite latest alias push failure", last.GetStatus())
 	}
 }

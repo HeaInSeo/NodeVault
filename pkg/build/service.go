@@ -15,15 +15,12 @@ import (
 	"sync"
 	"time"
 
-	"google.golang.org/grpc"
-
 	nsv1 "github.com/HeaInSeo/NodeVault/protos/nodesentinel/v1"
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 
 	"github.com/HeaInSeo/NodeVault/pkg/buildstate"
 	"github.com/HeaInSeo/NodeVault/pkg/catalog"
 	"github.com/HeaInSeo/NodeVault/pkg/index"
-	"github.com/HeaInSeo/NodeVault/pkg/metrics"
 	"github.com/HeaInSeo/NodeVault/pkg/oras"
 	"github.com/HeaInSeo/NodeVault/pkg/registryconfig"
 )
@@ -137,93 +134,6 @@ func (s *Service) Close() error {
 	return s.builder.Close()
 }
 
-// BuildAndRegister implements BuildServiceServer.
-//
-// Deprecated: use ResolveToolSpec + SubmitToolBuild + WatchToolBuild. Kept
-// until NodeKit UI/library callers stop using the legacy BuildRequest path.
-//
-// Full orchestration: L2 (image build+push) → L3 (dry-run) → L4 (smoke run) → registration.
-//
-//nolint:funlen // orchestration function — extracting sub-steps would obscure the L2→L3→L4 sequence.
-func (s *Service) BuildAndRegister(req *nfv1.BuildRequest, stream grpc.ServerStreamingServer[nfv1.BuildEvent]) error {
-	ctx := stream.Context()
-
-	send := func(kind nfv1.BuildEventKind, msg string) error {
-		return stream.Send(&nfv1.BuildEvent{
-			Kind:      kind,
-			Message:   msg,
-			Timestamp: time.Now().UnixMilli(),
-		})
-	}
-
-	if err := ValidateBuildRequest(req); err != nil {
-		_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_FAILED, err.Error())
-		return fmt.Errorf("build request policy: %w", err)
-	}
-
-	slog.Warn("deprecated BuildAndRegister called",
-		"request_id", req.GetRequestId(),
-		"tool_name", req.GetToolName(),
-	)
-
-	destination, isVersioned := primaryBuildDestination(req.ToolName, req.Version)
-
-	// buildID identifies this single build execution for ToolBuildRecord/ToolImageRecord.
-	// Derived from RequestId + start time to reduce collision risk across retries that
-	// reuse the same RequestId (see risk note in service.go doc comment).
-	buildStartedAt := time.Now().UTC()
-	buildID := fmt.Sprintf("%s-%d", req.RequestId, buildStartedAt.UnixNano())
-
-	// ── L2: image build + push ───────────────────────────────────────────────────
-
-	_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_JOB_CREATED, "image build starting: "+destination)
-	slog.Info("image build starting", "destination", destination)
-
-	_, digest, layerCacheHit, err := s.builder.Build(ctx, req.DockerfileContent, destination)
-	if err != nil {
-		metrics.BuildFailureTotal.Add(1)
-		_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_FAILED, err.Error())
-		s.recordBuildFailure(buildID, buildStartedAt, err)
-		return fmt.Errorf("image build: %w", err)
-	}
-	s.warnIfTagReassigned(destination, digest)
-
-	s.recordBuildSuccess(buildID, buildStartedAt, digest, destination, layerCacheHit)
-	metrics.BuildSuccessTotal.Add(1)
-	slog.Info("image build succeeded", "destination", destination, "digest", digest)
-	_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_PUSH_SUCCEEDED, "image pushed to "+destination)
-
-	imageWithDigest := destination + "@" + digest
-	_ = stream.Send(&nfv1.BuildEvent{
-		Kind:      nfv1.BuildEventKind_BUILD_EVENT_KIND_DIGEST_ACQUIRED,
-		Message:   imageWithDigest,
-		Digest:    digest,
-		Timestamp: time.Now().UnixMilli(),
-	})
-
-	// ── 등록 + spec referrer + NodeSentinel ──────────────────────────────────────
-	// L3/L4 validation is delegated to NodeSentinel via EnqueueValidationWork inside
-	// postBuildRegistration. NodeVault no longer creates K8s Jobs directly.
-	logSend := func(msg string) { _ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_LOG, msg) }
-	if isVersioned {
-		s.pushLatestAlias(ctx, destination, req.ToolName, logSend)
-	}
-	if regErr := s.postBuildRegistration(ctx, req, destination, digest, logSend); regErr != nil {
-		// Image build+push already succeeded (digest above) — only cataloging
-		// failed. Reported as FAILED, not SUCCEEDED: an unregistered tool is
-		// not discoverable/usable, so the whole operation did not complete
-		// (see #23). The image itself is not rebuilt; retrying resubmits the
-		// same destination/digest and only registration needs to succeed.
-		_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_FAILED,
-			fmt.Sprintf("image pushed to %s@%s but registration failed: %v", destination, digest, regErr))
-		return fmt.Errorf("post-build registration: %w", regErr)
-	}
-
-	_ = send(nfv1.BuildEventKind_BUILD_EVENT_KIND_SUCCEEDED,
-		fmt.Sprintf("build+register complete: %s@%s", destination, digest))
-	return nil
-}
-
 // recordBuildFailure persists a failed ToolBuildRecord to the index, if a Store is wired.
 // Best-effort: a recording failure is logged but never fails the RPC.
 func (s *Service) recordBuildFailure(buildID string, startedAt time.Time, buildErr error) {
@@ -277,10 +187,9 @@ func (s *Service) recordBuildSuccess(buildID string, startedAt time.Time, digest
 }
 
 // postBuildRegistration performs tool registration, spec referrer push, and
-// NodeSentinel enqueueing after a successful L2 image build. It is shared by
-// BuildAndRegister (streaming RPC) and runSubmittedBuild (async goroutine).
-// logFn receives informational messages for the caller's output channel; it
-// must not be nil.
+// NodeSentinel enqueueing after a successful L2 image build. Called from
+// runSubmittedBuild (async goroutine). logFn receives informational messages
+// for the caller's output channel; it must not be nil.
 //
 // Returns an error only for a genuine RegisterTool RPC failure: a pushed
 // image that never became a catalog entry isn't a usable tool, so the whole
@@ -352,11 +261,9 @@ func (s *Service) postBuildRegistration(
 		if entry, getErr := s.indexStore.GetByCasHash(regResp.CasHash); getErr == nil {
 			integrityHealth = string(entry.IntegrityHealth)
 		}
-		// req.GetRequestId() equals the buildstate build_id for the async
-		// SubmitToolBuild path (buildRequestFromResolved sets req.RequestId to
-		// the build_id). The legacy BuildAndRegister path has no buildstate row
-		// for its request_id, so SetReferrer's ErrNotFound there is expected —
-		// not logged as a warning.
+		// req.GetRequestId() equals the buildstate build_id (buildRequestFromResolved
+		// sets req.RequestId to the build_id). ErrNotFound is tolerated defensively
+		// rather than logged as a warning, but every caller today always has a row.
 		if s.buildState != nil {
 			buildID := req.GetRequestId()
 			_, bsErr := s.buildState.SetReferrer(buildID, referrerDigest, integrityHealth, time.Now().UTC())

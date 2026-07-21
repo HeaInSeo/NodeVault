@@ -3,7 +3,6 @@ package build
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -140,114 +139,6 @@ func TestSanitizeName_PreservesAlphanumericAndDash(t *testing.T) {
 	}
 }
 
-// ─── BuildAndRegister — mock builder ─────────────────────────────────────────
-
-// TestBuildAndRegister_BuilderError verifies that a build error causes
-// BUILD_EVENT_KIND_FAILED to be emitted and an error to be returned.
-func TestBuildAndRegister_BuilderError(t *testing.T) {
-	svc := &Service{
-		builder: &mockBuilder{err: fmt.Errorf("image build backend: exec format error")},
-	}
-	stream := newFakeStream()
-	req := &nfv1.BuildRequest{
-		RequestId:         "req-001",
-		ToolName:          "test-tool",
-		DockerfileContent: validPolicyDockerfile,
-	}
-
-	err := svc.BuildAndRegister(req, stream)
-	if err == nil {
-		t.Fatal("expected error from BuildAndRegister")
-	}
-	if !strings.Contains(err.Error(), "image build") {
-		t.Errorf("unexpected error: %v", err)
-	}
-
-	kinds := stream.kindsSent()
-	found := false
-	for _, k := range kinds {
-		if k == nfv1.BuildEventKind_BUILD_EVENT_KIND_FAILED {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("FAILED event not emitted; got %v", kinds)
-	}
-}
-
-func TestBuildAndRegister_InvalidDockerfileRejectedBeforeBuilder(t *testing.T) {
-	buildCalls := 0
-	svc := &Service{
-		builder: &countCallBuilder{inner: &mockBuilder{}, calls: &buildCalls},
-	}
-	stream := newFakeStream()
-	req := &nfv1.BuildRequest{
-		RequestId:         "req-policy-001",
-		ToolName:          "test-tool",
-		DockerfileContent: "FROM alpine:latest\nRUN true",
-	}
-
-	err := svc.BuildAndRegister(req, stream)
-	if err == nil || !strings.Contains(err.Error(), "build request policy") {
-		t.Fatalf("BuildAndRegister error got %v, want policy rejection", err)
-	}
-	if buildCalls != 0 {
-		t.Fatalf("Build called %d times, want 0", buildCalls)
-	}
-
-	kinds := stream.kindsSent()
-	if len(kinds) != 1 || kinds[0] != nfv1.BuildEventKind_BUILD_EVENT_KIND_FAILED {
-		t.Fatalf("events got %v, want exactly FAILED", kinds)
-	}
-}
-
-// TestBuildAndRegister_RootlessFailure_NoPrivilegedFallback verifies that a
-// rootless Buildah error (e.g. mknod EPERM in user namespace) emits
-// BUILD_EVENT_KIND_FAILED and does not fall back to a privileged build path.
-// NodeVault has no retry or escalation logic — builder.Build() is called
-// exactly once and any error is terminal.
-func TestBuildAndRegister_RootlessFailure_NoPrivilegedFallback(t *testing.T) {
-	rootlessErr := fmt.Errorf(
-		"build image: error building at STEP 2: error processing " +
-			"RUN mknod /dev/test c 1 3: exit status 1: mknod: /dev/test: Operation not permitted",
-	)
-
-	buildCalls := 0
-	svc := &Service{
-		builder: &countCallBuilder{inner: &mockBuilder{err: rootlessErr}, calls: &buildCalls},
-	}
-	stream := newFakeStream()
-	req := &nfv1.BuildRequest{
-		RequestId:         "req-rootless-01",
-		ToolName:          "test-tool",
-		DockerfileContent: "FROM alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nRUN mknod /dev/test c 1 3",
-	}
-
-	if err := svc.BuildAndRegister(req, stream); err == nil {
-		t.Fatal("expected error from rootless build failure, got nil")
-	}
-
-	kinds := stream.kindsSent()
-	var failedCount, succeededCount int
-	for _, k := range kinds {
-		switch k {
-		case nfv1.BuildEventKind_BUILD_EVENT_KIND_FAILED:
-			failedCount++
-		case nfv1.BuildEventKind_BUILD_EVENT_KIND_SUCCEEDED:
-			succeededCount++
-		}
-	}
-	if failedCount == 0 {
-		t.Errorf("FAILED event not emitted; got %v", kinds)
-	}
-	if succeededCount > 0 {
-		t.Errorf("SUCCEEDED must never be emitted after rootless failure (no privileged fallback)")
-	}
-	if buildCalls != 1 {
-		t.Errorf("Build called %d times, want exactly 1 — no privileged retry", buildCalls)
-	}
-}
-
 // countCallBuilder wraps a Builder and counts Build invocations.
 type countCallBuilder struct {
 	inner Builder
@@ -268,85 +159,6 @@ func (c *countCallBuilder) PushTag(
 }
 
 func (c *countCallBuilder) Close() error { return c.inner.Close() }
-
-// TestBuildAndRegister_BuilderError_NoSucceededEvent verifies that SUCCEEDED is
-// never emitted when the image build fails.
-func TestBuildAndRegister_BuilderError_NoSucceededEvent(t *testing.T) {
-	svc := &Service{
-		builder: &mockBuilder{err: fmt.Errorf("layer not found")},
-	}
-	stream := newFakeStream()
-	req := &nfv1.BuildRequest{RequestId: "req-002", ToolName: "bwa", DockerfileContent: validPolicyDockerfile}
-
-	_ = svc.BuildAndRegister(req, stream)
-
-	for _, k := range stream.kindsSent() {
-		if k == nfv1.BuildEventKind_BUILD_EVENT_KIND_SUCCEEDED {
-			t.Error("SUCCEEDED event must not be emitted when build fails")
-		}
-	}
-}
-
-// TestBuildAndRegister_BuilderError_JobCreatedFirst verifies that JOB_CREATED is
-// emitted before FAILED (build was attempted, then failed).
-func TestBuildAndRegister_BuilderError_JobCreatedFirst(t *testing.T) {
-	svc := &Service{
-		builder: &mockBuilder{err: fmt.Errorf("context deadline exceeded")},
-	}
-	stream := newFakeStream()
-	req := &nfv1.BuildRequest{RequestId: "req-003", ToolName: "samtools", DockerfileContent: validPolicyDockerfile}
-
-	_ = svc.BuildAndRegister(req, stream)
-
-	kinds := stream.kindsSent()
-	if len(kinds) < 2 {
-		t.Fatalf("expected at least 2 events, got %v", kinds)
-	}
-	if kinds[0] != nfv1.BuildEventKind_BUILD_EVENT_KIND_JOB_CREATED {
-		t.Errorf("first event: got %v, want JOB_CREATED", kinds[0])
-	}
-}
-
-// ─── ToolBuildRecord / ToolImageRecord index recording ───────────────────────
-
-// TestBuildAndRegister_BuilderError_RecordsFailedToolBuildRecord verifies that a
-// build failure is recorded as a ToolBuildRecord with Success=false and a
-// FailureReason, completing Sprint 1's "BuildAndRegister 후 Index에 조회됨" goal
-// for the failure path.
-func TestBuildAndRegister_BuilderError_RecordsFailedToolBuildRecord(t *testing.T) {
-	store, err := index.NewAt(t.TempDir())
-	if err != nil {
-		t.Fatalf("index.NewAt: %v", err)
-	}
-	svc := &Service{
-		builder:    &mockBuilder{err: fmt.Errorf("image build backend: exec format error")},
-		indexStore: store,
-	}
-	stream := newFakeStream()
-	req := &nfv1.BuildRequest{RequestId: "req-fail-001", ToolName: "test-tool", DockerfileContent: validPolicyDockerfile}
-
-	if err := svc.BuildAndRegister(req, stream); err == nil {
-		t.Fatal("expected error from BuildAndRegister")
-	}
-
-	builds, lerr := store.ListToolBuildRecordsByToolSpecDigest("")
-	if lerr != nil {
-		t.Fatalf("ListToolBuildRecordsByToolSpecDigest: %v", lerr)
-	}
-	// ToolSpecDigest is not wired yet (Sprint 1 scope), so failed records carry "".
-	if len(builds) != 1 {
-		t.Fatalf("expected 1 ToolBuildRecord, got %d", len(builds))
-	}
-	if builds[0].Success {
-		t.Error("Success: got true, want false")
-	}
-	if builds[0].FailureReason == "" {
-		t.Error("FailureReason should be populated")
-	}
-	if !strings.HasPrefix(builds[0].BuildID, "req-fail-001-") {
-		t.Errorf("BuildID: got %q, want prefix %q", builds[0].BuildID, "req-fail-001-")
-	}
-}
 
 // TestRecordBuildSuccess_WritesToolBuildRecordAndToolImageRecord verifies the
 // pkg/build → pkg/index integration point in isolation from the L3/L4 validator,
@@ -541,51 +353,6 @@ func TestPostBuildRegistration_RegisterToolFailure_ReturnsErrorAndSkipsSentinelE
 	}
 }
 
-// TestBuildAndRegister_RegistrationFailure_EmitsFAILEDNotSUCCEEDED verifies
-// the legacy streaming path: a registration failure must emit FAILED (not
-// SUCCEEDED) and return an error, with the digest already acquired earlier
-// in the stream preserved in the FAILED event's message.
-func TestBuildAndRegister_RegistrationFailure_EmitsFAILEDNotSUCCEEDED(t *testing.T) {
-	store, err := index.NewAt(t.TempDir())
-	if err != nil {
-		t.Fatalf("index.NewAt: %v", err)
-	}
-	catDir := t.TempDir()
-	cat := catalog.NewCatalogAt(catDir)
-	if err := os.RemoveAll(catDir); err != nil {
-		t.Fatalf("RemoveAll: %v", err)
-	}
-	registrySvc := catalog.NewToolRegistryService(cat, store)
-	svc := &Service{builder: &mockBuilder{digest: "sha256:regfail"}, registry: registrySvc, indexStore: store}
-	stream := newFakeStream()
-	req := &nfv1.BuildRequest{
-		RequestId:         "req-regfail-1",
-		ToolName:          "bwa",
-		DockerfileContent: validPolicyDockerfile,
-	}
-
-	if err := svc.BuildAndRegister(req, stream); err == nil {
-		t.Fatal("BuildAndRegister: expected an error when registration fails")
-	}
-
-	var failedMsg string
-	sawSucceeded := false
-	for _, ev := range stream.events {
-		switch ev.Kind {
-		case nfv1.BuildEventKind_BUILD_EVENT_KIND_SUCCEEDED:
-			sawSucceeded = true
-		case nfv1.BuildEventKind_BUILD_EVENT_KIND_FAILED:
-			failedMsg = ev.Message
-		}
-	}
-	if sawSucceeded {
-		t.Error("SUCCEEDED must not be emitted when registration fails")
-	}
-	if !strings.Contains(failedMsg, "sha256:regfail") {
-		t.Errorf("FAILED message = %q, want it to preserve the already-pushed digest", failedMsg)
-	}
-}
-
 // TestSubmitToolBuild_RegistrationFailure_TransitionsToFailedWithDigestPreserved
 // verifies the SubmitToolBuild/WatchToolBuild path: a registration failure
 // must transition buildstate to Failed (not Succeeded), and the terminal
@@ -620,58 +387,11 @@ func TestSubmitToolBuild_RegistrationFailure_TransitionsToFailedWithDigestPreser
 }
 
 // ─── disabled backend ─────────────────────────────────────────────────────────
-
-// TestNewDisabledService_ReturnsDisabledBackendError verifies that NewDisabledService
-// returns a service that immediately responds with ErrBuildBackendDisabled.
-// The error text must contain "disabled" so operators can identify spike mode.
-func TestNewDisabledService_ReturnsDisabledBackendError(t *testing.T) {
-	svc := NewDisabledService()
-	stream := newFakeStream()
-	req := &nfv1.BuildRequest{RequestId: "req-disabled-01", ToolName: "bwa", DockerfileContent: validPolicyDockerfile}
-
-	err := svc.BuildAndRegister(req, stream)
-	if err == nil {
-		t.Fatal("expected error from disabled backend, got nil")
-	}
-	if !strings.Contains(err.Error(), "disabled") {
-		t.Errorf("error should mention 'disabled', got: %v", err)
-	}
-}
-
-// TestNewDisabledService_EmitsFAILEDEvent verifies that the gRPC stream receives
-// a FAILED event (server stays alive; only the RPC fails).
-func TestNewDisabledService_EmitsFAILEDEvent(t *testing.T) {
-	svc := NewDisabledService()
-	stream := newFakeStream()
-	req := &nfv1.BuildRequest{RequestId: "req-disabled-02", ToolName: "samtools", DockerfileContent: validPolicyDockerfile}
-
-	_ = svc.BuildAndRegister(req, stream)
-
-	found := false
-	for _, k := range stream.kindsSent() {
-		if k == nfv1.BuildEventKind_BUILD_EVENT_KIND_FAILED {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("FAILED event not emitted by disabled backend; got %v", stream.kindsSent())
-	}
-}
-
-// TestNewDisabledService_NoSUCCEEDEDEvent verifies SUCCEEDED is never emitted.
-func TestNewDisabledService_NoSUCCEEDEDEvent(t *testing.T) {
-	svc := NewDisabledService()
-	stream := newFakeStream()
-	req := &nfv1.BuildRequest{RequestId: "req-disabled-03", ToolName: "gatk", DockerfileContent: validPolicyDockerfile}
-
-	_ = svc.BuildAndRegister(req, stream)
-
-	for _, k := range stream.kindsSent() {
-		if k == nfv1.BuildEventKind_BUILD_EVENT_KIND_SUCCEEDED {
-			t.Error("SUCCEEDED must never be emitted by disabled backend")
-		}
-	}
-}
+//
+// See TestSubmitToolBuild_DisabledService_ReturnsUnavailable
+// (submit_tool_build_test.go) for disabled-backend coverage against the
+// current API — NewDisabledService has no indexStore/buildState wired, so
+// SubmitToolBuild rejects with Unavailable before ever reaching the builder.
 
 // TestDisabledBuilder_Close verifies Close is a no-op.
 func TestDisabledBuilder_Close(t *testing.T) {
@@ -734,96 +454,6 @@ func TestPrimaryBuildDestination_FallsBackToLatestWhenVersionEmpty(t *testing.T)
 	}
 	if !strings.HasSuffix(dest, ":latest") {
 		t.Errorf("destination = %q, want suffix :latest", dest)
-	}
-}
-
-// TestBuildAndRegister_VersionedBuild_PushesLatestAlias verifies the primary
-// build/push targets the version-pinned tag, and :latest is pushed
-// separately as a best-effort alias — the inverse of the original (broken)
-// design where every build only ever pushed :latest.
-func TestBuildAndRegister_VersionedBuild_PushesLatestAlias(t *testing.T) {
-	builder := &mockBuilder{digest: "sha256:versioned"}
-	svc := &Service{builder: builder}
-	stream := newFakeStream()
-	req := &nfv1.BuildRequest{
-		RequestId:         "req-ver-1",
-		ToolName:          "bwa",
-		Version:           "0.7.17",
-		DockerfileContent: validPolicyDockerfile,
-	}
-
-	if err := svc.BuildAndRegister(req, stream); err != nil {
-		t.Fatalf("BuildAndRegister: %v", err)
-	}
-
-	var pushedDigest string
-	for _, ev := range stream.events {
-		if ev.Kind == nfv1.BuildEventKind_BUILD_EVENT_KIND_JOB_CREATED {
-			if !strings.Contains(ev.Message, ":0.7.17") {
-				t.Errorf("JOB_CREATED message = %q, want the version-pinned destination", ev.Message)
-			}
-		}
-		if ev.Kind == nfv1.BuildEventKind_BUILD_EVENT_KIND_DIGEST_ACQUIRED {
-			pushedDigest = ev.Digest
-		}
-	}
-	if pushedDigest != "sha256:versioned" {
-		t.Errorf("DIGEST_ACQUIRED digest = %q", pushedDigest)
-	}
-	if len(builder.pushTagCalls) != 1 || !strings.HasSuffix(builder.pushTagCalls[0], ":latest") {
-		t.Errorf("PushTag calls = %v, want exactly one call to a :latest destination", builder.pushTagCalls)
-	}
-}
-
-// TestBuildAndRegister_NoVersion_NoLatestAliasPush verifies that when no
-// version is available, Build's primary destination is already :latest, so
-// no separate PushTag call happens (nothing to alias).
-func TestBuildAndRegister_NoVersion_NoLatestAliasPush(t *testing.T) {
-	builder := &mockBuilder{digest: "sha256:novers"}
-	svc := &Service{builder: builder}
-	stream := newFakeStream()
-	req := &nfv1.BuildRequest{
-		RequestId:         "req-novers-1",
-		ToolName:          "bwa",
-		DockerfileContent: validPolicyDockerfile,
-	}
-
-	if err := svc.BuildAndRegister(req, stream); err != nil {
-		t.Fatalf("BuildAndRegister: %v", err)
-	}
-	if len(builder.pushTagCalls) != 0 {
-		t.Errorf("PushTag calls = %v, want none", builder.pushTagCalls)
-	}
-}
-
-// TestBuildAndRegister_LatestAliasPushFails_BuildStillSucceeds is the
-// partial-failure case from review: a version tag push failure must fail
-// the build (it's Build's primary destination, already covered by
-// TestBuildAndRegister_BuilderError), but a :latest alias push failure must
-// NOT — the build itself already succeeded and latest is a convenience
-// pointer, not the authoritative reference.
-func TestBuildAndRegister_LatestAliasPushFails_BuildStillSucceeds(t *testing.T) {
-	builder := &mockBuilder{digest: "sha256:aliasfail", pushTagErr: errors.New("registry unavailable")}
-	svc := &Service{builder: builder}
-	stream := newFakeStream()
-	req := &nfv1.BuildRequest{
-		RequestId:         "req-aliasfail-1",
-		ToolName:          "bwa",
-		Version:           "0.7.17",
-		DockerfileContent: validPolicyDockerfile,
-	}
-
-	if err := svc.BuildAndRegister(req, stream); err != nil {
-		t.Fatalf("BuildAndRegister: %v, want nil — latest alias failure must be non-fatal", err)
-	}
-	found := false
-	for _, k := range stream.kindsSent() {
-		if k == nfv1.BuildEventKind_BUILD_EVENT_KIND_SUCCEEDED {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("expected SUCCEEDED event despite latest alias push failure")
 	}
 }
 

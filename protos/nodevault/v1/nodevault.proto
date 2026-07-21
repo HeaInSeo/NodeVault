@@ -76,15 +76,6 @@ enum BuildKind {
 // ─────────────────────────────────────────────────────────────────────────────
 
 service BuildService {
-  // Deprecated: use ResolveToolSpec + SubmitToolBuild + WatchToolBuild.
-  // BuildAndRegister stays available only while NodeKit UI/library callers
-  // still submit legacy BuildRequest messages. option deprecated = true below
-  // surfaces this as a real compiler-level deprecation marker in generated
-  // clients (e.g. C#'s [Obsolete]), not just a comment, so callers get a
-  // build warning rather than having to notice a doc string.
-  rpc BuildAndRegister(BuildRequest) returns (stream BuildEvent) {
-    option deprecated = true;
-  };
   // ResolveToolSpec normalizes the submitted raw_spec and computes its
   // content digest (tool_spec_digest). It never selects or rewrites the
   // author's package/build/base-image choice — that choice must already be

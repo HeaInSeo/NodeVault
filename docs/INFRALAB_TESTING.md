@@ -1,6 +1,6 @@
 # NodeVault — infra-lab 통합 테스트 가이드
 
-갱신: 2026-07-15
+갱신: 2026-07-21 (legacy BuildAndRegister RPC 제거 반영, issue #15)
 
 이 문서가 설명하는 K8s 배포(`deploy/03-nodevault.yaml`, 이 문서)가 **상업적/이식
 가능한 기준 배포 경로**다. seoy 호스트에 직접 systemd로 띄우는
@@ -145,10 +145,12 @@ L3/L4가 실행된 경우 `nodevault-smoke`의 검증 Job은 정상이다.
    graphroot/runroot와 `/data`는 PVC로 전환되어 있다(`deploy/03-nodevault.yaml`). 2026-06-23
    seoy에서 Pod 재시작 전후 graphroot의 `overlay-layers/layers.json`과 레이어 디렉터리가
    byte-identical하게 유지됨을 직접 확인했고, 재시작 직후 Pod에 대해
-   `TestBuildAndRegister_SimpleDockerfile`이 정상적으로 빌드+push+L3+L4+register까지
+   (당시 이름 `TestBuildAndRegister_SimpleDockerfile`, issue #15로 legacy RPC와 함께 제거되어
+   현재는 `TestSubmitToolBuild_SimpleDockerfile`) 정상적으로 빌드+push+L3+L4+register까지
    완료됨을 확인했다(issue [#7](https://github.com/HeaInSeo/NodeVault/issues/7)).
-2. legacy `BuildRequest`/`BuildAndRegister`는 L2→L3→L4 결합 흐름을 유지한다. 신규
-   `SubmitToolBuild`는 resolved `raw_spec`의 build 요청을 L2 background build로 실행한다.
+2. `SubmitToolBuild`는 resolved `raw_spec`의 build 요청을 L2 background build로 실행하며
+   L2→L3→L4 결합 흐름을 유지한다(legacy `BuildAndRegister`도 동일한 흐름이었으나 issue #15로
+   제거됨).
    `ResolveToolSpec`/`SubmitToolBuild`/`WatchToolBuild`/`CancelToolBuild` 전 경로를
    2026-07-15 seoy 클러스터에서 실 gRPC 호출로 검증 완료 — `ResolveToolSpec` →
    `SubmitToolBuild` → `WatchToolBuild`가 terminal event(`image_digest`,

@@ -595,7 +595,7 @@ v0.1.0 이후에는 `SubmitToolBuild`로 build를 제출하고 `WatchToolBuild`�
 
 **목표**: `BuildRequest / BuildAndRegister`를 deprecate하고 신규 경로로 전환한다. (아키텍처 v0.1.0 §10.3)
 
-이 단계는 NodeKit이 `ToolSpecRequest` 경로를 완전히 채용한 이후에 진행한다. 2026-07-07 확인 기준으로 NodeKit CLI는 `ResolveToolSpec` → `SubmitToolBuild` → `WatchToolBuild` 경로를 사용하지만, NodeKit UI와 `GrpcBuildClient`/테스트에는 아직 `BuildAndRegister` 호출이 남아 있다. 따라서 NodeVault는 현재 RPC 제거 대신 deprecated 표시와 호출 로그를 먼저 적용한다.
+이 단계는 NodeKit이 `ToolSpecRequest` 경로를 완전히 채용한 이후에 진행한다. **2026-07-21 재확인**: NodeKit이 2026-07-14(GUI, commit 9ccda57 "migrate Avalonia GUI off legacy BuildAndRegister")·2026-07-16(전체 재검증, commit e572a1b — `CS0618`/Obsolete 경고 0건 확인)에 완전히 전환 완료. `GrpcBuildClient`/`IBuildClient`와 그 테스트는 저장소에서 삭제됐고, `BuildAndRegister`를 실제로 호출하는 코드는 NodeKit 어디에도 없다(주석·proto 정의만 남음) — 2026-07-07 노트는 stale. 실제 RPC 제거 여부는 이슈 [#15](https://github.com/HeaInSeo/NodeVault/issues/15)에서 릴리스 정책으로 결정한다.
 
 **전환 원칙**
 

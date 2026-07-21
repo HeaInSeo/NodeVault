@@ -1,6 +1,7 @@
 package index_test
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"testing"
@@ -744,6 +745,46 @@ func TestLoad_SchemaV3File_ValidationRequestSection_LoadsEmptySlice(t *testing.T
 		ValidationRequestID: "vr-after-migration",
 	}); err != nil {
 		t.Errorf("CreateValidationRequestRecord after v3 load: %v", err)
+	}
+}
+
+// TestNewIndex_StampsCurrentSchemaVersion is a regression guard for a bug an
+// independent review caught: schema.go's indexFile doc comment claimed
+// "schema_version >= 4: ... ValidationRequestRecords" while the schemaVersion
+// constant in this file was left at 3, so every freshly created index would
+// have been stamped with a version number one behind what the file's own
+// content actually required. Nothing currently branches on the stamped
+// number, so this produced no functional bug yet — but it would silently
+// misroute any future version-gated migration. This asserts the two stay in
+// sync going forward by checking the number actually written to disk, not
+// just the in-memory struct default.
+func TestNewIndex_StampsCurrentSchemaVersion(t *testing.T) {
+	dir := t.TempDir()
+	s, err := index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("NewAt: %v", err)
+	}
+	// NewAt alone does not write vault-index.json — load() only populates the
+	// in-memory struct for a not-yet-existing file; the file is only created
+	// on the first write. Force that write so there's something on disk to
+	// inspect the stamped schema_version of.
+	if err := s.CreateValidationRequestRecord(index.ValidationRequestRecord{ValidationRequestID: "vr-stamp-check"}); err != nil {
+		t.Fatalf("CreateValidationRequestRecord: %v", err)
+	}
+
+	data, err := os.ReadFile(dir + "/vault-index.json")
+	if err != nil {
+		t.Fatalf("read vault-index.json: %v", err)
+	}
+	var stamped struct {
+		SchemaVersion int `json:"schema_version"`
+	}
+	if err := json.Unmarshal(data, &stamped); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	const wantSchemaVersion = 4 // bump alongside indexFile's doc comment in schema.go
+	if stamped.SchemaVersion != wantSchemaVersion {
+		t.Errorf("stamped schema_version = %d, want %d", stamped.SchemaVersion, wantSchemaVersion)
 	}
 }
 

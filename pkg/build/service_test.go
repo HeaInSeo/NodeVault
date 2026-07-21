@@ -549,6 +549,65 @@ func TestPostBuildRegistration_NilIndexStore_StillEnqueuesWithoutPanicking(t *te
 	}
 }
 
+// TestPostBuildRegistration_ValidationRequestRecordWriteFailure_StillEnqueues
+// locks in a currently-accepted gap an independent review flagged: if
+// CreateValidationRequestRecord itself fails (e.g. a disk write error), the
+// code logs a warning and enqueues with NodeSentinel anyway, rather than
+// aborting. That can produce an orphan — NodeSentinel has a job NodeVault's
+// index never recorded — but the alternative (skipping enqueue whenever the
+// correlation write fails) would let an ancillary index-write hiccup block
+// validation entirely, which is a worse trade for this non-fatal code path.
+// This test exists to make that trade-off an explicit, verified behavior
+// rather than an untested accident — if it ever changes, this test should
+// change deliberately, not by surprise.
+func TestPostBuildRegistration_ValidationRequestRecordWriteFailure_StillEnqueues(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: directory permission bits don't block writes, can't exercise the failure path")
+	}
+	t.Setenv("NODEVAULT_REGISTRY_ADDR", "127.0.0.1:1") // connection refused, fails fast (referrer push only)
+
+	catDir := t.TempDir()
+	cat := catalog.NewCatalogAt(catDir)
+	registrySvcDir := t.TempDir()
+	registrySvcStore, err := index.NewAt(registrySvcDir)
+	if err != nil {
+		t.Fatalf("index.NewAt (registry store): %v", err)
+	}
+	registrySvc := catalog.NewToolRegistryService(cat, registrySvcStore)
+
+	// svc.indexStore points at its own directory, made unwritable after
+	// creation so CreateValidationRequestRecord's save() fails — the
+	// registry's own store above is left untouched so registration itself
+	// still succeeds.
+	svcIndexDir := t.TempDir()
+	svcIndexStore, err := index.NewAt(svcIndexDir)
+	if err != nil {
+		t.Fatalf("index.NewAt (svc store): %v", err)
+	}
+	if err := os.Chmod(svcIndexDir, 0o500); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(svcIndexDir, 0o700) }) // let t.TempDir() clean up
+
+	sentinel := &fakeSentinel{}
+	svc := &Service{registry: registrySvc, indexStore: svcIndexStore, sentinel: sentinel}
+
+	var logs []string
+	req := &nfv1.BuildRequest{RequestId: "req-1", ToolName: "test-tool", Version: "1.0.0"}
+	regErr := svc.postBuildRegistration(context.Background(), req,
+		"harbor.example.com/library/test-tool:1.0.0", "sha256:deadbeef",
+		func(msg string) { logs = append(logs, msg) })
+	if regErr != nil {
+		t.Fatalf("postBuildRegistration: %v, want nil (a correlation-record write failure must not fail registration)", regErr)
+	}
+	if sentinel.calls != 1 {
+		t.Fatalf("sentinel enqueue calls = %d, want 1 (enqueue must proceed despite the write failure)", sentinel.calls)
+	}
+	if sentinel.lastReq.GetValidationRequestId() == "" {
+		t.Error("ValidationRequestId is empty")
+	}
+}
+
 // TestSubmitToolBuild_RegistrationFailure_TransitionsToFailedWithDigestPreserved
 // verifies the SubmitToolBuild/WatchToolBuild path: a registration failure
 // must transition buildstate to Failed (not Succeeded), and the terminal

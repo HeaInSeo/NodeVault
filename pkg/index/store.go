@@ -14,8 +14,9 @@ import (
 const (
 	// schemaVersion 3 adds ToolCheckRecords, ToolScanRecords,
 	// CertifiedToolImageRecords, and ToolFunctionCatalogEntries.
+	// schemaVersion 4 adds ValidationRequestRecords.
 	// Older files omit these fields; load() treats absent fields as empty slices.
-	schemaVersion   = 3
+	schemaVersion   = 4
 	defaultIndexDir = "assets/index"
 	indexFileName   = "vault-index.json"
 )

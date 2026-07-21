@@ -35,6 +35,7 @@ import (
 	"github.com/HeaInSeo/NodeVault/pkg/reconcile"
 	"github.com/HeaInSeo/NodeVault/pkg/registry"
 	"github.com/HeaInSeo/NodeVault/pkg/registryconfig"
+	"github.com/HeaInSeo/NodeVault/pkg/sentinelclient"
 	"github.com/HeaInSeo/NodeVault/pkg/validate"
 	"github.com/HeaInSeo/NodeVault/pkg/validation"
 )
@@ -65,24 +66,26 @@ func parseDuration(env string, def time.Duration) time.Duration {
 
 // runtimeConfig holds resolved startup configuration derived from env vars.
 type runtimeConfig struct {
-	runtimeMode  string // "host" | "incluster"
-	buildBackend string // "in-pod-buildah" | "disabled"
-	grpcAddr     string
-	webhookAddr  string
-	catalogPath  string
-	indexPath    string
-	buildStateDB string
+	runtimeMode     string // "host" | "incluster"
+	buildBackend    string // "in-pod-buildah" | "disabled"
+	grpcAddr        string
+	webhookAddr     string
+	catalogPath     string
+	indexPath       string
+	buildStateDB    string
+	sentinelEnabled bool // NODESENTINEL_ENABLED — gates L3/L4 validation enqueue
 }
 
 func loadRuntimeConfig() (runtimeConfig, error) {
 	rc := runtimeConfig{
-		runtimeMode:  os.Getenv("NODEVAULT_RUNTIME_MODE"),
-		buildBackend: os.Getenv("NODEVAULT_BUILD_BACKEND"),
-		grpcAddr:     sanitizeLogValue(os.Getenv("NODEVAULT_ADDR")),
-		webhookAddr:  sanitizeLogValue(os.Getenv("NODEVAULT_WEBHOOK_ADDR")),
-		catalogPath:  os.Getenv("CATALOG_DIR"),
-		indexPath:    os.Getenv("INDEX_DIR"),
-		buildStateDB: os.Getenv("NODEVAULT_BUILD_STATE_DB"),
+		runtimeMode:     os.Getenv("NODEVAULT_RUNTIME_MODE"),
+		buildBackend:    os.Getenv("NODEVAULT_BUILD_BACKEND"),
+		grpcAddr:        sanitizeLogValue(os.Getenv("NODEVAULT_ADDR")),
+		webhookAddr:     sanitizeLogValue(os.Getenv("NODEVAULT_WEBHOOK_ADDR")),
+		catalogPath:     os.Getenv("CATALOG_DIR"),
+		indexPath:       os.Getenv("INDEX_DIR"),
+		buildStateDB:    os.Getenv("NODEVAULT_BUILD_STATE_DB"),
+		sentinelEnabled: os.Getenv("NODESENTINEL_ENABLED") == "true",
 	}
 	if rc.runtimeMode == "" {
 		rc.runtimeMode = "host"
@@ -230,8 +233,11 @@ func run() int {
 	// Package cache GC — evicts oldest conda/mamba packages when PVC usage exceeds watermark.
 	go cachegc.New(cachegc.DefaultConfig()).Run(ctx)
 
+	sentinel, sentinelClose := initSentinelClient(&rc)
+	defer sentinelClose()
+
 	if registerErr := registerBuildService(
-		srv, &rc, registrySvc, indexStore, buildStateStore, rec,
+		srv, &rc, registrySvc, indexStore, buildStateStore, rec, sentinel,
 	); registerErr != nil {
 		slog.Error("failed to register BuildService", "err", registerErr)
 		return 1
@@ -300,7 +306,51 @@ func logStartupConfig(rc runtimeConfig) {
 		"build_state_db", rc.buildStateDB,
 		"grpc_listen_address", rc.grpcAddr,
 		"kube_config_mode", kubeConfigMode,
+		"sentinel_enabled", rc.sentinelEnabled,
 	)
+}
+
+// sentinelClient is the subset of *sentinelclient.Client's API main.go
+// depends on: enqueueing (satisfies build.SentinelEnqueuer) plus connection
+// lifecycle. A narrow interface here — rather than depending on the concrete
+// type directly — lets tests substitute a fake via sentinelClientConstructor.
+type sentinelClient interface {
+	build.SentinelEnqueuer
+	Close() error
+}
+
+// sentinelClientConstructor is a seam over sentinelclient.New so tests can
+// inject a fake client without dialing a real gRPC target.
+var sentinelClientConstructor = func() (sentinelClient, error) {
+	return sentinelclient.New()
+}
+
+// initSentinelClient resolves NodeSentinel integration from rc.sentinelEnabled.
+// It never fails NodeVault startup: NODESENTINEL_ENABLED=false and a client
+// construction failure both degrade to a nil sentinel (BuildService then
+// skips L3/L4 validation enqueue — see SentinelEnqueuer's nil contract), but
+// unlike the previous silent-skip behavior, both paths are logged explicitly
+// so "why isn't NodeSentinel being called" is answerable from startup logs
+// alone. closeFn is always safe to call (a no-op when sentinel is nil) and
+// should be deferred by the caller to release the gRPC connection on shutdown.
+func initSentinelClient(rc *runtimeConfig) (sentinel build.SentinelEnqueuer, closeFn func()) {
+	noopClose := func() {}
+	if !rc.sentinelEnabled {
+		slog.Info("NodeSentinel integration disabled", "reason", "NODESENTINEL_ENABLED is not \"true\"")
+		return nil, noopClose
+	}
+	client, err := sentinelClientConstructor()
+	if err != nil {
+		slog.Error("NodeSentinel enabled but client init failed — validation enqueue disabled", "err", err)
+		return nil, noopClose
+	}
+	//nolint:gosec // resolved address is operator-configured (NODESENTINEL_GRPC_ADDR) or a fixed default.
+	slog.Info("NodeSentinel integration enabled", "addr", sanitizeLogValue(sentinelclient.Addr()))
+	return client, func() {
+		if closeErr := client.Close(); closeErr != nil {
+			slog.Warn("failed to close NodeSentinel client", "err", closeErr)
+		}
+	}
 }
 
 // registerBuildService registers the single production image build path.
@@ -325,6 +375,7 @@ func registerBuildService(
 	indexStore *index.Store,
 	buildStateStore *buildstate.Store,
 	rec *reconcile.Reconciler,
+	sentinel build.SentinelEnqueuer,
 ) error {
 	switch rc.buildBackend {
 	case buildBackendDisabled:
@@ -332,7 +383,7 @@ func registerBuildService(
 		slog.Info("BuildService registered with disabled backend")
 		return nil
 	case buildBackendInPodBuildah:
-		buildSvc, buildErr := buildServiceConstructor(registrySvc, indexStore, buildStateStore, rec)
+		buildSvc, buildErr := buildServiceConstructor(registrySvc, indexStore, buildStateStore, rec, sentinel)
 		if buildErr != nil {
 			slog.Error("BuildService init failed, degrading to disabled backend",
 				"backend", buildBackendInPodBuildah, "build_backend_status", "degraded", "err", buildErr)

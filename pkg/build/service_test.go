@@ -299,16 +299,24 @@ func TestPostBuildRegistration_ReferrerPushFailure_TriggersReconcile(t *testing.
 	}
 }
 
-// fakeSentinel counts EnqueueValidationWork calls, for asserting registration
-// failure skips sentinel enqueue entirely (#23).
+// fakeSentinel counts EnqueueValidationWork calls and records the last
+// request, for asserting registration failure skips sentinel enqueue
+// entirely (#23), that a successful registration enqueues exactly once with
+// the correct fields, and that an injected enqueue error is non-fatal.
 type fakeSentinel struct {
-	calls int
+	calls   int
+	lastReq *nsv1.EnqueueValidationWorkRequest
+	err     error
 }
 
 func (f *fakeSentinel) EnqueueValidationWork(
-	_ context.Context, _ *nsv1.EnqueueValidationWorkRequest,
+	_ context.Context, req *nsv1.EnqueueValidationWorkRequest,
 ) (*nsv1.EnqueueValidationWorkResponse, error) {
 	f.calls++
+	f.lastReq = req
+	if f.err != nil {
+		return nil, f.err
+	}
 	return &nsv1.EnqueueValidationWorkResponse{JobId: "job-1", Status: "Queued"}, nil
 }
 
@@ -340,6 +348,105 @@ func TestPostBuildRegistration_RegisterToolFailure_ReturnsErrorAndSkipsSentinelE
 	}
 	if sentinel.calls != 0 {
 		t.Errorf("sentinel enqueue calls = %d, want 0 (must not enqueue for an unregistered tool)", sentinel.calls)
+	}
+}
+
+// TestPostBuildRegistration_Success_EnqueuesSentinelWorkOnceWithCorrectFields
+// is PR1's core wiring regression guard: once registration succeeds,
+// EnqueueValidationWork must be called exactly once, and the request must
+// carry the image repository/digest and the CasHash RegisterTool returned —
+// not, e.g., a ToolSpec digest or some other identifier mixed in for CasHash
+// (see the review finding that NodeSentinel's L5-a submission conflates
+// CasHash and ToolSpecDigest downstream; this guards NodeVault's own side of
+// that boundary).
+func TestPostBuildRegistration_Success_EnqueuesSentinelWorkOnceWithCorrectFields(t *testing.T) {
+	t.Setenv("NODEVAULT_REGISTRY_ADDR", "127.0.0.1:1") // connection refused, fails fast (referrer push only)
+
+	store, err := index.NewAt(t.TempDir())
+	if err != nil {
+		t.Fatalf("index.NewAt: %v", err)
+	}
+	cat := catalog.NewCatalogAt(t.TempDir())
+	registrySvc := catalog.NewToolRegistryService(cat, store)
+	sentinel := &fakeSentinel{}
+	svc := &Service{registry: registrySvc, indexStore: store, sentinel: sentinel}
+
+	const imageDigest = "sha256:deadbeef"
+	req := &nfv1.BuildRequest{RequestId: "req-1", ToolName: "test-tool", Version: "1.0.0"}
+	destination := "harbor.example.com/library/test-tool@" + imageDigest
+	if regErr := svc.postBuildRegistration(context.Background(), req, destination, imageDigest, func(string) {}); regErr != nil {
+		t.Fatalf("postBuildRegistration: %v (registration itself must succeed)", regErr)
+	}
+
+	if sentinel.calls != 1 {
+		t.Fatalf("sentinel enqueue calls = %d, want exactly 1", sentinel.calls)
+	}
+	got := sentinel.lastReq
+	if got == nil {
+		t.Fatal("sentinel.lastReq is nil")
+	}
+	if got.ImageRepository != "harbor.example.com/library/test-tool" {
+		t.Errorf("ImageRepository = %q, want the digest-stripped repo", got.ImageRepository)
+	}
+	if got.ImageDigest != imageDigest {
+		t.Errorf("ImageDigest = %q, want %q", got.ImageDigest, imageDigest)
+	}
+	if got.ToolName != "test-tool" || got.Version != "1.0.0" {
+		t.Errorf("ToolName/Version = %q/%q, want test-tool/1.0.0", got.ToolName, got.Version)
+	}
+
+	entries, lerr := store.All()
+	if lerr != nil {
+		t.Fatalf("store.All: %v", lerr)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 index entry, got %d", len(entries))
+	}
+	wantCasHash := entries[0].CasHash
+	if wantCasHash == "" {
+		t.Fatal("index entry has empty CasHash")
+	}
+	if got.CasHash != wantCasHash {
+		t.Errorf("CasHash = %q, want the RegisterTool-assigned CasHash %q", got.CasHash, wantCasHash)
+	}
+}
+
+// TestPostBuildRegistration_SentinelEnqueueFailure_IsNonFatal verifies that a
+// NodeSentinel enqueue failure defers validation but does not fail
+// postBuildRegistration — the image build, push, and catalog registration
+// already succeeded by this point and must not be reported as failed.
+func TestPostBuildRegistration_SentinelEnqueueFailure_IsNonFatal(t *testing.T) {
+	t.Setenv("NODEVAULT_REGISTRY_ADDR", "127.0.0.1:1") // connection refused, fails fast (referrer push only)
+
+	store, err := index.NewAt(t.TempDir())
+	if err != nil {
+		t.Fatalf("index.NewAt: %v", err)
+	}
+	cat := catalog.NewCatalogAt(t.TempDir())
+	registrySvc := catalog.NewToolRegistryService(cat, store)
+	sentinel := &fakeSentinel{err: errors.New("simulated NodeSentinel unavailable")}
+	svc := &Service{registry: registrySvc, indexStore: store, sentinel: sentinel}
+
+	var logs []string
+	req := &nfv1.BuildRequest{RequestId: "req-1", ToolName: "test-tool", Version: "1.0.0"}
+	regErr := svc.postBuildRegistration(context.Background(), req,
+		"harbor.example.com/library/test-tool:1.0.0", "sha256:deadbeef",
+		func(msg string) { logs = append(logs, msg) })
+	if regErr != nil {
+		t.Fatalf("postBuildRegistration: %v, want nil (sentinel enqueue failure must not fail registration)", regErr)
+	}
+	if sentinel.calls != 1 {
+		t.Fatalf("sentinel enqueue calls = %d, want 1", sentinel.calls)
+	}
+
+	foundFailureLog := false
+	for _, l := range logs {
+		if strings.Contains(l, "sentinel enqueue failed") {
+			foundFailureLog = true
+		}
+	}
+	if !foundFailureLog {
+		t.Errorf("expected a %q log line, got %v", "sentinel enqueue failed", logs)
 	}
 }
 
@@ -398,6 +505,27 @@ func TestSanitizeTag_PreservesAlreadySafeVersions(t *testing.T) {
 		if got := sanitizeTag(v); got != v {
 			t.Errorf("sanitizeTag(%q) = %q, want unchanged", v, got)
 		}
+	}
+}
+
+// TestSanitizeTag_LongSafeStringsDoNotCollideOnTruncation guards a bypass of
+// the collision guarantee that wasn't going through character substitution:
+// two already-tag-safe strings sharing the same first tagMaxLen characters
+// used to both truncate to the identical tag, silently conflating two
+// different versions — exactly what the hash-suffix mechanism exists to
+// prevent for the character-substitution case.
+func TestSanitizeTag_LongSafeStringsDoNotCollideOnTruncation(t *testing.T) {
+	base := strings.Repeat("a", tagMaxLen)
+	first := base + "x"
+	second := base + "y"
+
+	gotFirst := sanitizeTag(first)
+	gotSecond := sanitizeTag(second)
+	if gotFirst == gotSecond {
+		t.Fatalf("sanitizeTag collision: %q and %q both produced %q", first, second, gotFirst)
+	}
+	if len(gotFirst) <= tagMaxLen || len(gotSecond) <= tagMaxLen {
+		t.Errorf("expected a hash suffix appended past tagMaxLen, got %q and %q", gotFirst, gotSecond)
 	}
 }
 

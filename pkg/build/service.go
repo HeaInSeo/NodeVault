@@ -21,6 +21,7 @@ import (
 	"github.com/HeaInSeo/NodeVault/pkg/buildstate"
 	"github.com/HeaInSeo/NodeVault/pkg/catalog"
 	"github.com/HeaInSeo/NodeVault/pkg/index"
+	"github.com/HeaInSeo/NodeVault/pkg/metrics"
 	"github.com/HeaInSeo/NodeVault/pkg/oras"
 	"github.com/HeaInSeo/NodeVault/pkg/registryconfig"
 )
@@ -87,11 +88,15 @@ func (b *activeBuild) fail(err error) {
 // NewService creates a BuildService backed by podbridge5.
 // reconciler may be nil; when non-nil it is called after successful referrer push
 // so integrity_health transitions to Healthy without waiting for the next reconcile tick.
+// sentinel may be nil; when non-nil, EnqueueValidationWork is called after a
+// successful build+registration (nil disables L3/L4 validation enqueue, e.g.
+// when NodeSentinel is not deployed or NODESENTINEL_ENABLED=false).
 func NewService(
 	registry *catalog.ToolRegistryService,
 	store *index.Store,
 	stateStore *buildstate.Store,
 	reconciler ReconcileTriggerer,
+	sentinel SentinelEnqueuer,
 ) (*Service, error) {
 	if registry == nil {
 		return nil, fmt.Errorf("build service init: registry must not be nil")
@@ -109,7 +114,8 @@ func NewService(
 	}
 	return &Service{
 		builder: builder, registry: registry,
-		indexStore: store, buildState: stateStore, active: make(map[string]*activeBuild), reconciler: reconciler,
+		indexStore: store, buildState: stateStore, active: make(map[string]*activeBuild),
+		reconciler: reconciler, sentinel: sentinel,
 	}, nil
 }
 
@@ -294,9 +300,11 @@ func (s *Service) postBuildRegistration(
 		enqCtx, enqCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer enqCancel()
 		if enqResp, enqErr := s.sentinel.EnqueueValidationWork(enqCtx, enqReq); enqErr != nil {
+			metrics.SentinelEnqueueFailureTotal.Add(1)
 			slog.Warn("NodeSentinel EnqueueValidationWork failed (validation deferred)", "err", enqErr)
 			logFn("sentinel enqueue failed: " + enqErr.Error())
 		} else {
+			metrics.SentinelEnqueueSuccessTotal.Add(1)
 			slog.Info("NodeSentinel job enqueued", "job_id", enqResp.JobId, "status", enqResp.Status)
 			logFn("sentinel job enqueued: " + enqResp.JobId)
 		}
@@ -349,15 +357,22 @@ func sanitizeName(s string) string {
 	return result
 }
 
+// tagMaxLen leaves room for a "-" + 8-char hash suffix under Docker's
+// 128-char tag limit.
+const tagMaxLen = 90
+
 // sanitizeTag makes a string safe for use as an image tag component (e.g. a
 // version in <tool>:<version>). Unlike sanitizeName, dots are preserved —
 // Docker's tag grammar allows them and versions commonly use them
-// ("0.7.17"). If the input needed any character substituted or trimmed, a
-// short content hash of the original is appended: two different inputs can
-// otherwise collapse to the same sanitized string (e.g. "1.0+cuda" and
-// "1.0/cuda" both naively become "1.0-cuda"), which would silently conflate
-// two different versions under one tag — unacceptable for a reproducibility
-// gate. Inputs that are already tag-safe as-is are returned unchanged.
+// ("0.7.17"). If the input needed any character substituted, trimmed, or
+// truncated, a short content hash of the original is appended: two
+// different inputs can otherwise collapse to the same sanitized string —
+// via character substitution (e.g. "1.0+cuda" and "1.0/cuda" both naively
+// become "1.0-cuda") or, just as silently, via truncation alone (two
+// already-safe strings sharing the same first tagMaxLen characters) — which
+// would conflate two different versions under one tag, unacceptable for a
+// reproducibility gate. Only an input that is both already tag-safe AND
+// within the length limit is returned unchanged.
 func sanitizeTag(s string) string {
 	trimmed := strings.TrimSpace(s)
 	if trimmed == "" {
@@ -373,8 +388,8 @@ func sanitizeTag(s string) string {
 		}
 	}
 	clean := strings.Trim(b.String(), "-.")
-	if clean == trimmed {
-		return truncateTag(clean)
+	if clean == trimmed && len(clean) <= tagMaxLen {
+		return clean
 	}
 	sum := sha256.Sum256([]byte(trimmed))
 	suffix := hex.EncodeToString(sum[:])[:8]
@@ -385,9 +400,8 @@ func sanitizeTag(s string) string {
 }
 
 func truncateTag(s string) string {
-	const maxLen = 90 // leaves room for a "-" + 8-char hash suffix under Docker's 128-char tag limit
-	if len(s) > maxLen {
-		return s[:maxLen]
+	if len(s) > tagMaxLen {
+		return s[:tagMaxLen]
 	}
 	return s
 }

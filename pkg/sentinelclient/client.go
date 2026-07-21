@@ -16,7 +16,7 @@ import (
 	nsv1 "github.com/HeaInSeo/NodeVault/protos/nodesentinel/v1"
 )
 
-const defaultGRPCAddr = "nodesentinel.nodevault-system.svc.cluster.local:50052"
+const defaultGRPCAddr = "nodesentinel.nodesentinel-system.svc.cluster.local:50052"
 
 const enqueueTimeout = 5 * time.Second
 
@@ -27,6 +27,14 @@ func grpcAddr() string {
 		return v
 	}
 	return defaultGRPCAddr
+}
+
+// Addr returns the NodeSentinel ingress address that New() would dial —
+// the NODESENTINEL_GRPC_ADDR override, or the in-cluster default. Exposed
+// for startup logging so operators can see the resolved address without
+// duplicating the override lookup.
+func Addr() string {
+	return grpcAddr()
 }
 
 // Client is a gRPC client for NodeSentinel's IngressService.

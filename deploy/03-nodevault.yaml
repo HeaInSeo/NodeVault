@@ -138,6 +138,16 @@ spec:
             - name: NODEVAULT_RUNTIME_MODE
               value: "incluster"
 
+            # NodeSentinel integration (PR1 — connection only, see NodeSentinel
+            # docs/NODESENTINEL_VALIDATION_FLOW_SPEC_v0.1.md). NodeSentinel is
+            # deployed in its own namespace (nodesentinel-system), not
+            # nodevault-system — the address below is the source of truth;
+            # do not rely on pkg/sentinelclient's in-code default alone.
+            - name: NODESENTINEL_ENABLED
+              value: "true"
+            - name: NODESENTINEL_GRPC_ADDR
+              value: "nodesentinel.nodesentinel-system.svc.cluster.local:50052"
+
             # Kubernetes already places this Pod in a user namespace
             # (hostUsers:false). Do not set Buildah's legacy rootless env here:
             # it forces userxattr on native overlay build-context mounts, which

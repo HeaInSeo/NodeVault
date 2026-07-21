@@ -17,6 +17,9 @@ var (
 	ReconcileErrorTotal = expvar.NewInt("nodevault_reconcile_error_total")
 	BuildSuccessTotal   = expvar.NewInt("nodevault_build_success_total")
 	BuildFailureTotal   = expvar.NewInt("nodevault_build_failure_total")
+
+	SentinelEnqueueSuccessTotal = expvar.NewInt("nodevault_sentinel_enqueue_success_total")
+	SentinelEnqueueFailureTotal = expvar.NewInt("nodevault_sentinel_enqueue_failure_total")
 )
 
 // StartServer starts the metrics HTTP server (non-blocking).

@@ -337,8 +337,8 @@ func (s *Service) finalizeSubmittedBuild(
 // BuildAndRegister RPC used to record (issue #15) — Interrupted (user
 // cancel, or a process-restart recovery sweep) is deliberately excluded so
 // operators can distinguish real build failures from cancellation.
-func recordBuildOutcomeMetric(status buildstate.Status) {
-	switch status {
+func recordBuildOutcomeMetric(terminalStatus buildstate.Status) {
+	switch terminalStatus {
 	case buildstate.StatusSucceeded:
 		metrics.BuildSuccessTotal.Add(1)
 	case buildstate.StatusFailed:

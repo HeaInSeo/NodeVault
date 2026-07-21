@@ -670,9 +670,19 @@ func TestSubmitToolBuild_NoVersion_NoLatestAliasPush(t *testing.T) {
 	svc := newSubmitTestService(t)
 	builder := &mockBuilder{digest: "sha256:novers"}
 	svc.builder = builder
+	// newSubmitTestService's default "spec-123" fixture already carries
+	// Version "2.2.1" (see its ResolvedToolSpec) — register a spec with no
+	// version so this test actually exercises the no-version path.
+	if err := svc.indexStore.AppendResolvedToolSpec(index.ResolvedToolSpec{
+		ToolSpecDigest: "spec-novers", ToolName: "bwa-mem2",
+		RawSpec:    `{"tool_name":"bwa-mem2","dockerfile_content":"FROM alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nRUN true"}`,
+		ResolvedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("AppendResolvedToolSpec: %v", err)
+	}
 
 	if _, err := svc.SubmitToolBuild(context.Background(), &nfv1.SubmitToolBuildRequest{
-		RequestId: "build-novers-1", ToolSpecDigest: "spec-123",
+		RequestId: "build-novers-1", ToolSpecDigest: "spec-novers",
 	}); err != nil {
 		t.Fatalf("SubmitToolBuild: %v", err)
 	}

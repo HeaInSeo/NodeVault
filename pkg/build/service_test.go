@@ -18,8 +18,6 @@ import (
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
-const validPolicyDockerfile = "FROM alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nRUN true"
-
 // ─── fakeStream — minimal grpc.ServerStreamingServer[nfv1.BuildEvent] mock ───
 
 type fakeStream struct {
@@ -45,14 +43,6 @@ func (f *fakeStream) SendHeader(metadata.MD) error {
 func (f *fakeStream) SetTrailer(metadata.MD) { _ = f }
 func (*fakeStream) SendMsg(any) error        { return nil }
 func (*fakeStream) RecvMsg(any) error        { return nil }
-
-func (f *fakeStream) kindsSent() []nfv1.BuildEventKind {
-	kinds := make([]nfv1.BuildEventKind, 0, len(f.events))
-	for _, ev := range f.events {
-		kinds = append(kinds, ev.Kind)
-	}
-	return kinds
-}
 
 // ─── mockBuilder ─────────────────────────────────────────────────────────────
 

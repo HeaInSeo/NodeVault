@@ -179,10 +179,18 @@ type BuildServiceClient interface {
 	// clients (e.g. C#'s [Obsolete]), not just a comment, so callers get a
 	// build warning rather than having to notice a doc string.
 	BuildAndRegister(ctx context.Context, in *BuildRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BuildEvent], error)
+	// ResolveToolSpec normalizes the submitted raw_spec and computes its
+	// content digest (tool_spec_digest). It never selects or rewrites the
+	// author's package/build/base-image choice — that choice must already be
+	// reflected in raw_spec before this call (issue #18, docs/NONGOALS.md N-11).
 	ResolveToolSpec(ctx context.Context, in *ToolSpecRequest, opts ...grpc.CallOption) (*ResolvedToolSpecResponse, error)
 	SubmitToolBuild(ctx context.Context, in *SubmitToolBuildRequest, opts ...grpc.CallOption) (*SubmitToolBuildResponse, error)
 	WatchToolBuild(ctx context.Context, in *WatchToolBuildRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BuildEvent], error)
 	CancelToolBuild(ctx context.Context, in *CancelToolBuildRequest, opts ...grpc.CallOption) (*CancelToolBuildResponse, error)
+	// ResolveRecipe is a candidate lookup API: it returns reproducible
+	// package/image candidates for the author (via NodeKit) to choose from. It
+	// does not select a canonical candidate or rewrite raw_spec/Dockerfile
+	// content itself (issue #18, docs/NONGOALS.md N-11).
 	ResolveRecipe(ctx context.Context, in *ResolveRecipeRequest, opts ...grpc.CallOption) (*ResolveRecipeResponse, error)
 }
 
@@ -285,10 +293,18 @@ type BuildServiceServer interface {
 	// clients (e.g. C#'s [Obsolete]), not just a comment, so callers get a
 	// build warning rather than having to notice a doc string.
 	BuildAndRegister(*BuildRequest, grpc.ServerStreamingServer[BuildEvent]) error
+	// ResolveToolSpec normalizes the submitted raw_spec and computes its
+	// content digest (tool_spec_digest). It never selects or rewrites the
+	// author's package/build/base-image choice — that choice must already be
+	// reflected in raw_spec before this call (issue #18, docs/NONGOALS.md N-11).
 	ResolveToolSpec(context.Context, *ToolSpecRequest) (*ResolvedToolSpecResponse, error)
 	SubmitToolBuild(context.Context, *SubmitToolBuildRequest) (*SubmitToolBuildResponse, error)
 	WatchToolBuild(*WatchToolBuildRequest, grpc.ServerStreamingServer[BuildEvent]) error
 	CancelToolBuild(context.Context, *CancelToolBuildRequest) (*CancelToolBuildResponse, error)
+	// ResolveRecipe is a candidate lookup API: it returns reproducible
+	// package/image candidates for the author (via NodeKit) to choose from. It
+	// does not select a canonical candidate or rewrite raw_spec/Dockerfile
+	// content itself (issue #18, docs/NONGOALS.md N-11).
 	ResolveRecipe(context.Context, *ResolveRecipeRequest) (*ResolveRecipeResponse, error)
 	mustEmbedUnimplementedBuildServiceServer()
 }

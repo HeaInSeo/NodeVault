@@ -85,10 +85,18 @@ service BuildService {
   rpc BuildAndRegister(BuildRequest) returns (stream BuildEvent) {
     option deprecated = true;
   };
+  // ResolveToolSpec normalizes the submitted raw_spec and computes its
+  // content digest (tool_spec_digest). It never selects or rewrites the
+  // author's package/build/base-image choice — that choice must already be
+  // reflected in raw_spec before this call (issue #18, docs/NONGOALS.md N-11).
   rpc ResolveToolSpec(ToolSpecRequest) returns (ResolvedToolSpecResponse);
   rpc SubmitToolBuild(SubmitToolBuildRequest) returns (SubmitToolBuildResponse);
   rpc WatchToolBuild(WatchToolBuildRequest) returns (stream BuildEvent);
   rpc CancelToolBuild(CancelToolBuildRequest) returns (CancelToolBuildResponse);
+  // ResolveRecipe is a candidate lookup API: it returns reproducible
+  // package/image candidates for the author (via NodeKit) to choose from. It
+  // does not select a canonical candidate or rewrite raw_spec/Dockerfile
+  // content itself (issue #18, docs/NONGOALS.md N-11).
   rpc ResolveRecipe(ResolveRecipeRequest) returns (ResolveRecipeResponse);
 }
 

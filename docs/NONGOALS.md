@@ -52,6 +52,17 @@ PR 리뷰 시 아래 항목이 포함되어 있으면 즉시 차단한다.
 - 비목표: webhook을 primary consistency 경로로 사용
 - 이유: Harbor GC 이벤트는 webhook 표면에 없음. reconcile-first가 기본.
 
+### N-11: NodeVault가 패키지/이미지 후보를 대신 선택 (issue #18)
+- 비목표: `ResolveRecipe`가 여러 candidate 중 하나를 "정답"으로 골라 반환하거나,
+  NodeVault가 후보 선택 결과를 받아 발급하는 별도 canonical candidate API
+- NodeVault가 계속 담당하는 것: `ResolveRecipe`의 candidate lookup, 제출된
+  ToolSpec의 정규화와 content digest 계산(`ResolveToolSpec`), submit 시점의
+  완전한 pin(`name=version=build`) 및 정책 검증(`SubmitToolBuild` 최종 게이트)
+- 이유: 어떤 package build/이미지를 쓸지는 CPU 호환성, 기존 파이프라인 호환,
+  관리자 정책, 재현 대상 연구 결과 등 authoring 의도가 섞인 판단이라 NodeKit/
+  사용자 책임이다. NodeVault가 대신 고르면 CLAUDE.md §1의 authoring UX 경계를
+  침범한다. 재현성의 최소 요구(완전한 pin)는 이미 Submit 게이트가 강제한다.
+
 ---
 
 ## PR 리뷰 체크포인트
@@ -66,3 +77,4 @@ PR 리뷰 시 다음 질문으로 비목표 포함 여부를 확인한다:
 6. DataDefinition/DataRegisterRequest를 P1/P2에서 구현하는가? → **N-09 차단**
 7. reconcile loop가 `lifecycle_phase`를 변경하는가? → **비목표 + CLAUDE.md §12 차단**
 8. `integrity_health`를 Catalog 노출 조건으로 사용하는가? → **비목표 + CLAUDE.md §12 차단**
+9. NodeVault가 candidate 중 하나를 선택해 canonical spec/이미지로 발급하는 코드가 있는가? → **N-11 차단**

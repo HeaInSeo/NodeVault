@@ -22,7 +22,7 @@
     │ Tool 정의 + L1 검증
     ▼
 [NodeKit]  ── C#/Avalonia 데스크톱 클라이언트
-    │ ToolSpecRequest/BuildRequest (gRPC)          AdminToolList (REST)
+    │ ToolSpecRequest/SubmitToolBuildRequest (gRPC)          AdminToolList (REST)
     ▼                                     ▲
 [NodeVault Pod]  ── Kubernetes data-plane app │
     ├── BuildService     final build gate + L2→L3→L4 + 등록   │

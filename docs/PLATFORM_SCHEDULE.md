@@ -1,7 +1,7 @@
 # Platform Schedule
 
-버전: 3.4
-갱신: 2026-07-12
+버전: 3.5
+갱신: 2026-07-21 (저장소 역할 표의 NodeKit gRPC 표면을 ToolSpecRequest/SubmitToolBuild로 갱신 — legacy BuildRequest/BuildAndRegister는 issue #15로 제거됨)
 기준 문서:
 - `docs/ARCHITECTURE_V01.md` (NodeVault Kubernetes In-Pod 재현 가능 이미지 빌드 아키텍처 v0.1.0)
 - `docs/OBSERVED_PROFILE_SPEC.md`, `docs/SECURITY_SCAN_SPEC.md`, `docs/RUNNER_NODE_SPEC.md`
@@ -15,7 +15,7 @@
 | 저장소 | 역할 | 상태 |
 |--------|------|------|
 | [NodeVault](https://github.com/HeaInSeo/NodeVault) | K8s data-plane canonical resolver / builder / index SoT | v0.3.0 — in-pod-buildah 완료 |
-| [NodeKit](https://github.com/HeaInSeo/NodeKit) | external authoring/admin tool (L1, BuildRequest) | 운영 중 |
+| [NodeKit](https://github.com/HeaInSeo/NodeKit) | external authoring/admin tool (L1, ToolSpecRequest/SubmitToolBuild — legacy BuildRequest/BuildAndRegister는 issue #15로 제거) | 운영 중 |
 | [NodeSentinel](https://github.com/HeaInSeo/NodeSentinel) | K8s data-plane 검증 에이전트 | L3~L5-b 완료 |
 | [NodePalette](https://github.com/HeaInSeo/NodePalette) | 인증 tool 팔레트 REST 서비스 | v1.0 완료 |
 | [DockGuard](https://github.com/HeaInSeo/DockGuard) | OPA/Rego Dockerfile 정책 + .wasm | 운영 중 |

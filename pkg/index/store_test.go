@@ -717,3 +717,166 @@ func TestLoad_SchemaV1File_ToolBuildAndImageSections_LoadEmptySlices(t *testing.
 		t.Errorf("AppendToolImageRecord after v1 load: %v", err)
 	}
 }
+
+// TestLoad_SchemaV3File_ValidationRequestSection_LoadsEmptySlice verifies
+// that a vault-index.json written before schema v4 (missing
+// validation_request_records) loads cleanly with that section empty, and
+// that a new ValidationRequestRecord can be created afterward. Regression
+// guard for the PR2-A schema bump — mirrors
+// TestLoad_SchemaV1File_ToolBuildAndImageSections_LoadEmptySlices above.
+func TestLoad_SchemaV3File_ValidationRequestSection_LoadsEmptySlice(t *testing.T) {
+	dir := t.TempDir()
+	v3JSON := `{"schema_version":3,"entries":[{"cas_hash":"hash-v3","artifact_kind":"tool","stable_ref":"bwa@1","lifecycle_phase":"Active","integrity_health":"Healthy"}]}`
+	if err := os.WriteFile(dir+"/vault-index.json", []byte(v3JSON), 0o600); err != nil {
+		t.Fatalf("write v3 fixture: %v", err)
+	}
+
+	s, err := index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("NewAt: %v", err)
+	}
+
+	if _, err := s.GetValidationRequestRecord("anything"); !errors.Is(err, index.ErrNotFound) {
+		t.Errorf("GetValidationRequestRecord on a pre-v4 file: err = %v, want ErrNotFound", err)
+	}
+
+	if err := s.CreateValidationRequestRecord(index.ValidationRequestRecord{
+		ValidationRequestID: "vr-after-migration",
+	}); err != nil {
+		t.Errorf("CreateValidationRequestRecord after v3 load: %v", err)
+	}
+}
+
+// ── ValidationRequestRecord ───────────────────────────────────────────────────
+
+func TestCreateValidationRequestRecord_Success(t *testing.T) {
+	s := newStore(t)
+
+	if err := s.CreateValidationRequestRecord(index.ValidationRequestRecord{
+		ValidationRequestID: "vr-1",
+		BuildID:             "build-1",
+		CasHash:             "hash-1",
+		ImageDigest:         "sha256:aaaa",
+	}); err != nil {
+		t.Fatalf("CreateValidationRequestRecord: %v", err)
+	}
+
+	got, err := s.GetValidationRequestRecord("vr-1")
+	if err != nil {
+		t.Fatalf("GetValidationRequestRecord: %v", err)
+	}
+	if got.ValidationStatus != index.ValidationEnqueuePending {
+		t.Errorf("ValidationStatus = %q, want %q (default)", got.ValidationStatus, index.ValidationEnqueuePending)
+	}
+	if got.RequestedAt.IsZero() {
+		t.Error("RequestedAt was not defaulted")
+	}
+	if got.BuildID != "build-1" {
+		t.Errorf("BuildID = %q, want build-1", got.BuildID)
+	}
+}
+
+func TestCreateValidationRequestRecord_EmptyID_Rejected(t *testing.T) {
+	s := newStore(t)
+	err := s.CreateValidationRequestRecord(index.ValidationRequestRecord{})
+	if err == nil {
+		t.Fatal("expected an error for empty ValidationRequestID")
+	}
+}
+
+func TestCreateValidationRequestRecord_DuplicateID_Rejected(t *testing.T) {
+	s := newStore(t)
+	rec := index.ValidationRequestRecord{ValidationRequestID: "vr-dup"}
+	if err := s.CreateValidationRequestRecord(rec); err != nil {
+		t.Fatalf("first CreateValidationRequestRecord: %v", err)
+	}
+	if err := s.CreateValidationRequestRecord(rec); err == nil {
+		t.Fatal("expected an error for a duplicate ValidationRequestID")
+	}
+}
+
+func TestGetValidationRequestRecord_NotFound(t *testing.T) {
+	s := newStore(t)
+	_, err := s.GetValidationRequestRecord("missing")
+	if !errors.Is(err, index.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestTransitionValidationRequest_EnqueuePendingToQueued_AppliesMutateAndStatus
+// exercises the success path CreateValidationRequestRecord's caller
+// actually uses: EnqueuePending -> Queued with SentinelJobID filled in.
+func TestTransitionValidationRequest_EnqueuePendingToQueued_AppliesMutateAndStatus(t *testing.T) {
+	s := newStore(t)
+	if err := s.CreateValidationRequestRecord(index.ValidationRequestRecord{ValidationRequestID: "vr-1"}); err != nil {
+		t.Fatalf("CreateValidationRequestRecord: %v", err)
+	}
+
+	err := s.TransitionValidationRequest("vr-1", index.ValidationQueued, func(r *index.ValidationRequestRecord) {
+		r.SentinelJobID = "job-123"
+	})
+	if err != nil {
+		t.Fatalf("TransitionValidationRequest: %v", err)
+	}
+
+	got, err := s.GetValidationRequestRecord("vr-1")
+	if err != nil {
+		t.Fatalf("GetValidationRequestRecord: %v", err)
+	}
+	if got.ValidationStatus != index.ValidationQueued {
+		t.Errorf("ValidationStatus = %q, want Queued", got.ValidationStatus)
+	}
+	if got.SentinelJobID != "job-123" {
+		t.Errorf("SentinelJobID = %q, want job-123", got.SentinelJobID)
+	}
+}
+
+// TestTransitionValidationRequest_InvalidEdge_Rejected is a direct
+// regression guard for the corruption scenario flagged in review: applying
+// an out-of-order or stale status update (here, a terminal Succeeded record
+// being pushed back to Running) must be rejected, not silently accepted.
+func TestTransitionValidationRequest_InvalidEdge_Rejected(t *testing.T) {
+	tests := []struct {
+		name string
+		from index.ValidationStatus
+		to   index.ValidationStatus
+	}{
+		{"succeeded cannot go back to running", index.ValidationSucceeded, index.ValidationRunning},
+		{"failed cannot go back to queued", index.ValidationFailed, index.ValidationQueued},
+		{"enqueue_pending cannot skip straight to succeeded", index.ValidationEnqueuePending, index.ValidationSucceeded},
+		{"queued cannot go back to enqueue_pending", index.ValidationQueued, index.ValidationEnqueuePending},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newStore(t)
+			if err := s.CreateValidationRequestRecord(index.ValidationRequestRecord{
+				ValidationRequestID: "vr-1",
+				ValidationStatus:    tt.from,
+			}); err != nil {
+				t.Fatalf("CreateValidationRequestRecord: %v", err)
+			}
+
+			err := s.TransitionValidationRequest("vr-1", tt.to, nil)
+			if err == nil {
+				t.Fatalf("expected an error transitioning %s -> %s, got nil", tt.from, tt.to)
+			}
+
+			got, getErr := s.GetValidationRequestRecord("vr-1")
+			if getErr != nil {
+				t.Fatalf("GetValidationRequestRecord: %v", getErr)
+			}
+			if got.ValidationStatus != tt.from {
+				t.Errorf("ValidationStatus after rejected transition = %q, want unchanged %q", got.ValidationStatus, tt.from)
+			}
+		})
+	}
+}
+
+func TestTransitionValidationRequest_NotFound(t *testing.T) {
+	s := newStore(t)
+	err := s.TransitionValidationRequest("missing", index.ValidationQueued, nil)
+	if !errors.Is(err, index.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}

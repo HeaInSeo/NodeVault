@@ -731,6 +731,106 @@ func (s *Store) ListToolFunctionCatalogEntries(status PromotionStatus) ([]ToolFu
 	return out, nil
 }
 
+// ── ValidationRequestRecord ───────────────────────────────────────────────────
+
+// CreateValidationRequestRecord durably records a new logical validation
+// request in EnqueuePending status, before NodeVault calls NodeSentinel.
+// Returns an error if a record with the same ValidationRequestID already
+// exists — callers must mint a fresh ValidationRequestID per logical
+// request (see pkg/build's validation request ID generation) and only reuse
+// one to retry the exact same request after a transport/process failure.
+//
+//nolint:gocritic // hugeParam: ValidationRequestRecord by value is intentional — callers own their copy.
+func (s *Store) CreateValidationRequestRecord(r ValidationRequestRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if r.ValidationRequestID == "" {
+		return errors.New("index: ValidationRequestID must not be empty")
+	}
+	for i := range s.idx.ValidationRequestRecords {
+		if s.idx.ValidationRequestRecords[i].ValidationRequestID == r.ValidationRequestID {
+			return fmt.Errorf("index: validation request record %q already exists", r.ValidationRequestID)
+		}
+	}
+	if r.RequestedAt.IsZero() {
+		r.RequestedAt = time.Now().UTC()
+	}
+	if r.ValidationStatus == "" {
+		r.ValidationStatus = ValidationEnqueuePending
+	}
+	s.idx.ValidationRequestRecords = append(s.idx.ValidationRequestRecords, r)
+	return s.save()
+}
+
+// GetValidationRequestRecord returns the record with the given ValidationRequestID.
+// Returns ErrNotFound if no such record exists.
+func (s *Store) GetValidationRequestRecord(validationRequestID string) (ValidationRequestRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for i := range s.idx.ValidationRequestRecords {
+		if s.idx.ValidationRequestRecords[i].ValidationRequestID == validationRequestID {
+			return s.idx.ValidationRequestRecords[i], nil
+		}
+	}
+	return ValidationRequestRecord{}, fmt.Errorf("%w: validation_request_id=%q", ErrNotFound, validationRequestID)
+}
+
+// validValidationTransitions enumerates the only allowed
+// ValidationStatus -> ValidationStatus edges — see ValidationStatus's doc
+// comment for the full state graph. TransitionValidationRequest rejects
+// any edge not listed here (e.g. Succeeded -> Running, Failed -> Queued),
+// so a caller applying a stale/out-of-order update cannot silently corrupt
+// a record that has already reached a terminal or in-progress status.
+var validValidationTransitions = map[ValidationStatus][]ValidationStatus{
+	ValidationEnqueuePending: {ValidationQueued, ValidationUnavailable},
+	ValidationUnavailable:    {ValidationEnqueuePending},
+	ValidationQueued:         {ValidationRunning, ValidationFailed, ValidationInterrupted},
+	ValidationRunning:        {ValidationSucceeded, ValidationFailed, ValidationInterrupted},
+}
+
+// TransitionValidationRequest moves the record identified by validationRequestID
+// from its current status to `to`, applying mutate (which may be nil) to the
+// record before the status itself is updated and saved. Returns an error if
+// the record does not exist, or if the current status has no allowed edge to
+// `to` in validValidationTransitions.
+func (s *Store) TransitionValidationRequest(
+	validationRequestID string, to ValidationStatus, mutate func(*ValidationRequestRecord),
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	idx := -1
+	for i := range s.idx.ValidationRequestRecords {
+		if s.idx.ValidationRequestRecords[i].ValidationRequestID == validationRequestID {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return fmt.Errorf("%w: validation_request_id=%q", ErrNotFound, validationRequestID)
+	}
+
+	current := s.idx.ValidationRequestRecords[idx].ValidationStatus
+	allowed := false
+	for _, next := range validValidationTransitions[current] {
+		if next == to {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return fmt.Errorf("index: invalid validation status transition %s -> %s for %q", current, to, validationRequestID)
+	}
+
+	if mutate != nil {
+		mutate(&s.idx.ValidationRequestRecords[idx])
+	}
+	s.idx.ValidationRequestRecords[idx].ValidationStatus = to
+	return s.save()
+}
+
 // ── internal helpers ──────────────────────────────────────────────────────────
 
 func (s *Store) findIndex(casHash string) (int, error) {

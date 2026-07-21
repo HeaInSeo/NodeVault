@@ -413,6 +413,26 @@ func TestPostBuildRegistration_Success_EnqueuesSentinelWorkOnceWithCorrectFields
 	if got.CasHash != wantCasHash {
 		t.Errorf("CasHash = %q, want the RegisterTool-assigned CasHash %q", got.CasHash, wantCasHash)
 	}
+
+	if got.ValidationRequestId == "" {
+		t.Fatal("ValidationRequestId is empty — NodeSentinel cannot dedup/correlate this request")
+	}
+	rec, recErr := store.GetValidationRequestRecord(got.ValidationRequestId)
+	if recErr != nil {
+		t.Fatalf("GetValidationRequestRecord(%q): %v", got.ValidationRequestId, recErr)
+	}
+	if rec.ValidationStatus != index.ValidationQueued {
+		t.Errorf("ValidationRequestRecord.ValidationStatus = %q, want Queued after a successful enqueue", rec.ValidationStatus)
+	}
+	if rec.SentinelJobID != "job-1" { // fakeSentinel always returns JobId: "job-1"
+		t.Errorf("ValidationRequestRecord.SentinelJobID = %q, want job-1", rec.SentinelJobID)
+	}
+	if rec.BuildID != "req-1" {
+		t.Errorf("ValidationRequestRecord.BuildID = %q, want req-1", rec.BuildID)
+	}
+	if rec.CasHash != wantCasHash {
+		t.Errorf("ValidationRequestRecord.CasHash = %q, want %q", rec.CasHash, wantCasHash)
+	}
 }
 
 // TestImageRepoFromDestination guards the exact bug the fixture above would
@@ -476,6 +496,56 @@ func TestPostBuildRegistration_SentinelEnqueueFailure_IsNonFatal(t *testing.T) {
 	}
 	if !foundFailureLog {
 		t.Errorf("expected a %q log line, got %v", "sentinel enqueue failed", logs)
+	}
+
+	validationRequestID := sentinel.lastReq.GetValidationRequestId()
+	if validationRequestID == "" {
+		t.Fatal("ValidationRequestId is empty")
+	}
+	rec, recErr := store.GetValidationRequestRecord(validationRequestID)
+	if recErr != nil {
+		t.Fatalf("GetValidationRequestRecord(%q): %v", validationRequestID, recErr)
+	}
+	if rec.ValidationStatus != index.ValidationUnavailable {
+		t.Errorf("ValidationRequestRecord.ValidationStatus = %q, want Unavailable after a failed enqueue", rec.ValidationStatus)
+	}
+	if rec.FailureReason == "" {
+		t.Error("ValidationRequestRecord.FailureReason is empty, want the sentinel enqueue error")
+	}
+}
+
+// TestPostBuildRegistration_NilIndexStore_StillEnqueuesWithoutPanicking is a
+// regression guard for the correlation-record wiring added in PR2-A: the
+// CreateValidationRequestRecord/TransitionValidationRequest calls are gated
+// behind `s.indexStore != nil` specifically so a Service constructed without
+// an index store (as some unit tests, and any future degraded-startup path,
+// do) still enqueues successfully instead of nil-dereferencing.
+func TestPostBuildRegistration_NilIndexStore_StillEnqueuesWithoutPanicking(t *testing.T) {
+	t.Setenv("NODEVAULT_REGISTRY_ADDR", "127.0.0.1:1") // connection refused, fails fast (referrer push only)
+
+	cat := catalog.NewCatalogAt(t.TempDir())
+	// registrySvc still needs an index.Store internally for RegisterTool to
+	// succeed — only svc.indexStore itself is left nil, which is what the
+	// enqueue-correlation code path actually branches on.
+	registrySvcStore, err := index.NewAt(t.TempDir())
+	if err != nil {
+		t.Fatalf("index.NewAt: %v", err)
+	}
+	registrySvc := catalog.NewToolRegistryService(cat, registrySvcStore)
+	sentinel := &fakeSentinel{}
+	svc := &Service{registry: registrySvc, sentinel: sentinel}
+
+	req := &nfv1.BuildRequest{RequestId: "req-1", ToolName: "test-tool", Version: "1.0.0"}
+	regErr := svc.postBuildRegistration(context.Background(), req,
+		"harbor.example.com/library/test-tool:1.0.0", "sha256:deadbeef", func(string) {})
+	if regErr != nil {
+		t.Fatalf("postBuildRegistration: %v, want nil", regErr)
+	}
+	if sentinel.calls != 1 {
+		t.Fatalf("sentinel enqueue calls = %d, want 1", sentinel.calls)
+	}
+	if sentinel.lastReq.GetValidationRequestId() == "" {
+		t.Error("ValidationRequestId is empty even without an index store")
 	}
 }
 

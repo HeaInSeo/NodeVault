@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	nsv1 "github.com/HeaInSeo/NodeVault/protos/nodesentinel/v1"
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 
@@ -25,6 +27,16 @@ import (
 	"github.com/HeaInSeo/NodeVault/pkg/oras"
 	"github.com/HeaInSeo/NodeVault/pkg/registryconfig"
 )
+
+// newValidationRequestID mints a fresh identifier for one logical
+// NodeSentinel validation request. It must be called exactly once per
+// logical request — reusing a value is only valid when retrying that exact
+// same request after a transport/process failure, never for a new request
+// against the same build (re-validation, a different profile, ...). See
+// index.ValidationRequestRecord's doc comment.
+func newValidationRequestID() string {
+	return uuid.NewString()
+}
 
 // SentinelEnqueuer enqueues post-build L3/L4 validation work with NodeSentinel.
 // Implemented by *sentinelclient.Client in production; nil disables enqueueing
@@ -285,14 +297,33 @@ func (s *Service) postBuildRegistration(
 	// validation work is queued for a tool that was never registered.
 	if s.sentinel != nil {
 		imageRepo := imageRepoFromDestination(destination)
+
+		// validationRequestID is minted fresh for this call — postBuildRegistration
+		// runs at most once per build, so there is no retry path that would need
+		// to reuse an existing ID here (a future manual-revalidation entry point
+		// would mint its own ID the same way, via newValidationRequestID).
+		validationRequestID := newValidationRequestID()
+		if s.indexStore != nil {
+			if createErr := s.indexStore.CreateValidationRequestRecord(index.ValidationRequestRecord{
+				ValidationRequestID: validationRequestID,
+				BuildID:             req.GetRequestId(),
+				CasHash:             regResp.CasHash,
+				ImageDigest:         digest,
+			}); createErr != nil {
+				slog.Warn("index: failed to record validation request",
+					"validation_request_id", validationRequestID, "err", createErr)
+			}
+		}
+
 		enqReq := &nsv1.EnqueueValidationWorkRequest{
-			ArtifactKind:     "tool",
-			ImageRepository:  imageRepo,
-			ImageDigest:      digest,
-			ToolName:         req.GetToolName(),
-			Version:          req.GetVersion(),
-			CasHash:          regResp.CasHash,
-			RequestedActions: []string{"smoke_run"},
+			ArtifactKind:        "tool",
+			ImageRepository:     imageRepo,
+			ImageDigest:         digest,
+			ToolName:            req.GetToolName(),
+			Version:             req.GetVersion(),
+			CasHash:             regResp.CasHash,
+			RequestedActions:    []string{"smoke_run"},
+			ValidationRequestId: validationRequestID,
 		}
 		enqCtx, enqCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer enqCancel()
@@ -300,10 +331,32 @@ func (s *Service) postBuildRegistration(
 			metrics.SentinelEnqueueFailureTotal.Add(1)
 			slog.Warn("NodeSentinel EnqueueValidationWork failed (validation deferred)", "err", enqErr)
 			logFn("sentinel enqueue failed: " + enqErr.Error())
+			if s.indexStore != nil {
+				if transErr := s.indexStore.TransitionValidationRequest(
+					validationRequestID, index.ValidationUnavailable,
+					func(r *index.ValidationRequestRecord) { r.FailureReason = enqErr.Error() },
+				); transErr != nil {
+					slog.Warn("index: failed to mark validation request unavailable",
+						"validation_request_id", validationRequestID, "err", transErr)
+				}
+			}
 		} else {
 			metrics.SentinelEnqueueSuccessTotal.Add(1)
-			slog.Info("NodeSentinel job enqueued", "job_id", enqResp.JobId, "status", enqResp.Status)
+			slog.Info("NodeSentinel job enqueued",
+				"job_id", enqResp.JobId, "status", enqResp.Status, "validation_request_id", validationRequestID)
 			logFn("sentinel job enqueued: " + enqResp.JobId)
+			if s.indexStore != nil {
+				if transErr := s.indexStore.TransitionValidationRequest(
+					validationRequestID, index.ValidationQueued,
+					func(r *index.ValidationRequestRecord) {
+						r.SentinelJobID = enqResp.JobId
+						r.QueuedAt = time.Now().UTC()
+					},
+				); transErr != nil {
+					slog.Warn("index: failed to mark validation request queued",
+						"validation_request_id", validationRequestID, "err", transErr)
+				}
+			}
 		}
 	}
 	return nil

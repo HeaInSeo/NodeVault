@@ -368,9 +368,67 @@ type ToolFunctionCatalogEntry struct {
 	ValidationHash string `json:"validation_hash,omitempty"`
 }
 
+// ValidationStatus is the lifecycle status of one NodeVault-issued
+// validation request against NodeSentinel. See ValidationRequestRecord and
+// validValidationTransitions (store.go) for the allowed state graph:
+//
+//	EnqueuePending -> Queued | Unavailable
+//	Unavailable    -> EnqueuePending            (manual/future-reconciler retry)
+//	Queued         -> Running | Failed | Interrupted
+//	Running        -> Succeeded | Failed | Interrupted
+//
+// PR2-A only ever produces EnqueuePending, Queued, and Unavailable — the
+// remaining edges are reachable once PR2-B wires NodeSentinel's result
+// records (ToolCheckRecord/ToolScanRecord) back into this status.
+type ValidationStatus string
+
+const (
+	ValidationEnqueuePending ValidationStatus = "EnqueuePending"
+	ValidationQueued         ValidationStatus = "Queued"
+	ValidationRunning        ValidationStatus = "Running"
+	ValidationSucceeded      ValidationStatus = "Succeeded"
+	ValidationFailed         ValidationStatus = "Failed"
+	ValidationUnavailable    ValidationStatus = "Unavailable"
+	ValidationInterrupted    ValidationStatus = "Interrupted"
+)
+
+// ValidationRequestRecord correlates one logical NodeSentinel validation
+// request with the build that triggered it and, once NodeSentinel
+// acknowledges it, the job executing it. Primary key: ValidationRequestID.
+//
+// ValidationRequestID identifies one logical validation request — NOT one
+// build. A single BuildID can end up with multiple ValidationRequestRecords
+// over time (re-validation after a fixture/profile change, a manual re-run,
+// a NodeSentinel implementation upgrade); BuildID is a foreign key here,
+// not the primary key, specifically so those don't collide with each other
+// or silently overwrite one another.
+type ValidationRequestRecord struct {
+	ValidationRequestID string `json:"validation_request_id"`
+
+	// BuildID is the FK into ToolBuildRecord that triggered this request.
+	BuildID string `json:"build_id,omitempty"`
+
+	CasHash        string `json:"cas_hash,omitempty"`
+	ImageDigest    string `json:"image_digest,omitempty"`
+	ToolSpecDigest string `json:"tool_spec_digest,omitempty"`
+
+	// SentinelJobID is NodeSentinel's own job identifier. Empty until
+	// EnqueueValidationWork acknowledges the request, at which point the
+	// status transitions EnqueuePending -> Queued at the same time.
+	SentinelJobID string `json:"sentinel_job_id,omitempty"`
+
+	ValidationStatus ValidationStatus `json:"validation_status"`
+	FailureReason    string           `json:"failure_reason,omitempty"`
+
+	RequestedAt time.Time `json:"requested_at"`
+	QueuedAt    time.Time `json:"queued_at,omitempty"`
+	CompletedAt time.Time `json:"completed_at,omitempty"`
+}
+
 // indexFile is the on-disk representation of the index.
 // schemaVersion 3 adds ToolCheckRecords, ToolScanRecords,
 // CertifiedToolImageRecords, and ToolFunctionCatalogEntries.
+// schemaVersion 4 adds ValidationRequestRecords.
 type indexFile struct {
 	SchemaVersion int     `json:"schema_version"`
 	Entries       []Entry `json:"entries"`
@@ -385,4 +443,7 @@ type indexFile struct {
 	ToolScanRecords            []ToolScanRecord           `json:"tool_scan_records,omitempty"`
 	CertifiedToolImageRecords  []CertifiedToolImageRecord `json:"certified_tool_image_records,omitempty"`
 	ToolFunctionCatalogEntries []ToolFunctionCatalogEntry `json:"tool_function_catalog_entries,omitempty"`
+
+	// schema_version >= 4: idempotent validation request correlation
+	ValidationRequestRecords []ValidationRequestRecord `json:"validation_request_records,omitempty"`
 }

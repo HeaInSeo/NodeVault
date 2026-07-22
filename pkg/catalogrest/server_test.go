@@ -40,8 +40,8 @@ func registerTool(t *testing.T, svc *catalog.ToolRegistryService, name, version 
 		Version:   version,
 		Digest:    "sha256:abc",
 		BuildKind: nfv1.BuildKind_BUILD_KIND_TOOLSPEC,
-	
-		ImageUri: "registry.example.com/test:latest",})
+		ImageUri: "registry.example.com/test:latest",
+	})
 	if err != nil {
 		t.Fatalf("RegisterTool %s: %v", name, err)
 	}
@@ -498,12 +498,12 @@ func registerData(t *testing.T, store *index.Store, dataCat *catalog.DataCatalog
 		DataName: name,
 		Version:  version,
 		Format:   "csv",
+		Checksum:   "sha256:test",
+		StorageUri: "s3://test/artifact",
 		Display: &nfv1.DisplaySpec{
 			Label:    name + " " + version,
 			Category: "TestData",
-		
-		Checksum: "sha256:test",
-		StorageUri: "s3://test/artifact",},
+		},
 	})
 	if err != nil {
 		t.Fatalf("RegisterData %s: %v", name, err)

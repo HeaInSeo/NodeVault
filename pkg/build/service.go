@@ -353,8 +353,17 @@ func (s *Service) postBuildRegistration(
 						r.QueuedAt = time.Now().UTC()
 					},
 				); transErr != nil {
-					slog.Warn("index: failed to mark validation request queued",
-						"validation_request_id", validationRequestID, "err", transErr)
+					if errors.Is(transErr, index.ErrInvalidTransition) {
+						// Expected race, not a failure: a result already promoted
+						// this record past Queued (see index.ValidationStatus's
+						// EnqueuePending -> Running edge) before this enqueue ACK
+						// was processed.
+						slog.Info("index: validation request already progressed past Queued (result arrived first)",
+							"validation_request_id", validationRequestID)
+					} else {
+						slog.Warn("index: failed to mark validation request queued",
+							"validation_request_id", validationRequestID, "err", transErr)
+					}
 				}
 			}
 		}

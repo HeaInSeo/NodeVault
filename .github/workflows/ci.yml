@@ -35,7 +35,14 @@ jobs:
         with:
           input: protos
           lint: true
+          format: true
+          breaking: true
           pr_comment: false
+
+      - name: Verify generated protobuf code
+        run: |
+          buf generate
+          git diff --exit-code -- protos
 
   # ──────────────────────────────────────────────────────────────────
   # 2. GitHub Actions syntax and expression validation

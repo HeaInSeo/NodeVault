@@ -160,7 +160,8 @@ func TestListTools_AfterRegister(t *testing.T) {
 			RequestId: "req-" + string(rune('0'+i)),
 			ToolName:  name,
 			Digest:    "sha256:000",
-		})
+		
+			ImageUri: "registry.example.com/test:latest",})
 		if err != nil {
 			t.Fatalf("RegisterTool %s: %v", name, err)
 		}
@@ -277,7 +278,8 @@ func TestRegisterTool_SingleFilePerRegistration(t *testing.T) {
 		ToolName: "bowtie2",
 		Digest:   "sha256:abc",
 		Version:  "2.5.0",
-	})
+	
+		ImageUri: "registry.example.com/test:latest",})
 	if err != nil {
 		t.Fatalf("RegisterTool: %v", err)
 	}
@@ -311,7 +313,8 @@ func TestListTools_StableRefFilter(t *testing.T) {
 			ToolName: tc.name,
 			Version:  tc.version,
 			Digest:   "sha256:000",
-		}); err != nil {
+		
+			ImageUri: "registry.example.com/test:latest",}); err != nil {
 			t.Fatalf("RegisterTool %s: %v", tc.name, err)
 		}
 	}
@@ -346,7 +349,8 @@ func TestListTools_ArtifactKindFilter(t *testing.T) {
 		ToolName: "bwa",
 		Version:  "1.0",
 		Digest:   "sha256:abc",
-	}); err != nil {
+	
+		ImageUri: "registry.example.com/test:latest",}); err != nil {
 		t.Fatalf("RegisterTool: %v", err)
 	}
 
@@ -392,7 +396,8 @@ func TestRetractTool_TransitionsPhase(t *testing.T) {
 		ToolName: "star",
 		Version:  "2.7.11",
 		Digest:   "sha256:aaa",
-	})
+	
+		ImageUri: "registry.example.com/test:latest",})
 	if err != nil {
 		t.Fatalf("RegisterTool: %v", err)
 	}
@@ -443,7 +448,8 @@ func TestDeleteTool_TransitionsPhase(t *testing.T) {
 		ToolName: "hisat2",
 		Version:  "2.2.1",
 		Digest:   "sha256:bbb",
-	})
+	
+		ImageUri: "registry.example.com/test:latest",})
 	if err != nil {
 		t.Fatalf("RegisterTool: %v", err)
 	}
@@ -491,7 +497,8 @@ func TestRetractTool_IntegrityHealthUnchanged(t *testing.T) {
 		ToolName: "bwa",
 		Version:  "0.7.17",
 		Digest:   "sha256:ccc",
-	})
+	
+		ImageUri: "registry.example.com/test:latest",})
 	if err != nil {
 		t.Fatalf("RegisterTool: %v", err)
 	}
@@ -532,7 +539,8 @@ func TestRegisterTool_IndexDualWrite(t *testing.T) {
 		ToolName: "hisat2",
 		Version:  "2.2.1",
 		Digest:   "sha256:abc",
-	})
+	
+		ImageUri: "registry.example.com/test:latest",})
 	if err != nil {
 		t.Fatalf("RegisterTool: %v", err)
 	}
@@ -591,7 +599,8 @@ func TestToolRegistry_UninitializedDependencies_Unavailable(t *testing.T) {
 		call func() error
 	}{
 		{name: "register", call: func() error {
-			_, err := svc.RegisterTool(t.Context(), &nfv1.RegisterToolRequest{ToolName: "bwa"})
+			_, err := svc.RegisterTool(t.Context(), &nfv1.RegisterToolRequest{ToolName: "bwa"
+		ImageUri: "registry.example.com/test:latest",})
 			return err
 		}},
 		{name: "list", call: func() error {

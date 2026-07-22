@@ -126,28 +126,28 @@ test-integration-infralab:
 	@echo "==> NodeVault service port-forward 시작..."
 	@rm -f /tmp/nodevault-port-forward.log; \
 	LOCAL_PORT_SPEC="$(INTEGRATION_GRPC_PORT)"; \
-	if [ -z "$LOCAL_PORT_SPEC" ] || [ "$LOCAL_PORT_SPEC" = "0" ]; then LOCAL_PORT_SPEC=""; fi; \
+	if [ -z "$$LOCAL_PORT_SPEC" ] || [ "$$LOCAL_PORT_SPEC" = "0" ]; then LOCAL_PORT_SPEC=""; fi; \
 	KUBECONFIG=$(INFRALAB_KUBECONFIG) kubectl -n nodevault-system \
-	    port-forward service/nodevault-controlplane "$LOCAL_PORT_SPEC:50051" >/tmp/nodevault-port-forward.log 2>&1 & \
-	PF_PID=$!; \
-	trap 'kill $PF_PID 2>/dev/null || true' EXIT INT TERM; \
+	    port-forward service/nodevault-controlplane "$$LOCAL_PORT_SPEC:50051" >/tmp/nodevault-port-forward.log 2>&1 & \
+	PF_PID=$$!; \
+	trap 'kill $$PF_PID 2>/dev/null || true' EXIT INT TERM; \
 	LOCAL_PORT=""; \
-	for _ in $(seq 1 50); do \
-	    if ! kill -0 $PF_PID 2>/dev/null; then \
+	for _ in $$(seq 1 50); do \
+	    if ! kill -0 $$PF_PID 2>/dev/null; then \
 	        cat /tmp/nodevault-port-forward.log >&2; \
 	        exit 1; \
 	    fi; \
-	    LOCAL_PORT=$(sed -n 's/^Forwarding from 127\\.0\\.0\\.1:\\([0-9][0-9]*\\) -> 50051$/\\1/p' /tmp/nodevault-port-forward.log | head -1); \
-	    if [ -n "$LOCAL_PORT" ]; then break; fi; \
+	    LOCAL_PORT=$$(sed -n 's/^Forwarding from 127\\.0\\.0\\.1:\\([0-9][0-9]*\\) -> 50051$$/\\1/p' /tmp/nodevault-port-forward.log | head -1); \
+	    if [ -n "$$LOCAL_PORT" ]; then break; fi; \
 	    sleep 0.2; \
 	done; \
-	if [ -z "$LOCAL_PORT" ]; then \
+	if [ -z "$$LOCAL_PORT" ]; then \
 	    echo "ERROR: kubectl did not report a local port" >&2; \
 	    cat /tmp/nodevault-port-forward.log >&2; \
 	    exit 1; \
 	fi; \
-	echo "==> in-pod-buildah 통합 테스트 실행 (127.0.0.1:$LOCAL_PORT, pid=$PF_PID)..."; \
-	KUBECONFIG=$(INFRALAB_KUBECONFIG) NODEVAULT_INTEGRATION_ADDR=127.0.0.1:$LOCAL_PORT \
+	echo "==> in-pod-buildah 통합 테스트 실행 (127.0.0.1:$$LOCAL_PORT, pid=$$PF_PID)..."; \
+	KUBECONFIG=$(INFRALAB_KUBECONFIG) NODEVAULT_INTEGRATION_ADDR=127.0.0.1:$$LOCAL_PORT \
 	    go test -v -tags "integration $(BUILDTAGS)" ./pkg/build/... -timeout 12m
 
 # ── 클러스터 리소스 배포 ────────────────────────────────────────────────────

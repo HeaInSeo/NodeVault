@@ -495,12 +495,12 @@ func registerData(t *testing.T, store *index.Store, dataCat *catalog.DataCatalog
 	t.Helper()
 	svc := catalog.NewDataRegistryService(dataCat, store)
 	resp, err := svc.RegisterData(context.Background(), &nfv1.DataRegisterRequest{
-		DataName: name,
-		Version:  version,
-		Format:   "csv",
+		DataName:   name,
+		Version:    version,
+		Format:     "csv",
 		Checksum:   "sha256:test",
 		StorageUri: "s3://test/artifact",
-		Display: &nfv1.DisplaySpec{
+		Display:    &nfv1.DisplaySpec{
 			Label:    name + " " + version,
 			Category: "TestData",
 		},

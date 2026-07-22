@@ -132,8 +132,8 @@ func TestGetData_IndexPresentCASMissing_DataLoss(t *testing.T) {
 	}
 	svc := catalog.NewDataRegistryService(catalog.NewDataCatalogAt(dir), store)
 	reg, err := svc.RegisterData(t.Context(), &nfv1.DataRegisterRequest{
-		DataName:  "reference",
-		Checksum:  "sha256:abc",
+		DataName:   "reference",
+		Checksum:   "sha256:abc",
 		StorageUri: "s3://ref/data",
 	})
 	if err != nil {

@@ -358,6 +358,9 @@ func TestBuildCancel_CleansUpSubprocess(t *testing.T) {
 
 func TestSubmitToolBuild_IdempotentRetry(t *testing.T) {
 	svc := newSubmitTestService(t)
+	buildCalls := 0
+	svc.builder = &countCallBuilder{inner: svc.builder, calls: &buildCalls}
+
 	first, err := svc.SubmitToolBuild(context.Background(), &nfv1.SubmitToolBuildRequest{RequestId: "build-retry", ToolSpecDigest: "spec-123"})
 	if err != nil {
 		t.Fatalf("first SubmitToolBuild: %v", err)
@@ -368,6 +371,51 @@ func TestSubmitToolBuild_IdempotentRetry(t *testing.T) {
 	}
 	if first.GetBuildId() != second.GetBuildId() {
 		t.Fatalf("build ids differ: %q vs %q", first.GetBuildId(), second.GetBuildId())
+	}
+
+	if err := svc.WatchToolBuild(
+		&nfv1.WatchToolBuildRequest{BuildId: first.GetBuildId()},
+		newFakeStream(),
+	); err != nil {
+		t.Fatalf("WatchToolBuild: %v", err)
+	}
+	if buildCalls != 1 {
+		t.Fatalf("Build called %d times, want exactly 1 for an idempotent retry", buildCalls)
+	}
+}
+
+func TestSubmitToolBuild_RequestIDConflictRejected(t *testing.T) {
+	svc := newSubmitTestService(t)
+	if err := svc.indexStore.AppendResolvedToolSpec(index.ResolvedToolSpec{
+		ToolSpecDigest: "spec-456",
+		ToolName:       "samtools",
+		Version:        "1.20",
+		RawSpec:        `{"tool_name":"samtools","version":"1.20","dockerfile_content":"FROM alpine:3.20@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nRUN true"}`,
+		ResolvedAt:     time.Unix(200, 0).UTC(),
+	}); err != nil {
+		t.Fatalf("AppendResolvedToolSpec: %v", err)
+	}
+
+	if _, err := svc.SubmitToolBuild(context.Background(), &nfv1.SubmitToolBuildRequest{
+		RequestId:      "build-conflict",
+		ToolSpecDigest: "spec-123",
+	}); err != nil {
+		t.Fatalf("first SubmitToolBuild: %v", err)
+	}
+	_, err := svc.SubmitToolBuild(context.Background(), &nfv1.SubmitToolBuildRequest{
+		RequestId:      "build-conflict",
+		ToolSpecDigest: "spec-456",
+	})
+	if status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("conflicting SubmitToolBuild error = %v, want codes.AlreadyExists", err)
+	}
+
+	rec, getErr := svc.buildState.Get("build-conflict")
+	if getErr != nil {
+		t.Fatalf("buildState.Get: %v", getErr)
+	}
+	if rec.ToolSpecDigest != "spec-123" {
+		t.Fatalf("stored tool spec digest = %q, want original spec-123", rec.ToolSpecDigest)
 	}
 }
 

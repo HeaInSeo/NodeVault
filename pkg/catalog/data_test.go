@@ -81,7 +81,7 @@ func TestDataRegistry_UninitializedDependencies_Unavailable(t *testing.T) {
 		{name: "register", call: func() error {
 			_, err := svc.RegisterData(t.Context(), &nfv1.DataRegisterRequest{
 				DataName:   "reference",
-				Checksum:  "sha256:test",
+				Checksum:   "sha256:test",
 				StorageUri: "s3://test/artifact",
 			})
 			return err

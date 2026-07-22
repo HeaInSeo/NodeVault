@@ -118,6 +118,8 @@ test:
 #
 # The test connects to the deployed NodeVault Pod through a temporary
 # port-forward, so the in-pod-buildah path is exercised end to end.
+# kubectl chooses a free local port and reports "127.0.0.1:<port> -> 50051";
+# the startup loop parses that exact line before launching the Go test.
 test-integration-infralab:
 	@if [ -z "$(INFRALAB_KUBECONFIG)" ]; then \
 	    echo "ERROR: infra-lab/kubeconfig not found. 클러스터를 먼저 실행하세요." >&2; exit 1; \

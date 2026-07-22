@@ -17,6 +17,7 @@ concurrency:
 env:
   BUILD_TAGS: "exclude_graphdriver_btrfs exclude_graphdriver_devicemapper"
   GO_VERSION_FILE: go.mod
+  GOVULNCHECK_VERSION: v1.1.4
 
 jobs:
   # ──────────────────────────────────────────────────────────────────
@@ -24,7 +25,8 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   proto-lint:
     name: Proto Lint (Buf)
-    runs-on: [self-hosted, linux, podbridge5]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 
@@ -33,13 +35,53 @@ jobs:
         with:
           input: protos
           lint: true
+          pr_comment: false
+
+  # ──────────────────────────────────────────────────────────────────
+  # 2. GitHub Actions syntax and expression validation
+  # ──────────────────────────────────────────────────────────────────
+  actionlint:
+    name: Actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+          cache: true
+
+      - name: Validate GitHub Actions workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+
+  # ──────────────────────────────────────────────────────────────────
+  # 3. Module metadata drift
+  # ──────────────────────────────────────────────────────────────────
+  module-drift:
+    name: Module Drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+          cache: true
+
+      - name: Verify go.mod and go.sum are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
 
   # ──────────────────────────────────────────────────────────────────
   # 2. 린트 (golangci-lint)
   # ──────────────────────────────────────────────────────────────────
   lint:
     name: Lint
-    runs-on: [self-hosted, linux, podbridge5]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
 
@@ -77,7 +119,8 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   build:
     name: Build
-    runs-on: [self-hosted, linux, podbridge5]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
 
@@ -112,7 +155,8 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   test-unit:
     name: Unit Tests
-    runs-on: [self-hosted, linux, podbridge5]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
 
@@ -141,18 +185,32 @@ jobs:
           go test \
             -v \
             -race \
+            -count=1 \
+            -shuffle=on \
             -cover \
             -covermode=atomic \
             -coverprofile=coverage.out \
             -tags "${{ env.BUILD_TAGS }}" \
             ./...
 
+      - name: Create coverage summary
+        if: always()
+        run: |
+          if [ -f coverage.out ]; then
+            go tool cover -func=coverage.out | tee coverage.txt
+          else
+            echo "coverage.out was not produced" | tee coverage.txt
+          fi
+
       - name: Upload coverage report
         uses: actions/upload-artifact@v7
         if: always()
         with:
           name: coverage-${{ github.run_id }}
-          path: coverage.out
+          path: |
+            coverage.out
+            coverage.txt
+          if-no-files-found: warn
           retention-days: 14
 
   # ──────────────────────────────────────────────────────────────────
@@ -160,7 +218,8 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   vuln-scan:
     name: Vulnerability Scan (govulncheck)
-    runs-on: [self-hosted, linux, podbridge5]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
 
@@ -192,7 +251,7 @@ jobs:
       - name: govulncheck
         run: |
           set -euo pipefail
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
           govulncheck -tags "${{ env.BUILD_TAGS }}" -format json ./... > govulncheck.json
           go run ./cmd/govulncheckgate -input govulncheck.json
 
@@ -209,7 +268,8 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   slint-gate:
     name: kube-slint Gate
-    runs-on: [self-hosted, linux, podbridge5]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: [build]
     steps:
       - uses: actions/checkout@v6
@@ -262,7 +322,8 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   kube-lint:
     name: kube-linter
-    runs-on: [self-hosted, linux, podbridge5]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 

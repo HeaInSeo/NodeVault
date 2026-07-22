@@ -1,14 +1,21 @@
 # Platform Schedule
 
-버전: 3.5
-갱신: 2026-07-21 (저장소 역할 표의 NodeKit gRPC 표면을 ToolSpecRequest/SubmitToolBuild로 갱신 — legacy BuildRequest/BuildAndRegister는 issue #15로 제거됨)
+버전: 3.6
+갱신: 2026-07-22 ("현재 상태" 섹션 헤딩이 2026-06-17에 고정되어 있어 뒤쪽 Phase 6의 "RPC 제거 완료"와 내부 충돌하던 것을 정정 — 섹션을 "현재 상태 및 스프린트 이력"으로 재명명하고 각 Sprint가 그 시점의 기록임을 명시하는 안내문 추가; Sprint 0의 legacy BuildAndRegister 서술에 당시 시점 기록이라는 주석 추가. 이전 갱신(2026-07-21): 저장소 역할 표의 NodeKit gRPC 표면을 ToolSpecRequest/SubmitToolBuild로 갱신 — legacy BuildRequest/BuildAndRegister는 issue #15로 제거됨)
 기준 문서:
 - `docs/ARCHITECTURE_V01.md` (NodeVault Kubernetes In-Pod 재현 가능 이미지 빌드 아키텍처 v0.1.0)
 - `docs/OBSERVED_PROFILE_SPEC.md`, `docs/SECURITY_SCAN_SPEC.md`, `docs/RUNNER_NODE_SPEC.md`
 
 ---
 
-## 현재 상태 (2026-06-17 기준)
+## 현재 상태 및 스프린트 이력
+
+> 아래 "저장소" 표는 문서 상단의 갱신일 기준 현재 상태다. 그 아래 이어지는
+> Sprint/Phase 섹션들은 **각 스프린트가 진행되던 시점의 기록**이며(예: Sprint 0의
+> "legacy `BuildAndRegister`가 열려 있는 동안" 같은 서술), 완료된 스프린트 내용을
+> 매번 최신 상태로 rewrite하지 않는다 — 실제 변경 시점이 사라지기 때문이다. 특정
+> RPC/기능의 **현재** 상태는 항상 번호가 가장 큰 Sprint/Phase 섹션이나 `Phase 6`처럼
+> 명시적으로 "완료"라고 기록된 항목을 따른다.
 
 ### 저장소
 
@@ -57,7 +64,7 @@
 
 - `ResolveToolSpec`은 digest/index 생성 단계이며 Dockerfile rewrite 단계가 아니다.
 - NodeVault는 NodeKit이 보낸 `dockerfile_content`를 그대로 빌드하되, `builder.Build()` 전에 서버 쪽 정책 검증을 다시 실행한다.
-- legacy `BuildAndRegister`가 열려 있는 동안에는 `SubmitToolBuild`와 동일한 build gate를 적용한다.
+- legacy `BuildAndRegister`가 열려 있는 동안에는 `SubmitToolBuild`와 동일한 build gate를 적용한다(당시 시점 기록 — `BuildAndRegister`는 이후 issue #15로 완전히 제거됨, Phase 6 참조).
 
 **주요 작업**
 

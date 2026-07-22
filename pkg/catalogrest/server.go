@@ -25,6 +25,7 @@ import (
 
 	"github.com/HeaInSeo/NodeVault/pkg/catalog"
 	"github.com/HeaInSeo/NodeVault/pkg/index"
+	"github.com/HeaInSeo/NodeVault/pkg/metrics"
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
@@ -395,12 +396,20 @@ type PortObservationRequest struct {
 
 // SubmitCheckRecordRequest is the JSON body for POST /v1/validation/check-records.
 type SubmitCheckRecordRequest struct {
-	CheckID           string                   `json:"check_id"`
-	ToolSpecDigest    string                   `json:"tool_spec_digest,omitempty"`
-	ImageDigest       string                   `json:"image_digest"`
-	Platform          string                   `json:"platform,omitempty"`
-	ToolName          string                   `json:"tool_name,omitempty"`
-	Version           string                   `json:"version,omitempty"`
+	CheckID        string `json:"check_id"`
+	ToolSpecDigest string `json:"tool_spec_digest,omitempty"`
+	ImageDigest    string `json:"image_digest"`
+	Platform       string `json:"platform,omitempty"`
+	ToolName       string `json:"tool_name,omitempty"`
+	Version        string `json:"version,omitempty"`
+
+	// See index.ToolCheckRecord's doc comments — same correlation/stage/
+	// terminal/failure-classification contract carried over the wire.
+	ValidationRequestID string `json:"validation_request_id,omitempty"`
+	SentinelJobID       string `json:"sentinel_job_id,omitempty"`
+	Stage               string `json:"stage,omitempty"`
+	Terminal            bool   `json:"terminal,omitempty"`
+
 	ValidationStatus  string                   `json:"validation_status"`
 	ValidationHash    string                   `json:"validation_hash,omitempty"`
 	Command           string                   `json:"command,omitempty"`
@@ -413,15 +422,25 @@ type SubmitCheckRecordRequest struct {
 	Timeout           bool                     `json:"timeout,omitempty"`
 	AllOutputsPresent bool                     `json:"all_outputs_present,omitempty"`
 	ContractResult    string                   `json:"contract_result,omitempty"`
-	FailureReason     string                   `json:"failure_reason,omitempty"`
+
+	FailureKind   string `json:"failure_kind,omitempty"`
+	FailureCode   string `json:"failure_code,omitempty"`
+	Retryable     bool   `json:"retryable,omitempty"`
+	FailureReason string `json:"failure_reason,omitempty"`
 }
 
 // SubmitScanRecordRequest is the JSON body for POST /v1/validation/scan-records.
 type SubmitScanRecordRequest struct {
-	ScanID         string `json:"scan_id"`
-	ImageDigest    string `json:"image_digest"`
-	ToolName       string `json:"tool_name,omitempty"`
-	Platform       string `json:"platform,omitempty"`
+	ScanID      string `json:"scan_id"`
+	ImageDigest string `json:"image_digest"`
+	ToolName    string `json:"tool_name,omitempty"`
+	Platform    string `json:"platform,omitempty"`
+
+	ValidationRequestID string `json:"validation_request_id,omitempty"`
+	SentinelJobID       string `json:"sentinel_job_id,omitempty"`
+	Stage               string `json:"stage,omitempty"`
+	Terminal            bool   `json:"terminal,omitempty"`
+
 	Scanner        string `json:"scanner,omitempty"`
 	ScannerVersion string `json:"scanner_version,omitempty"`
 	DbDigest       string `json:"db_digest,omitempty"`
@@ -457,20 +476,30 @@ func (s *Server) handleSubmitCheckRecord(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "check_id and image_digest required", http.StatusBadRequest)
 		return
 	}
+	if !s.checkValidationCorrelation(w, req.ValidationRequestID, req.ImageDigest) {
+		return
+	}
 
 	rec := index.ToolCheckRecord{
-		CheckID:          req.CheckID,
-		ToolSpecDigest:   req.ToolSpecDigest,
-		ImageDigest:      req.ImageDigest,
-		Platform:         req.Platform,
-		ToolName:         req.ToolName,
-		Version:          req.Version,
-		ValidationStatus: req.ValidationStatus,
-		ValidationHash:   req.ValidationHash,
-		Command:          req.Command,
-		ExitCode:         req.ExitCode,
-		FailureReason:    req.FailureReason,
-		CheckedAt:        time.Now().UTC(),
+		CheckID:             req.CheckID,
+		ToolSpecDigest:      req.ToolSpecDigest,
+		ImageDigest:         req.ImageDigest,
+		Platform:            req.Platform,
+		ToolName:            req.ToolName,
+		Version:             req.Version,
+		ValidationRequestID: req.ValidationRequestID,
+		SentinelJobID:       req.SentinelJobID,
+		Stage:               req.Stage,
+		Terminal:            req.Terminal,
+		ValidationStatus:    req.ValidationStatus,
+		ValidationHash:      req.ValidationHash,
+		Command:             req.Command,
+		ExitCode:            req.ExitCode,
+		FailureKind:         req.FailureKind,
+		FailureCode:         req.FailureCode,
+		Retryable:           req.Retryable,
+		FailureReason:       req.FailureReason,
+		CheckedAt:           time.Now().UTC(),
 	}
 	if len(req.ObservedInputs) > 0 || len(req.ObservedOutputs) > 0 {
 		iop := &index.ObservedIoProfile{}
@@ -497,15 +526,24 @@ func (s *Server) handleSubmitCheckRecord(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	if err := s.store.AppendToolCheckRecord(rec); err != nil {
+	succeeded := req.ValidationStatus == "succeeded"
+	if err := s.store.AppendToolCheckRecordCorrelated(
+		rec, req.ValidationRequestID, req.SentinelJobID, req.Terminal, succeeded, req.FailureReason,
+	); err != nil {
+		if errors.Is(err, index.ErrDuplicateRecord) {
+			slog.Info("ToolCheckRecord already recorded (idempotent redelivery)", "check_id", req.CheckID)
+			writeJSON(w, SubmitRecordResponse{RecordID: req.CheckID, CertificationStatus: "already_recorded"})
+			return
+		}
 		slog.Error("store check record", "check_id", req.CheckID, "err", err)
 		http.Error(w, "store error", http.StatusInternalServerError)
 		return
 	}
-	slog.Info("ToolCheckRecord stored via REST", "check_id", req.CheckID, "status", req.ValidationStatus)
+	slog.Info("ToolCheckRecord stored via REST",
+		"check_id", req.CheckID, "status", req.ValidationStatus, "stage", req.Stage, "terminal", req.Terminal)
 
 	certStatus := "pending"
-	if s.certSvc != nil && req.ValidationStatus == "succeeded" {
+	if s.certSvc != nil && succeeded {
 		if err := s.certSvc.EvaluateAfterCheck(rec); err != nil {
 			slog.Error("certification failed after check", "check_id", req.CheckID, "err", err)
 			certStatus = "failed"
@@ -515,6 +553,43 @@ func (s *Server) handleSubmitCheckRecord(w http.ResponseWriter, r *http.Request)
 	}
 
 	writeJSON(w, SubmitRecordResponse{RecordID: req.CheckID, CertificationStatus: certStatus})
+}
+
+// checkValidationCorrelation resolves validationRequestID against this
+// store's ValidationRequestRecords and reports the outcome via the
+// nodevault_validation_correlation_* metrics.
+//
+// A missing ID or one with no matching record (orphan) is fail-open: logs a
+// warning, bumps a metric, and returns true so the caller still stores the
+// record — see index.ValidationRequestRecord's accepted orphan-record gap
+// (PR2-A). Losing the validation *result* entirely because correlation
+// bookkeeping has a gap would be worse than storing it uncorrelated.
+//
+// Only a *found* record whose ImageDigest doesn't match imageDigest is a
+// real integrity problem — that means this result is for a different image
+// than what NodeVault actually asked NodeSentinel to validate. That writes
+// a 409 response and returns false; the caller must not store anything.
+func (s *Server) checkValidationCorrelation(w http.ResponseWriter, validationRequestID, imageDigest string) bool {
+	if validationRequestID == "" {
+		metrics.ValidationCorrelationMissingIDTotal.Add(1)
+		return true
+	}
+	rec, err := s.store.GetValidationRequestRecord(validationRequestID)
+	if err != nil {
+		slog.Warn("validation correlation: no matching ValidationRequestRecord (orphan)",
+			"validation_request_id", validationRequestID)
+		metrics.ValidationCorrelationOrphanTotal.Add(1)
+		return true
+	}
+	if rec.ImageDigest != "" && rec.ImageDigest != imageDigest {
+		slog.Warn("validation correlation: image_digest mismatch — rejecting",
+			"validation_request_id", validationRequestID, "expected", rec.ImageDigest, "got", imageDigest)
+		metrics.ValidationCorrelationDigestMismatchTotal.Add(1)
+		http.Error(w, "image_digest does not match the validation_request_id's recorded request", http.StatusConflict)
+		return false
+	}
+	metrics.ValidationCorrelationMatchedTotal.Add(1)
+	return true
 }
 
 // handleSubmitScanRecord serves POST /v1/validation/scan-records.
@@ -534,31 +609,50 @@ func (s *Server) handleSubmitScanRecord(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "scan_id and image_digest required", http.StatusBadRequest)
 		return
 	}
-
-	rec := index.ToolScanRecord{
-		ScanID:         req.ScanID,
-		ImageDigest:    req.ImageDigest,
-		ToolName:       req.ToolName,
-		Platform:       req.Platform,
-		Scanner:        req.Scanner,
-		ScannerVersion: req.ScannerVersion,
-		DbDigest:       req.DbDigest,
-		Source:         req.Source,
-		CriticalCount:  req.CriticalCount,
-		HighCount:      req.HighCount,
-		MediumCount:    req.MediumCount,
-		LowCount:       req.LowCount,
-		PolicyMode:     req.PolicyMode,
-		PolicyResult:   req.PolicyResult,
-		ScannedAt:      time.Now().UTC(),
+	if !s.checkValidationCorrelation(w, req.ValidationRequestID, req.ImageDigest) {
+		return
 	}
 
-	if err := s.store.AppendToolScanRecord(rec); err != nil {
+	rec := index.ToolScanRecord{
+		ScanID:              req.ScanID,
+		ImageDigest:         req.ImageDigest,
+		ToolName:            req.ToolName,
+		Platform:            req.Platform,
+		ValidationRequestID: req.ValidationRequestID,
+		SentinelJobID:       req.SentinelJobID,
+		Stage:               req.Stage,
+		Terminal:            req.Terminal,
+		Scanner:             req.Scanner,
+		ScannerVersion:      req.ScannerVersion,
+		DbDigest:            req.DbDigest,
+		Source:              req.Source,
+		CriticalCount:       req.CriticalCount,
+		HighCount:           req.HighCount,
+		MediumCount:         req.MediumCount,
+		LowCount:            req.LowCount,
+		PolicyMode:          req.PolicyMode,
+		PolicyResult:        req.PolicyResult,
+		ScannedAt:           time.Now().UTC(),
+	}
+
+	// A blocked policy result is the only scan outcome that fails the
+	// overall validation request when this record is Terminal — a warning
+	// or an unavailable scanner (Source == "not-available") does not.
+	succeeded := req.PolicyResult != "blocked"
+	if err := s.store.AppendToolScanRecordCorrelated(
+		rec, req.ValidationRequestID, req.SentinelJobID, req.Terminal, succeeded,
+	); err != nil {
+		if errors.Is(err, index.ErrDuplicateRecord) {
+			slog.Info("ToolScanRecord already recorded (idempotent redelivery)", "scan_id", req.ScanID)
+			writeJSON(w, SubmitRecordResponse{RecordID: req.ScanID, CertificationStatus: "already_recorded"})
+			return
+		}
 		slog.Error("store scan record", "scan_id", req.ScanID, "err", err)
 		http.Error(w, "store error", http.StatusInternalServerError)
 		return
 	}
-	slog.Info("ToolScanRecord stored via REST", "scan_id", req.ScanID, "image_digest", req.ImageDigest)
+	slog.Info("ToolScanRecord stored via REST",
+		"scan_id", req.ScanID, "image_digest", req.ImageDigest, "terminal", req.Terminal)
 
 	if s.certSvc != nil {
 		if err := s.certSvc.EvaluateAfterScan(rec); err != nil {

@@ -37,6 +37,14 @@ type Store struct {
 // ErrNotFound is returned when a requested entry does not exist.
 var ErrNotFound = errors.New("index: entry not found")
 
+// ErrDuplicateRecord is returned by AppendToolCheckRecord(Correlated) and
+// AppendToolScanRecord(Correlated) when a record with the same CheckID/
+// ScanID already exists. NodeSentinel's CheckID/ScanID are deterministic
+// per job (job ID is embedded in both), so a redelivery retry after a
+// network failure naturally resubmits the same ID — callers should treat
+// this as an idempotent no-op, not a genuine failure.
+var ErrDuplicateRecord = errors.New("index: record already exists")
+
 // New creates a Store backed by the JSON file at dir/vault-index.json.
 // The directory is created if it does not exist.
 // INDEX_DIR env overrides the default directory.
@@ -518,19 +526,58 @@ func (s *Store) AppendToolCheckRecord(r ToolCheckRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := s.appendToolCheckRecordLocked(r); err != nil {
+		return err
+	}
+	return s.save()
+}
+
+// AppendToolCheckRecordCorrelated stores a ToolCheckRecord and, in the same
+// locked critical section (one save() covering both), updates the
+// ValidationRequestRecord identified by validationRequestID: promotes
+// Queued -> Running (setting SentinelJobID if given), and — only when
+// terminal is true — closes it out to Succeeded (succeeded=true) or Failed
+// (succeeded=false, recording failureReason). This is what keeps "the
+// record was stored" and "the correlation status reflects it" from ever
+// observably diverging (see review guidance on PR2-B: record save and
+// ValidationRequestRecord status update must be atomic).
+//
+// validationRequestID may be empty or unknown to this store (no matching
+// ValidationRequestRecord) — both are silent no-ops here, matching the
+// fail-open correlation policy applied by the caller (pkg/catalogrest)
+// before this is ever invoked: a missing/orphan ID must not block storing
+// the record itself, only a *found* record with a mismatched image digest
+// does (and that rejection happens earlier, before this call).
+//
+//nolint:gocritic // hugeParam: ToolCheckRecord by value is intentional — callers own their copy.
+func (s *Store) AppendToolCheckRecordCorrelated(
+	r ToolCheckRecord, validationRequestID, sentinelJobID string, terminal, succeeded bool, failureReason string,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.appendToolCheckRecordLocked(r); err != nil {
+		return err
+	}
+	s.applyValidationCorrelationLocked(validationRequestID, sentinelJobID, terminal, succeeded, failureReason)
+	return s.save()
+}
+
+//nolint:gocritic // hugeParam: ToolCheckRecord by value is intentional — callers own their copy.
+func (s *Store) appendToolCheckRecordLocked(r ToolCheckRecord) error {
 	if r.CheckID == "" {
 		return errors.New("index: CheckID must not be empty")
 	}
 	for i := range s.idx.ToolCheckRecords {
 		if s.idx.ToolCheckRecords[i].CheckID == r.CheckID {
-			return fmt.Errorf("index: tool check record %q already exists", r.CheckID)
+			return fmt.Errorf("%w: check_id=%q", ErrDuplicateRecord, r.CheckID)
 		}
 	}
 	if r.CheckedAt.IsZero() {
 		r.CheckedAt = time.Now().UTC()
 	}
 	s.idx.ToolCheckRecords = append(s.idx.ToolCheckRecords, r)
-	return s.save()
+	return nil
 }
 
 // GetToolCheckRecordByID returns the check record with the given CheckID.
@@ -570,19 +617,46 @@ func (s *Store) AppendToolScanRecord(r ToolScanRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := s.appendToolScanRecordLocked(r); err != nil {
+		return err
+	}
+	return s.save()
+}
+
+// AppendToolScanRecordCorrelated is AppendToolScanRecord's counterpart to
+// AppendToolCheckRecordCorrelated — see that method's doc comment. A scan
+// record has no ValidationStatus of its own; succeeded is the caller's
+// verdict derived from PolicyResult (e.g. "blocked" -> false).
+//
+//nolint:gocritic // hugeParam: ToolScanRecord by value is intentional — callers own their copy.
+func (s *Store) AppendToolScanRecordCorrelated(
+	r ToolScanRecord, validationRequestID, sentinelJobID string, terminal, succeeded bool,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.appendToolScanRecordLocked(r); err != nil {
+		return err
+	}
+	s.applyValidationCorrelationLocked(validationRequestID, sentinelJobID, terminal, succeeded, "")
+	return s.save()
+}
+
+//nolint:dupl,gocritic // dupl: same guard+append pattern, distinct types. gocritic: by value is intentional.
+func (s *Store) appendToolScanRecordLocked(r ToolScanRecord) error {
 	if r.ScanID == "" {
 		return errors.New("index: ScanID must not be empty")
 	}
 	for i := range s.idx.ToolScanRecords {
 		if s.idx.ToolScanRecords[i].ScanID == r.ScanID {
-			return fmt.Errorf("index: tool scan record %q already exists", r.ScanID)
+			return fmt.Errorf("%w: scan_id=%q", ErrDuplicateRecord, r.ScanID)
 		}
 	}
 	if r.ScannedAt.IsZero() {
 		r.ScannedAt = time.Now().UTC()
 	}
 	s.idx.ToolScanRecords = append(s.idx.ToolScanRecords, r)
-	return s.save()
+	return nil
 }
 
 // GetToolScanRecordByID returns the scan record with the given ScanID.
@@ -802,17 +876,31 @@ func (s *Store) TransitionValidationRequest(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	idx := -1
-	for i := range s.idx.ValidationRequestRecords {
-		if s.idx.ValidationRequestRecords[i].ValidationRequestID == validationRequestID {
-			idx = i
-			break
-		}
-	}
+	idx := s.findValidationRequestIndex(validationRequestID)
 	if idx == -1 {
 		return fmt.Errorf("%w: validation_request_id=%q", ErrNotFound, validationRequestID)
 	}
+	if err := s.transitionValidationRequestLocked(idx, to, mutate); err != nil {
+		return fmt.Errorf("%w for %q", err, validationRequestID)
+	}
+	return s.save()
+}
 
+func (s *Store) findValidationRequestIndex(validationRequestID string) int {
+	for i := range s.idx.ValidationRequestRecords {
+		if s.idx.ValidationRequestRecords[i].ValidationRequestID == validationRequestID {
+			return i
+		}
+	}
+	return -1
+}
+
+// transitionValidationRequestLocked applies the from-current-status ->
+// `to` edge check and mutate callback for the record at s.idx.
+// ValidationRequestRecords[idx], without saving — callers hold s.mu and
+// call s.save() themselves once, possibly after other locked writes in the
+// same critical section (see AppendToolCheckRecordCorrelated).
+func (s *Store) transitionValidationRequestLocked(idx int, to ValidationStatus, mutate func(*ValidationRequestRecord)) error {
 	current := s.idx.ValidationRequestRecords[idx].ValidationStatus
 	allowed := false
 	for _, next := range validValidationTransitions[current] {
@@ -822,14 +910,62 @@ func (s *Store) TransitionValidationRequest(
 		}
 	}
 	if !allowed {
-		return fmt.Errorf("index: invalid validation status transition %s -> %s for %q", current, to, validationRequestID)
+		return fmt.Errorf("index: invalid validation status transition %s -> %s", current, to)
 	}
 
 	if mutate != nil {
 		mutate(&s.idx.ValidationRequestRecords[idx])
 	}
 	s.idx.ValidationRequestRecords[idx].ValidationStatus = to
-	return s.save()
+	return nil
+}
+
+// applyValidationCorrelationLocked applies a validation result's
+// correlation side effects to the ValidationRequestRecord identified by
+// validationRequestID: promotes Queued -> Running (setting SentinelJobID if
+// given), then — only if terminal — closes it out to Succeeded/Failed. Must
+// be called with s.mu already held; does not call save().
+//
+// validationRequestID empty or not found: silent no-op — this is the
+// fail-open path for a missing/orphan ID (see AppendToolCheckRecordCorrelated's
+// doc comment); a *found* record with a mismatched image digest must be
+// rejected by the caller before ever reaching this method, not handled here.
+//
+// Any transition failure here (e.g. this result arrives after the request
+// already reached a terminal status — a duplicate/late redelivery) is
+// swallowed, not returned: a duplicate or out-of-order correlation update
+// must never fail the record append that already committed in the same
+// call.
+func (s *Store) applyValidationCorrelationLocked(
+	validationRequestID, sentinelJobID string, terminal, succeeded bool, failureReason string,
+) {
+	if validationRequestID == "" {
+		return
+	}
+	idx := s.findValidationRequestIndex(validationRequestID)
+	if idx == -1 {
+		return
+	}
+
+	_ = s.transitionValidationRequestLocked(idx, ValidationRunning, func(r *ValidationRequestRecord) {
+		if sentinelJobID != "" {
+			r.SentinelJobID = sentinelJobID
+		}
+	})
+
+	if !terminal {
+		return
+	}
+	target := ValidationSucceeded
+	if !succeeded {
+		target = ValidationFailed
+	}
+	_ = s.transitionValidationRequestLocked(idx, target, func(r *ValidationRequestRecord) {
+		r.CompletedAt = time.Now().UTC()
+		if !succeeded {
+			r.FailureReason = failureReason
+		}
+	})
 }
 
 // ── internal helpers ──────────────────────────────────────────────────────────

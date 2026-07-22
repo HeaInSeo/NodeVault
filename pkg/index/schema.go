@@ -270,6 +270,25 @@ type ToolCheckRecord struct {
 	ToolName       string `json:"tool_name,omitempty"`
 	Version        string `json:"version,omitempty"`
 
+	// ValidationRequestID/SentinelJobID correlate this record back to the
+	// ValidationRequestRecord NodeVault created when it enqueued this work,
+	// and to NodeSentinel's own job executing it. Empty for records
+	// submitted before this correlation existed, or by a caller that never
+	// supplied one (see AppendToolCheckRecordCorrelated's fail-open policy).
+	ValidationRequestID string `json:"validation_request_id,omitempty"`
+	SentinelJobID       string `json:"sentinel_job_id,omitempty"`
+
+	// Stage identifies which pipeline stage produced this record: "L3" |
+	// "L4" | "L5A" | "L5B" — L3/L4 failures are submitted through this same
+	// record type (see pkg/worker's l3/l4 failure reporting) rather than a
+	// separate wire format, so a validation request that dies before ever
+	// reaching L5 still gets a terminal record. Terminal marks whether this
+	// is the last record NodeSentinel will submit for the request — only a
+	// Terminal record closes out the correlated ValidationRequestRecord to
+	// Succeeded/Failed; a non-terminal one only promotes it to Running.
+	Stage    string `json:"stage,omitempty"`
+	Terminal bool   `json:"terminal,omitempty"`
+
 	// ValidationStatus: "succeeded" | "infra_failed" | "app_failed"
 	ValidationStatus string `json:"validation_status"`
 
@@ -284,8 +303,17 @@ type ToolCheckRecord struct {
 	ObservedResourceProfile *ObservedResourceProfile `json:"observed_resource_profile,omitempty"`
 	ContractCheck           *ContractCheck           `json:"contract_check,omitempty"`
 
-	FailureReason string    `json:"failure_reason,omitempty"`
-	CheckedAt     time.Time `json:"checked_at"`
+	// FailureKind/FailureCode/Retryable are set only when ValidationStatus
+	// != "succeeded": FailureKind is "infrastructure" | "application" |
+	// "policy" | "internal" — independent of Stage, since an infra-level
+	// failure (OOM, scheduling, timeout) can happen at any stage, not only
+	// the ones historically assumed infra-only.
+	FailureKind   string `json:"failure_kind,omitempty"`
+	FailureCode   string `json:"failure_code,omitempty"`
+	Retryable     bool   `json:"retryable,omitempty"`
+	FailureReason string `json:"failure_reason,omitempty"`
+
+	CheckedAt time.Time `json:"checked_at"`
 }
 
 // ToolScanRecord is the result of a NodeSentinel L5-b trivy security scan.
@@ -295,6 +323,13 @@ type ToolScanRecord struct {
 	ImageDigest string `json:"image_digest"`
 	ToolName    string `json:"tool_name,omitempty"`
 	Platform    string `json:"platform,omitempty"`
+
+	// See ToolCheckRecord's doc comments — same correlation and
+	// stage-position contract.
+	ValidationRequestID string `json:"validation_request_id,omitempty"`
+	SentinelJobID       string `json:"sentinel_job_id,omitempty"`
+	Stage               string `json:"stage,omitempty"`
+	Terminal            bool   `json:"terminal,omitempty"`
 
 	Scanner        string `json:"scanner,omitempty"`         // "trivy"
 	ScannerVersion string `json:"scanner_version,omitempty"` // "0.50.0"
@@ -309,7 +344,11 @@ type ToolScanRecord struct {
 
 	// PolicyMode: "record_only" | "gate_critical" | "gate_high"
 	PolicyMode string `json:"policy_mode"`
-	// PolicyResult: "pass" | "warning" | "blocked"
+	// PolicyResult: "pass" | "warning" | "blocked" | "not-available". When
+	// this record is Terminal, PolicyResult determines the correlated
+	// ValidationRequestRecord's outcome: "blocked" -> Failed, anything else
+	// -> Succeeded (a security warning or an unavailable scanner does not
+	// fail the overall validation — see pkg/catalogrest's ingest handler).
 	PolicyResult string `json:"policy_result"`
 
 	ScannedAt time.Time `json:"scanned_at"`

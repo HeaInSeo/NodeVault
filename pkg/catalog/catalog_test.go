@@ -628,3 +628,47 @@ func TestToolRegistry_UninitializedDependencies_Unavailable(t *testing.T) {
 		})
 	}
 }
+
+func TestRegisterTool_RequiredFields_InvalidArgument(t *testing.T) {
+	svc := newTestService(t)
+	tests := []struct {
+		name string
+		req  *nfv1.RegisterToolRequest
+	}{
+		{name: "tool name", req: &nfv1.RegisterToolRequest{ImageUri: "registry.example.com/tool:1", Digest: "sha256:abc"}},
+		{name: "image uri", req: &nfv1.RegisterToolRequest{ToolName: "tool", Digest: "sha256:abc"}},
+		{name: "digest", req: &nfv1.RegisterToolRequest{ToolName: "tool", ImageUri: "registry.example.com/tool:1"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := svc.RegisterTool(t.Context(), tt.req)
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("RegisterTool error = %v, want codes.InvalidArgument", err)
+			}
+		})
+	}
+}
+
+func TestGetTool_IndexPresentCASMissing_DataLoss(t *testing.T) {
+	dir := t.TempDir()
+	store, err := index.NewAt(t.TempDir())
+	if err != nil {
+		t.Fatalf("index.NewAt: %v", err)
+	}
+	svc := catalog.NewToolRegistryService(catalog.NewCatalogAt(dir), store)
+	reg, err := svc.RegisterTool(t.Context(), &nfv1.RegisterToolRequest{
+		ToolName: "bwa",
+		ImageUri: "registry.example.com/bwa:1",
+		Digest:   "sha256:abc",
+	})
+	if err != nil {
+		t.Fatalf("RegisterTool: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, reg.GetCasHash()+".tooldefinition")); err != nil {
+		t.Fatalf("remove CAS object: %v", err)
+	}
+	_, err = svc.GetTool(t.Context(), &nfv1.GetToolRequest{CasHash: reg.GetCasHash()})
+	if status.Code(err) != codes.DataLoss {
+		t.Fatalf("GetTool error = %v, want codes.DataLoss", err)
+	}
+}

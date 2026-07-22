@@ -1,6 +1,6 @@
 .PHONY: fmt lint lint-fix lint-config golangci-lint buf-lint kube-linter kube-lint test test-integration test-integration-infralab \
         deploy-infralab undeploy-infralab build push-image vendor \
-        proto coverage vuln slint clean all deploy-seoy
+        proto proto-check coverage vuln slint clean all deploy-seoy
 
 LOCALBIN      ?= $(CURDIR)/bin
 GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
@@ -10,9 +10,7 @@ KUBE_LINTER_VERSION ?= v0.8.3
 GOVULNCHECK_VERSION ?= v1.1.4
 KUBE_LINTER_SHA256_LINUX_AMD64 ?= 618d299a3e2839c8ca9d86fce0db617be0fba41f0fecbbbfb7fbf1c04299fae1
 KUBE_LINTER_SHA256_LINUX_ARM64 ?= 9c39d35252e0dcafb16b26197b9e93ba578e44eb402c3c6660fc94e08f94094f
-PROTOC        ?= protoc
-PROTO_OUT     ?= ./gen/go
-PROTO_SRC     ?= ./protos
+BUF           ?= buf
 
 # ── 컨테이너 빌드 관련 태그 ───────────────────────────────────────────────────
 # btrfs-progs-devel, device-mapper C 헤더 없이도 빌드 가능하도록
@@ -79,11 +77,11 @@ lint-config: golangci-lint
 
 # ── Proto lint (Buf) ─────────────────────────────────────────────────────────
 buf-lint:
-	@command -v buf >/dev/null 2>&1 || { \
+	@command -v $(BUF) >/dev/null 2>&1 || { \
 		echo "ERROR: buf is required; install it from https://buf.build/docs/installation/" >&2; \
 		exit 1; \
 	}
-	buf lint
+	$(BUF) lint
 
 # ── kube-linter (K8s 매니페스트 가드레일) ──────────────────────────────────────
 # stackrox/kube-linter는 checksums.txt를 게시하지 않으므로, golangci-lint와
@@ -197,11 +195,14 @@ push-image: vendor
 
 # ── proto 생성 ────────────────────────────────────────────────────────────────
 proto:
-	@mkdir -p $(PROTO_OUT)
-	$(PROTOC) --proto_path=$(PROTO_SRC) \
-	  --go_out=$(PROTO_OUT) --go_opt=paths=source_relative \
-	  --go-grpc_out=$(PROTO_OUT) --go-grpc_opt=paths=source_relative \
-	  $(shell find $(PROTO_SRC) -name '*.proto')
+	@command -v $(BUF) >/dev/null 2>&1 || { \
+		echo "ERROR: buf is required; install it from https://buf.build/docs/installation/" >&2; \
+		exit 1; \
+	}
+	$(BUF) generate
+
+proto-check: proto
+	git diff --exit-code -- protos
 
 # ── 커버리지 ──────────────────────────────────────────────────────────────────
 coverage:
@@ -222,7 +223,7 @@ slint: build
 
 # ── 정리 ──────────────────────────────────────────────────────────────────────
 clean:
-	rm -rf bin/ vendor/ coverage.out $(PROTO_OUT)
+	rm -rf bin/ vendor/ coverage.out
 
 # ── seoy 호스트 배포 ──────────────────────────────────────────────────────────
 # 바이너리를 빌드하고 seoy(100.123.80.48)에 배포한다.

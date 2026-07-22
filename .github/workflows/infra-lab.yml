@@ -1,0 +1,79 @@
+name: Infra Lab Integration
+
+on:
+  workflow_dispatch:
+    inputs:
+      kubeconfig_path:
+        description: Optional absolute kubeconfig path on the self-hosted runner
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: infra-lab-integration
+  cancel-in-progress: false
+
+jobs:
+  integration:
+    name: Infra Lab Integration
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 20
+    env:
+      BUILD_TAGS: exclude_graphdriver_btrfs exclude_graphdriver_devicemapper
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Resolve and verify infra-lab
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v kubectl >/dev/null
+
+          kubeconfig_path="${{ inputs.kubeconfig_path }}"
+          if [ -z "${kubeconfig_path}" ]; then
+            kubeconfig_path="$(realpath ../infra-lab/state/*/kubeconfig 2>/dev/null | head -1 || true)"
+          fi
+
+          if [ -z "${kubeconfig_path}" ] || [ ! -f "${kubeconfig_path}" ]; then
+            echo "infra-lab kubeconfig was not found" >&2
+            exit 1
+          fi
+
+          echo "INFRALAB_KUBECONFIG=${kubeconfig_path}" >> "${GITHUB_ENV}"
+          KUBECONFIG="${kubeconfig_path}" kubectl get nodes
+          KUBECONFIG="${kubeconfig_path}" kubectl             -n nodevault-system rollout status deployment/nodevault-controlplane             --timeout=120s
+
+      - name: Run deployed integration contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test-integration-infralab 2>&1 | tee infra-lab-integration.log
+
+      - name: Collect failure evidence
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          KUBECONFIG="${INFRALAB_KUBECONFIG}" kubectl             -n nodevault-system get pods -o wide             > infra-lab-pods.txt 2>&1
+          KUBECONFIG="${INFRALAB_KUBECONFIG}" kubectl             -n nodevault-system get events --sort-by=.lastTimestamp             > infra-lab-events.txt 2>&1
+          cp /tmp/nodevault-port-forward.log . 2>/dev/null || true
+
+      - name: Upload integration evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: infra-lab-${{ github.run_id }}
+          path: |
+            infra-lab-integration.log
+            infra-lab-pods.txt
+            infra-lab-events.txt
+            nodevault-port-forward.log
+          if-no-files-found: warn
+          retention-days: 14

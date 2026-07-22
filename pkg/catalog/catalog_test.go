@@ -160,7 +160,7 @@ func TestListTools_AfterRegister(t *testing.T) {
 			RequestId: "req-" + string(rune('0'+i)),
 			ToolName:  name,
 			Digest:    "sha256:000",
-			ImageUri: "registry.example.com/test:latest",
+			ImageUri:  "registry.example.com/test:latest",
 		})
 		if err != nil {
 			t.Fatalf("RegisterTool %s: %v", name, err)

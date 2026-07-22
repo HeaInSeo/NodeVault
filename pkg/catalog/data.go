@@ -148,6 +148,9 @@ func (s *DataRegistryService) RegisterData(
 	if s.cat == nil || s.store == nil {
 		return nil, status.Error(codes.Unavailable, "data registry unavailable")
 	}
+	if req.GetDataName() == "" || req.GetChecksum() == "" || req.GetStorageUri() == "" {
+		return nil, status.Error(codes.InvalidArgument, "data_name, checksum, and storage_uri are required")
+	}
 	stableRef := req.StableRef
 	if stableRef == "" && req.DataName != "" {
 		if req.Version != "" {
@@ -213,7 +216,7 @@ func (s *DataRegistryService) GetData(
 	}
 	d, err := s.cat.Load(req.CasHash)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "datacatalog load: %v", err)
+		return nil, status.Errorf(codes.DataLoss, "datacatalog load: %v", err)
 	}
 	return d, nil
 }

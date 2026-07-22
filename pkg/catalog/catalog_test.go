@@ -160,6 +160,7 @@ func TestListTools_AfterRegister(t *testing.T) {
 			RequestId: "req-" + string(rune('0'+i)),
 			ToolName:  name,
 			Digest:    "sha256:000",
+			ImageUri:  "registry.example.com/test:latest",
 		})
 		if err != nil {
 			t.Fatalf("RegisterTool %s: %v", name, err)
@@ -277,6 +278,7 @@ func TestRegisterTool_SingleFilePerRegistration(t *testing.T) {
 		ToolName: "bowtie2",
 		Digest:   "sha256:abc",
 		Version:  "2.5.0",
+		ImageUri: "registry.example.com/test:latest",
 	})
 	if err != nil {
 		t.Fatalf("RegisterTool: %v", err)
@@ -311,6 +313,7 @@ func TestListTools_StableRefFilter(t *testing.T) {
 			ToolName: tc.name,
 			Version:  tc.version,
 			Digest:   "sha256:000",
+			ImageUri: "registry.example.com/test:latest",
 		}); err != nil {
 			t.Fatalf("RegisterTool %s: %v", tc.name, err)
 		}
@@ -346,6 +349,7 @@ func TestListTools_ArtifactKindFilter(t *testing.T) {
 		ToolName: "bwa",
 		Version:  "1.0",
 		Digest:   "sha256:abc",
+		ImageUri: "registry.example.com/test:latest",
 	}); err != nil {
 		t.Fatalf("RegisterTool: %v", err)
 	}
@@ -392,6 +396,7 @@ func TestRetractTool_TransitionsPhase(t *testing.T) {
 		ToolName: "star",
 		Version:  "2.7.11",
 		Digest:   "sha256:aaa",
+		ImageUri: "registry.example.com/test:latest",
 	})
 	if err != nil {
 		t.Fatalf("RegisterTool: %v", err)
@@ -443,6 +448,7 @@ func TestDeleteTool_TransitionsPhase(t *testing.T) {
 		ToolName: "hisat2",
 		Version:  "2.2.1",
 		Digest:   "sha256:bbb",
+		ImageUri: "registry.example.com/test:latest",
 	})
 	if err != nil {
 		t.Fatalf("RegisterTool: %v", err)
@@ -491,6 +497,7 @@ func TestRetractTool_IntegrityHealthUnchanged(t *testing.T) {
 		ToolName: "bwa",
 		Version:  "0.7.17",
 		Digest:   "sha256:ccc",
+		ImageUri: "registry.example.com/test:latest",
 	})
 	if err != nil {
 		t.Fatalf("RegisterTool: %v", err)
@@ -532,6 +539,7 @@ func TestRegisterTool_IndexDualWrite(t *testing.T) {
 		ToolName: "hisat2",
 		Version:  "2.2.1",
 		Digest:   "sha256:abc",
+		ImageUri: "registry.example.com/test:latest",
 	})
 	if err != nil {
 		t.Fatalf("RegisterTool: %v", err)
@@ -591,7 +599,10 @@ func TestToolRegistry_UninitializedDependencies_Unavailable(t *testing.T) {
 		call func() error
 	}{
 		{name: "register", call: func() error {
-			_, err := svc.RegisterTool(t.Context(), &nfv1.RegisterToolRequest{ToolName: "bwa"})
+			_, err := svc.RegisterTool(t.Context(), &nfv1.RegisterToolRequest{
+				ToolName: "bwa",
+				ImageUri: "registry.example.com/test:latest",
+			})
 			return err
 		}},
 		{name: "list", call: func() error {
@@ -617,5 +628,49 @@ func TestToolRegistry_UninitializedDependencies_Unavailable(t *testing.T) {
 				t.Fatalf("error = %v, want codes.Unavailable", err)
 			}
 		})
+	}
+}
+
+func TestRegisterTool_RequiredFields_InvalidArgument(t *testing.T) {
+	svc := newTestService(t)
+	tests := []struct {
+		name string
+		req  *nfv1.RegisterToolRequest
+	}{
+		{name: "tool name", req: &nfv1.RegisterToolRequest{ImageUri: "registry.example.com/tool:1", Digest: "sha256:abc"}},
+		{name: "image uri", req: &nfv1.RegisterToolRequest{ToolName: "tool", Digest: "sha256:abc"}},
+		{name: "digest", req: &nfv1.RegisterToolRequest{ToolName: "tool", ImageUri: "registry.example.com/tool:1"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := svc.RegisterTool(t.Context(), tt.req)
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("RegisterTool error = %v, want codes.InvalidArgument", err)
+			}
+		})
+	}
+}
+
+func TestGetTool_IndexPresentCASMissing_DataLoss(t *testing.T) {
+	dir := t.TempDir()
+	store, err := index.NewAt(t.TempDir())
+	if err != nil {
+		t.Fatalf("index.NewAt: %v", err)
+	}
+	svc := catalog.NewToolRegistryService(catalog.NewCatalogAt(dir), store)
+	reg, err := svc.RegisterTool(t.Context(), &nfv1.RegisterToolRequest{
+		ToolName: "bwa",
+		ImageUri: "registry.example.com/bwa:1",
+		Digest:   "sha256:abc",
+	})
+	if err != nil {
+		t.Fatalf("RegisterTool: %v", err)
+	}
+	if removeErr := os.Remove(filepath.Join(dir, reg.GetCasHash()+".tooldefinition")); removeErr != nil {
+		t.Fatalf("remove CAS object: %v", removeErr)
+	}
+	_, err = svc.GetTool(t.Context(), &nfv1.GetToolRequest{CasHash: reg.GetCasHash()})
+	if status.Code(err) != codes.DataLoss {
+		t.Fatalf("GetTool error = %v, want codes.DataLoss", err)
 	}
 }

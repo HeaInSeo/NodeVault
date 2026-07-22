@@ -200,6 +200,9 @@ func (s *ToolRegistryService) RegisterTool(
 	if s.catalog == nil || s.store == nil {
 		return nil, status.Error(codes.Unavailable, "tool registry unavailable")
 	}
+	if req.GetToolName() == "" || req.GetImageUri() == "" || req.GetDigest() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tool_name, image_uri, and digest are required")
+	}
 	stableRef := req.StableRef
 	if stableRef == "" && req.ToolName != "" {
 		// NodeVault가 tool_name@version 형태로 조립한다.
@@ -318,7 +321,7 @@ func (s *ToolRegistryService) GetTool(
 	}
 	tool, err := s.catalog.Load(req.CasHash)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "catalog load: %v", err)
+		return nil, status.Errorf(codes.DataLoss, "catalog load: %v", err)
 	}
 	return tool, nil
 }

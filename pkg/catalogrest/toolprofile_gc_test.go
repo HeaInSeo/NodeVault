@@ -25,6 +25,7 @@ func newGCServer(t *testing.T) (*httptest.Server, *index.Store, string) {
 		Version:   "2.2.1",
 		Digest:    "sha256:subject-1",
 		BuildKind: nfv1.BuildKind_BUILD_KIND_TOOLSPEC,
+		ImageUri:  "registry.example.com/test:latest",
 	})
 	if err != nil {
 		t.Fatalf("RegisterTool: %v", err)

@@ -137,7 +137,7 @@ test-integration-infralab:
 	        cat /tmp/nodevault-port-forward.log >&2; \
 	        exit 1; \
 	    fi; \
-	    LOCAL_PORT=$$(sed -n 's/^Forwarding from 127\\.0\\.0\\.1:\\([0-9][0-9]*\\) -> 50051$$/\\1/p' /tmp/nodevault-port-forward.log | head -1); \
+	    LOCAL_PORT=$$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9][0-9]*\) -> 50051$$/\1/p' /tmp/nodevault-port-forward.log | head -1); \
 	    if [ -n "$$LOCAL_PORT" ]; then break; fi; \
 	    sleep 0.2; \
 	done; \

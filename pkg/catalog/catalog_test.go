@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 
 	"github.com/HeaInSeo/NodeVault/pkg/catalog"
@@ -371,8 +374,8 @@ func TestGetTool_NotFound(t *testing.T) {
 	svc := newTestService(t)
 
 	_, err := svc.GetTool(t.Context(), &nfv1.GetToolRequest{CasHash: "nonexistent"})
-	if err == nil {
-		t.Fatal("expected error for nonexistent casHash")
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("GetTool error = %v, want codes.NotFound", err)
 	}
 }
 
@@ -422,8 +425,8 @@ func TestRetractTool_NotFound(t *testing.T) {
 	svc := newTestService(t)
 
 	_, err := svc.RetractTool(t.Context(), &nfv1.RetractToolRequest{CasHash: "nonexistent"})
-	if err == nil {
-		t.Fatal("expected NotFound error")
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("RetractTool error = %v, want codes.NotFound", err)
 	}
 }
 
@@ -550,5 +553,69 @@ func TestRegisterTool_IndexDualWrite(t *testing.T) {
 	}
 	if entry.IntegrityHealth != index.HealthPartial {
 		t.Errorf("index entry IntegrityHealth: got %q want %q (Partial until spec referrer pushed)", entry.IntegrityHealth, index.HealthPartial)
+	}
+}
+
+func TestToolRegistry_EmptyResourceID_InvalidArgument(t *testing.T) {
+	svc := newTestService(t)
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{name: "get", call: func() error {
+			_, err := svc.GetTool(t.Context(), &nfv1.GetToolRequest{})
+			return err
+		}},
+		{name: "retract", call: func() error {
+			_, err := svc.RetractTool(t.Context(), &nfv1.RetractToolRequest{})
+			return err
+		}},
+		{name: "delete", call: func() error {
+			_, err := svc.DeleteTool(t.Context(), &nfv1.DeleteToolRequest{})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.call(); status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("error = %v, want codes.InvalidArgument", err)
+			}
+		})
+	}
+}
+
+func TestToolRegistry_UninitializedDependencies_Unavailable(t *testing.T) {
+	svc := catalog.NewToolRegistryService(nil, nil)
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{name: "register", call: func() error {
+			_, err := svc.RegisterTool(t.Context(), &nfv1.RegisterToolRequest{ToolName: "bwa"})
+			return err
+		}},
+		{name: "list", call: func() error {
+			_, err := svc.ListTools(t.Context(), &nfv1.ListToolsRequest{})
+			return err
+		}},
+		{name: "get", call: func() error {
+			_, err := svc.GetTool(t.Context(), &nfv1.GetToolRequest{CasHash: "abc"})
+			return err
+		}},
+		{name: "retract", call: func() error {
+			_, err := svc.RetractTool(t.Context(), &nfv1.RetractToolRequest{CasHash: "abc"})
+			return err
+		}},
+		{name: "delete", call: func() error {
+			_, err := svc.DeleteTool(t.Context(), &nfv1.DeleteToolRequest{CasHash: "abc"})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.call(); status.Code(err) != codes.Unavailable {
+				t.Fatalf("error = %v, want codes.Unavailable", err)
+			}
+		})
 	}
 }

@@ -194,6 +194,12 @@ func NewToolRegistryService(cat *Catalog, store *index.Store) *ToolRegistryServi
 func (s *ToolRegistryService) RegisterTool(
 	_ context.Context, req *nfv1.RegisterToolRequest,
 ) (*nfv1.RegisterToolResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request is required")
+	}
+	if s.catalog == nil || s.store == nil {
+		return nil, status.Error(codes.Unavailable, "tool registry unavailable")
+	}
 	stableRef := req.StableRef
 	if stableRef == "" && req.ToolName != "" {
 		// NodeVault가 tool_name@version 형태로 조립한다.
@@ -257,6 +263,9 @@ func (s *ToolRegistryService) RegisterTool(
 func (s *ToolRegistryService) ListTools(
 	_ context.Context, req *nfv1.ListToolsRequest,
 ) (*nfv1.ListToolsResponse, error) {
+	if s.catalog == nil || s.store == nil {
+		return nil, status.Error(codes.Unavailable, "tool registry unavailable")
+	}
 	var indexEntries []index.Entry
 	var err error
 
@@ -295,6 +304,12 @@ func (s *ToolRegistryService) ListTools(
 func (s *ToolRegistryService) GetTool(
 	_ context.Context, req *nfv1.GetToolRequest,
 ) (*nfv1.RegisteredToolDefinition, error) {
+	if req == nil || req.GetCasHash() == "" {
+		return nil, status.Error(codes.InvalidArgument, "cas_hash is required")
+	}
+	if s.catalog == nil || s.store == nil {
+		return nil, status.Error(codes.Unavailable, "tool registry unavailable")
+	}
 	if _, err := s.store.GetByCasHash(req.CasHash); err != nil {
 		if errors.Is(err, index.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "tool %s not found", req.CasHash)
@@ -316,6 +331,12 @@ func (s *ToolRegistryService) GetTool(
 func (s *ToolRegistryService) RetractTool(
 	_ context.Context, req *nfv1.RetractToolRequest,
 ) (*nfv1.RetractToolResponse, error) {
+	if req == nil || req.GetCasHash() == "" {
+		return nil, status.Error(codes.InvalidArgument, "cas_hash is required")
+	}
+	if s.store == nil {
+		return nil, status.Error(codes.Unavailable, "tool registry unavailable")
+	}
 	if err := s.store.SetLifecyclePhase(req.CasHash, index.PhaseRetracted); err != nil {
 		if errors.Is(err, index.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "tool %s not found", req.CasHash)
@@ -336,6 +357,12 @@ func (s *ToolRegistryService) RetractTool(
 func (s *ToolRegistryService) DeleteTool(
 	_ context.Context, req *nfv1.DeleteToolRequest,
 ) (*nfv1.DeleteToolResponse, error) {
+	if req == nil || req.GetCasHash() == "" {
+		return nil, status.Error(codes.InvalidArgument, "cas_hash is required")
+	}
+	if s.store == nil {
+		return nil, status.Error(codes.Unavailable, "tool registry unavailable")
+	}
 	if err := s.store.SetLifecyclePhase(req.CasHash, index.PhaseDeleted); err != nil {
 		if errors.Is(err, index.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "tool %s not found", req.CasHash)

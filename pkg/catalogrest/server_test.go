@@ -40,7 +40,7 @@ func registerTool(t *testing.T, svc *catalog.ToolRegistryService, name, version 
 		Version:   version,
 		Digest:    "sha256:abc",
 		BuildKind: nfv1.BuildKind_BUILD_KIND_TOOLSPEC,
-		ImageUri: "registry.example.com/test:latest",
+		ImageUri:  "registry.example.com/test:latest",
 	})
 	if err != nil {
 		t.Fatalf("RegisterTool %s: %v", name, err)

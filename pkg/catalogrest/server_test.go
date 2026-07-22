@@ -500,7 +500,7 @@ func registerData(t *testing.T, store *index.Store, dataCat *catalog.DataCatalog
 		Format:     "csv",
 		Checksum:   "sha256:test",
 		StorageUri: "s3://test/artifact",
-		Display:    &nfv1.DisplaySpec{
+		Display: &nfv1.DisplaySpec{
 			Label:    name + " " + version,
 			Category: "TestData",
 		},

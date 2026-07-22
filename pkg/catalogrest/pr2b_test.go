@@ -230,6 +230,131 @@ func TestSubmitCheckRecord_DuplicateCheckID_DifferentContent_Rejected409(t *test
 	}
 }
 
+// TestSubmitScanRecord_DuplicateScanID_IdempotentNotError mirrors
+// TestSubmitCheckRecord_DuplicateCheckID_IdempotentNotError for the
+// ScanRecord path — appendToolScanRecordLocked runs the identical
+// fingerprint-comparison logic (see checkRecordFingerprint's ScanRecord
+// counterpart in pkg/index/store.go), which had no test coverage at all
+// until this one.
+func TestSubmitScanRecord_DuplicateScanID_IdempotentNotError(t *testing.T) {
+	ts, store := newServerWithCert(t, &fakeCertSvc{})
+
+	body, _ := json.Marshal(catalogrest.SubmitScanRecordRequest{
+		ScanID: "scan-dup", ImageDigest: "sha256:aaa", PolicyResult: "passed",
+	})
+
+	first := doPost(t, ts, ts.URL+"/v1/validation/scan-records", body)
+	defer func() { _ = first.Body.Close() }()
+	if first.StatusCode != http.StatusOK {
+		t.Fatalf("first submission status: got %d want 200", first.StatusCode)
+	}
+
+	second := doPost(t, ts, ts.URL+"/v1/validation/scan-records", body)
+	defer func() { _ = second.Body.Close() }()
+	if second.StatusCode != http.StatusOK {
+		t.Fatalf("redelivery status: got %d want 200 (duplicate must be idempotent, not an error)", second.StatusCode)
+	}
+	var result catalogrest.SubmitRecordResponse
+	if err := json.NewDecoder(second.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if result.CertificationStatus != "already_recorded" {
+		t.Errorf("CertificationStatus = %q, want already_recorded", result.CertificationStatus)
+	}
+
+	records, err := store.ListToolScanRecordsByImageDigest("sha256:aaa")
+	if err != nil {
+		t.Fatalf("ListToolScanRecordsByImageDigest: %v", err)
+	}
+	if len(records) != 1 {
+		t.Errorf("stored records = %d, want exactly 1 (redelivery must not create a duplicate)", len(records))
+	}
+}
+
+// TestSubmitScanRecord_DuplicateScanID_DifferentContent_Rejected409 mirrors
+// TestSubmitCheckRecord_DuplicateCheckID_DifferentContent_Rejected409 for
+// the ScanRecord path.
+func TestSubmitScanRecord_DuplicateScanID_DifferentContent_Rejected409(t *testing.T) {
+	ts, store := newServerWithCert(t, &fakeCertSvc{})
+
+	first, _ := json.Marshal(catalogrest.SubmitScanRecordRequest{
+		ScanID: "scan-conflict", ImageDigest: "sha256:aaa", PolicyResult: "passed",
+	})
+	firstResp := doPost(t, ts, ts.URL+"/v1/validation/scan-records", first)
+	defer func() { _ = firstResp.Body.Close() }()
+	if firstResp.StatusCode != http.StatusOK {
+		t.Fatalf("first submission status: got %d want 200", firstResp.StatusCode)
+	}
+
+	second, _ := json.Marshal(catalogrest.SubmitScanRecordRequest{
+		ScanID: "scan-conflict", ImageDigest: "sha256:aaa", PolicyResult: "blocked", CriticalCount: 5,
+	})
+	secondResp := doPost(t, ts, ts.URL+"/v1/validation/scan-records", second)
+	defer func() { _ = secondResp.Body.Close() }()
+	if secondResp.StatusCode != http.StatusConflict {
+		t.Fatalf("conflicting resubmission status: got %d want 409", secondResp.StatusCode)
+	}
+
+	stored, err := store.GetToolScanRecordByID("scan-conflict")
+	if err != nil {
+		t.Fatalf("GetToolScanRecordByID: %v", err)
+	}
+	if stored.PolicyResult != "passed" {
+		t.Errorf("stored PolicyResult = %q, want the original %q (rejected conflict must not overwrite it)",
+			stored.PolicyResult, "passed")
+	}
+}
+
+// TestSubmitScanRecord_ConcurrentConflictingSubmissions_ExactlyOneWins
+// mirrors the CheckRecord concurrency test for the ScanRecord path.
+func TestSubmitScanRecord_ConcurrentConflictingSubmissions_ExactlyOneWins(t *testing.T) {
+	ts, store := newServerWithCert(t, &fakeCertSvc{})
+
+	const workers = 8
+	var wg sync.WaitGroup
+	statusCodes := make([]int, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			body, _ := json.Marshal(catalogrest.SubmitScanRecordRequest{
+				ScanID: "scan-race", ImageDigest: "sha256:aaa", PolicyResult: "passed",
+				CriticalCount: i, // makes each submission's fingerprint unique
+			})
+			resp := doPost(t, ts, ts.URL+"/v1/validation/scan-records", body)
+			statusCodes[i] = resp.StatusCode
+			_ = resp.Body.Close()
+		}(i)
+	}
+	wg.Wait()
+
+	okCount, conflictCount := 0, 0
+	for _, code := range statusCodes {
+		switch code {
+		case http.StatusOK:
+			okCount++
+		case http.StatusConflict:
+			conflictCount++
+		default:
+			t.Errorf("unexpected status code %d", code)
+		}
+	}
+	if okCount != 1 {
+		t.Errorf("200 OK responses = %d, want exactly 1", okCount)
+	}
+	if conflictCount != workers-1 {
+		t.Errorf("409 Conflict responses = %d, want %d", conflictCount, workers-1)
+	}
+
+	records, err := store.ListToolScanRecordsByImageDigest("sha256:aaa")
+	if err != nil {
+		t.Fatalf("ListToolScanRecordsByImageDigest: %v", err)
+	}
+	if len(records) != 1 {
+		t.Errorf("stored records = %d, want exactly 1 (only the winner)", len(records))
+	}
+}
+
 // TestSubmitCheckRecord_ConcurrentConflictingSubmissions_ExactlyOneWins
 // exercises the same conflict detection under real concurrency: N goroutines
 // submit the same CheckID with N distinct contents at once. Exactly one must

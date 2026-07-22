@@ -142,6 +142,12 @@ func NewDataRegistryService(cat *DataCatalog, store *index.Store) *DataRegistryS
 func (s *DataRegistryService) RegisterData(
 	_ context.Context, req *nfv1.DataRegisterRequest,
 ) (*nfv1.DataRegisterResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request is required")
+	}
+	if s.cat == nil || s.store == nil {
+		return nil, status.Error(codes.Unavailable, "data registry unavailable")
+	}
 	stableRef := req.StableRef
 	if stableRef == "" && req.DataName != "" {
 		if req.Version != "" {
@@ -193,6 +199,12 @@ func (s *DataRegistryService) RegisterData(
 func (s *DataRegistryService) GetData(
 	_ context.Context, req *nfv1.GetDataRequest,
 ) (*nfv1.RegisteredDataDefinition, error) {
+	if req == nil || req.GetCasHash() == "" {
+		return nil, status.Error(codes.InvalidArgument, "cas_hash is required")
+	}
+	if s.cat == nil || s.store == nil {
+		return nil, status.Error(codes.Unavailable, "data registry unavailable")
+	}
 	if _, err := s.store.GetByCasHash(req.CasHash); err != nil {
 		if errors.Is(err, index.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "data %s not found", req.CasHash)
@@ -210,6 +222,9 @@ func (s *DataRegistryService) GetData(
 func (s *DataRegistryService) ListData(
 	_ context.Context, req *nfv1.ListDataRequest,
 ) (*nfv1.ListDataResponse, error) {
+	if s.cat == nil || s.store == nil {
+		return nil, status.Error(codes.Unavailable, "data registry unavailable")
+	}
 	var indexEntries []index.Entry
 	var err error
 

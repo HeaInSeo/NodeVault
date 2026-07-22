@@ -43,6 +43,7 @@ jobs:
         run: |
           buf generate
           git diff --exit-code -- protos
+          test -z "$(git ls-files --others --exclude-standard -- protos)"
 
   # ──────────────────────────────────────────────────────────────────
   # 2. GitHub Actions syntax and expression validation

@@ -84,7 +84,7 @@ type fakeSentinelClient struct {
 	closeErr   error
 }
 
-func (f *fakeSentinelClient) EnqueueValidationWork(
+func (*fakeSentinelClient) EnqueueValidationWork(
 	context.Context, *nsv1.EnqueueValidationWorkRequest,
 ) (*nsv1.EnqueueValidationWorkResponse, error) {
 	return &nsv1.EnqueueValidationWorkResponse{JobId: "job-1", Status: "Queued"}, nil

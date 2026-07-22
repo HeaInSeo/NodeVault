@@ -25,7 +25,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   proto-lint:
     name: Proto Lint (Buf)
-    runs-on: [self-hosted, linux, podbridge5]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
@@ -79,7 +79,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   lint:
     name: Lint
-    runs-on: [self-hosted, linux, podbridge5]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
@@ -118,7 +118,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   build:
     name: Build
-    runs-on: [self-hosted, linux, podbridge5]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
@@ -154,7 +154,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   test-unit:
     name: Unit Tests
-    runs-on: [self-hosted, linux, podbridge5]
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
@@ -217,7 +217,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   vuln-scan:
     name: Vulnerability Scan (govulncheck)
-    runs-on: [self-hosted, linux, podbridge5]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
@@ -267,7 +267,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   slint-gate:
     name: kube-slint Gate
-    runs-on: [self-hosted, linux, podbridge5]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [build]
     steps:
@@ -321,7 +321,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   kube-lint:
     name: kube-linter
-    runs-on: [self-hosted, linux, podbridge5]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6

@@ -1,6 +1,8 @@
 package catalog_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -97,5 +99,49 @@ func TestDataRegistry_UninitializedDependencies_Unavailable(t *testing.T) {
 				t.Fatalf("error = %v, want codes.Unavailable", err)
 			}
 		})
+	}
+}
+
+func TestRegisterData_RequiredFields_InvalidArgument(t *testing.T) {
+	svc := newDataRegistryService(t)
+	tests := []struct {
+		name string
+		req  *nfv1.DataRegisterRequest
+	}{
+		{name: "data name", req: &nfv1.DataRegisterRequest{Checksum: "sha256:abc", StorageUri: "s3://ref/data"}},
+		{name: "checksum", req: &nfv1.DataRegisterRequest{DataName: "reference", StorageUri: "s3://ref/data"}},
+		{name: "storage uri", req: &nfv1.DataRegisterRequest{DataName: "reference", Checksum: "sha256:abc"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := svc.RegisterData(t.Context(), tt.req)
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("RegisterData error = %v, want codes.InvalidArgument", err)
+			}
+		})
+	}
+}
+
+func TestGetData_IndexPresentCASMissing_DataLoss(t *testing.T) {
+	dir := t.TempDir()
+	store, err := index.NewAt(t.TempDir())
+	if err != nil {
+		t.Fatalf("index.NewAt: %v", err)
+	}
+	svc := catalog.NewDataRegistryService(catalog.NewDataCatalogAt(dir), store)
+	reg, err := svc.RegisterData(t.Context(), &nfv1.DataRegisterRequest{
+		DataName:  "reference",
+		Checksum:  "sha256:abc",
+		StorageUri: "s3://ref/data",
+	})
+	if err != nil {
+		t.Fatalf("RegisterData: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, reg.GetCasHash()+".datadefinition")); err != nil {
+		t.Fatalf("remove CAS object: %v", err)
+	}
+	_, err = svc.GetData(t.Context(), &nfv1.GetDataRequest{CasHash: reg.GetCasHash()})
+	if status.Code(err) != codes.DataLoss {
+		t.Fatalf("GetData error = %v, want codes.DataLoss", err)
 	}
 }

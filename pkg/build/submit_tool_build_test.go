@@ -390,7 +390,7 @@ func TestSubmitToolBuild_RequestIDConflictRejected(t *testing.T) {
 		ToolSpecDigest: "spec-456",
 		ToolName:       "samtools",
 		Version:        "1.20",
-		RawSpec:        `{"tool_name":"samtools","version":"1.20","dockerfile_content":"FROM alpine:3.20@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\\nRUN true"}`,
+		RawSpec:        `{"tool_name":"samtools","version":"1.20","dockerfile_content":"FROM alpine:3.20@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nRUN true"}`,
 		ResolvedAt:     time.Unix(200, 0).UTC(),
 	}); err != nil {
 		t.Fatalf("AppendResolvedToolSpec: %v", err)

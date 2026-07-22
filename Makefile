@@ -203,6 +203,7 @@ proto:
 
 proto-check: proto
 	git diff --exit-code -- protos
+	test -z "$$(git ls-files --others --exclude-standard -- protos)"
 
 # ── 커버리지 ──────────────────────────────────────────────────────────────────
 coverage:

@@ -35,6 +35,7 @@ jobs:
         with:
           input: protos
           lint: true
+          pr_comment: false
 
   # ──────────────────────────────────────────────────────────────────
   # 2. GitHub Actions syntax and expression validation

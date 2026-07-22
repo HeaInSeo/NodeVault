@@ -442,70 +442,70 @@ service ValidationResultService {
 }
 
 message PortObservation {
-  string port       = 1;
-  int32  file_count = 2;
-  bool   non_empty  = 3;
+  string port = 1;
+  int32 file_count = 2;
+  bool non_empty = 3;
 }
 
 message ObservedIoProfile {
-  repeated PortObservation inputs  = 1;
+  repeated PortObservation inputs = 1;
   repeated PortObservation outputs = 2;
 }
 
 message ObservedResourceProfile {
   int64 peak_cpu_millicores = 1;
-  int64 peak_memory_mib     = 2;
-  int64 duration_seconds    = 3;
-  int64 disk_read_mib       = 4;
-  int64 disk_write_mib      = 5;
-  bool  timeout             = 6;
-  int64 timeout_seconds     = 7;
+  int64 peak_memory_mib = 2;
+  int64 duration_seconds = 3;
+  int64 disk_read_mib = 4;
+  int64 disk_write_mib = 5;
+  bool timeout = 6;
+  int64 timeout_seconds = 7;
 }
 
 message ContractCheck {
-  bool   all_outputs_present = 1;
-  string result              = 2; // "pass" | "fail" | "unknown"
+  bool all_outputs_present = 1;
+  string result = 2; // "pass" | "fail" | "unknown"
 }
 
 message ToolCheckRecordRequest {
-  string check_id         = 1;
+  string check_id = 1;
   string tool_spec_digest = 2;
-  string image_digest     = 3;
-  string tool_name        = 4;
-  string version          = 5;
+  string image_digest = 3;
+  string tool_name = 4;
+  string version = 5;
   // validation_status: "succeeded" | "infra_failed" | "app_failed"
-  string validation_status  = 6;
-  string validation_hash    = 7;
-  string command            = 8;
-  int32  exit_code          = 9;
-  ObservedIoProfile        observed_io_profile       = 10;
-  ObservedResourceProfile  observed_resource_profile = 11;
-  ContractCheck            contract_check            = 12;
-  string failure_reason     = 13;
-  int64  checked_at         = 14;
-  string platform           = 15;
+  string validation_status = 6;
+  string validation_hash = 7;
+  string command = 8;
+  int32 exit_code = 9;
+  ObservedIoProfile observed_io_profile = 10;
+  ObservedResourceProfile observed_resource_profile = 11;
+  ContractCheck contract_check = 12;
+  string failure_reason = 13;
+  int64 checked_at = 14;
+  string platform = 15;
 }
 
 message ToolScanRecordRequest {
-  string scan_id          = 1;
-  string image_digest     = 2;
-  string tool_name        = 3;
-  string scanner          = 4;
-  string scanner_version  = 5;
-  string source           = 6;
-  int32  critical_count   = 7;
-  int32  high_count       = 8;
-  int32  medium_count     = 9;
-  int32  low_count        = 10;
-  string policy_mode      = 11;
-  string policy_result    = 12;
-  int64  scanned_at       = 13;
-  string db_digest        = 14;
-  string platform         = 15;
+  string scan_id = 1;
+  string image_digest = 2;
+  string tool_name = 3;
+  string scanner = 4;
+  string scanner_version = 5;
+  string source = 6;
+  int32 critical_count = 7;
+  int32 high_count = 8;
+  int32 medium_count = 9;
+  int32 low_count = 10;
+  string policy_mode = 11;
+  string policy_result = 12;
+  int64 scanned_at = 13;
+  string db_digest = 14;
+  string platform = 15;
 }
 
 message SubmitRecordResponse {
-  string record_id         = 1;
+  string record_id = 1;
   string certification_status = 2; // "certified" | "pending" | "failed"
 }
 
@@ -514,17 +514,17 @@ message ListCertifiedToolsRequest {
 }
 
 message CertifiedToolEntry {
-  string cas_hash          = 1;
-  string tool_name         = 2;
-  string version           = 3;
-  string stable_ref        = 4;
-  string image_digest      = 5;
-  string image_ref         = 6;
-  string display_label     = 7;
-  string display_category  = 8;
-  string promotion_status  = 9;
-  int64  certified_at      = 10;
-  string validation_hash   = 11;
+  string cas_hash = 1;
+  string tool_name = 2;
+  string version = 3;
+  string stable_ref = 4;
+  string image_digest = 5;
+  string image_ref = 6;
+  string display_label = 7;
+  string display_category = 8;
+  string promotion_status = 9;
+  int64 certified_at = 10;
+  string validation_hash = 11;
 }
 
 message ListCertifiedToolsResponse {

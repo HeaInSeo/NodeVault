@@ -556,7 +556,6 @@ func TestRegisterTool_IndexDualWrite(t *testing.T) {
 	}
 }
 
-
 func TestToolRegistry_EmptyResourceID_InvalidArgument(t *testing.T) {
 	svc := newTestService(t)
 	tests := []struct {

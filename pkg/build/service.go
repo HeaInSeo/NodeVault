@@ -284,10 +284,7 @@ func (s *Service) postBuildRegistration(
 	// above), so there is always a real CasHash to enqueue against — no
 	// validation work is queued for a tool that was never registered.
 	if s.sentinel != nil {
-		imageRepo := destination
-		if idx := strings.LastIndex(destination, "@"); idx != -1 {
-			imageRepo = destination[:idx]
-		}
+		imageRepo := imageRepoFromDestination(destination)
 		enqReq := &nsv1.EnqueueValidationWorkRequest{
 			ArtifactKind:     "tool",
 			ImageRepository:  imageRepo,
@@ -434,6 +431,27 @@ func primaryBuildDestination(toolName, version string) (destination string, isVe
 		return dest, true
 	}
 	return latestDestination(toolName), false
+}
+
+// imageRepoFromDestination strips a tag or digest suffix from a full
+// "host[:port]/project/repo[:tag|@digest]" reference, returning the bare
+// repository — the shape NodeSentinel's EnqueueValidationWorkRequest.
+// ImageRepository field expects (it takes a repository + separate digest,
+// not a combined ref). destination here is always a tag reference in
+// practice (primaryBuildDestination/versionedDestination/latestDestination
+// only ever produce "...:tag" — Buildah pushes by tag, never by digest), so
+// only the tag branch fires in production; the @digest branch is handled
+// defensively. Mirrors pkg/validation.imageRepoFromRef's tag-stripping
+// logic (colon after the last slash, so a "host:port" prefix isn't mistaken
+// for a tag separator), extended to also strip a digest suffix.
+func imageRepoFromDestination(ref string) string {
+	if i := strings.LastIndex(ref, "@"); i != -1 {
+		ref = ref[:i]
+	}
+	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
+		ref = ref[:i]
+	}
+	return ref
 }
 
 // warnIfTagReassigned logs (does not fail the build — see #27's decision to

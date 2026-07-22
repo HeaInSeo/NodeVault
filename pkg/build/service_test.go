@@ -373,7 +373,11 @@ func TestPostBuildRegistration_Success_EnqueuesSentinelWorkOnceWithCorrectFields
 
 	const imageDigest = "sha256:deadbeef"
 	req := &nfv1.BuildRequest{RequestId: "req-1", ToolName: "test-tool", Version: "1.0.0"}
-	destination := "harbor.example.com/library/test-tool@" + imageDigest
+	// A tag reference, not a digest reference: primaryBuildDestination/
+	// versionedDestination/latestDestination only ever produce "...:tag"
+	// (Buildah pushes by tag, never by digest) — this must match what
+	// production actually passes in here, not a shape that never occurs.
+	destination := "harbor.example.com/library/test-tool:1.0.0"
 	if regErr := svc.postBuildRegistration(context.Background(), req, destination, imageDigest, func(string) {}); regErr != nil {
 		t.Fatalf("postBuildRegistration: %v (registration itself must succeed)", regErr)
 	}
@@ -408,6 +412,31 @@ func TestPostBuildRegistration_Success_EnqueuesSentinelWorkOnceWithCorrectFields
 	}
 	if got.CasHash != wantCasHash {
 		t.Errorf("CasHash = %q, want the RegisterTool-assigned CasHash %q", got.CasHash, wantCasHash)
+	}
+}
+
+// TestImageRepoFromDestination guards the exact bug the fixture above would
+// have silently missed: destination is always a tag reference in production
+// (Buildah pushes by tag, never by digest — see primaryBuildDestination),
+// but the prior implementation only stripped an "@digest" suffix, leaving
+// ":tag" glued onto ImageRepository for every real build.
+func TestImageRepoFromDestination(t *testing.T) {
+	cases := []struct {
+		name string
+		ref  string
+		want string
+	}{
+		{"tag", "harbor.example.com/library/bwa:0.7.17", "harbor.example.com/library/bwa"},
+		{"digest", "harbor.example.com/library/bwa@sha256:" + strings.Repeat("a", 64), "harbor.example.com/library/bwa"},
+		{"host_port_tag", "localhost:5000/library/bwa:0.7.17", "localhost:5000/library/bwa"},
+		{"no_tag_or_digest", "harbor.example.com/library/bwa", "harbor.example.com/library/bwa"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := imageRepoFromDestination(tc.ref); got != tc.want {
+				t.Errorf("imageRepoFromDestination(%q) = %q, want %q", tc.ref, got, tc.want)
+			}
+		})
 	}
 }
 

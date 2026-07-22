@@ -80,7 +80,7 @@ func TestDataRegistry_UninitializedDependencies_Unavailable(t *testing.T) {
 	}{
 		{name: "register", call: func() error {
 			_, err := svc.RegisterData(t.Context(), &nfv1.DataRegisterRequest{
-				DataName:  "reference",
+				DataName:   "reference",
 				Checksum:  "sha256:test",
 				StorageUri: "s3://test/artifact",
 			})
@@ -139,8 +139,8 @@ func TestGetData_IndexPresentCASMissing_DataLoss(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RegisterData: %v", err)
 	}
-	if err := os.Remove(filepath.Join(dir, reg.GetCasHash()+".datadefinition")); err != nil {
-		t.Fatalf("remove CAS object: %v", err)
+	if removeErr := os.Remove(filepath.Join(dir, reg.GetCasHash()+".datadefinition")); removeErr != nil {
+		t.Fatalf("remove CAS object: %v", removeErr)
 	}
 	_, err = svc.GetData(t.Context(), &nfv1.GetDataRequest{CasHash: reg.GetCasHash()})
 	if status.Code(err) != codes.DataLoss {

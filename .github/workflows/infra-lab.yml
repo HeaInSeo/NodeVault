@@ -24,7 +24,7 @@ jobs:
       BUILD_TAGS: exclude_graphdriver_btrfs exclude_graphdriver_devicemapper
       INFRA_LAB_ROOT: /opt/go/src/github.com/HeaInSeo/infra-lab
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v6
         with:

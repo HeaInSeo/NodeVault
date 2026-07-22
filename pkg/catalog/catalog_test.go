@@ -666,8 +666,8 @@ func TestGetTool_IndexPresentCASMissing_DataLoss(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RegisterTool: %v", err)
 	}
-	if err := os.Remove(filepath.Join(dir, reg.GetCasHash()+".tooldefinition")); err != nil {
-		t.Fatalf("remove CAS object: %v", err)
+	if removeErr := os.Remove(filepath.Join(dir, reg.GetCasHash()+".tooldefinition")); removeErr != nil {
+		t.Fatalf("remove CAS object: %v", removeErr)
 	}
 	_, err = svc.GetTool(t.Context(), &nfv1.GetToolRequest{CasHash: reg.GetCasHash()})
 	if status.Code(err) != codes.DataLoss {

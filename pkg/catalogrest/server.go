@@ -530,6 +530,12 @@ func (s *Server) handleSubmitCheckRecord(w http.ResponseWriter, r *http.Request)
 	if err := s.store.AppendToolCheckRecordCorrelated(
 		rec, req.ValidationRequestID, req.SentinelJobID, req.Terminal, succeeded, req.FailureReason,
 	); err != nil {
+		if errors.Is(err, index.ErrRecordConflict) {
+			slog.Warn("check record content conflict — rejecting", "check_id", req.CheckID,
+				"validation_request_id", req.ValidationRequestID, "sentinel_job_id", req.SentinelJobID, "err", err)
+			http.Error(w, "check_id already used with different content", http.StatusConflict)
+			return
+		}
 		if errors.Is(err, index.ErrDuplicateRecord) {
 			slog.Info("ToolCheckRecord already recorded (idempotent redelivery)", "check_id", req.CheckID)
 			writeJSON(w, SubmitRecordResponse{RecordID: req.CheckID, CertificationStatus: "already_recorded"})
@@ -592,6 +598,43 @@ func (s *Server) checkValidationCorrelation(w http.ResponseWriter, validationReq
 	return true
 }
 
+// isValidPolicyResult reports whether result is a known ToolScanRecord
+// PolicyResult value for a new submission. Empty is rejected here — a new
+// caller must say what happened (NodeSentinel's own submission paths always
+// set "passed", "warning", or "not-available"; see pkg/worker/l5b.go). This
+// is stricter than reading already-stored data: an old row written before
+// this validation existed may still have PolicyResult == "" on disk, and
+// terminalSucceededForPolicyResult below still has to handle that byte-
+// for-byte value gracefully (as "not-available") rather than reject it —
+// this function only gates what's accepted going forward at ingest.
+func isValidPolicyResult(result string) bool {
+	switch result {
+	case "passed", "warning", "blocked", "not-available":
+		return true
+	default:
+		return false
+	}
+}
+
+// terminalSucceededForPolicyResult decides whether a Terminal ToolScanRecord
+// closes its correlated ValidationRequestRecord out as Succeeded or Failed.
+// Explicit per value (not an implicit `!= "blocked"` fallthrough) so each
+// case states its own intent: a security warning does not fail the overall
+// validation, and neither does an unavailable scanner (missing scan
+// infrastructure isn't the tool's fault) — only an actual policy block
+// does. The empty string covers already-stored pre-validation rows (see
+// isValidPolicyResult) and is treated the same as "not-available".
+func terminalSucceededForPolicyResult(result string) bool {
+	switch result {
+	case "blocked":
+		return false
+	case "passed", "warning", "not-available", "":
+		return true
+	default:
+		return true // unreachable once isValidPolicyResult gates new ingest; safe default for old data.
+	}
+}
+
 // handleSubmitScanRecord serves POST /v1/validation/scan-records.
 func (s *Server) handleSubmitScanRecord(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = r.Body.Close() }()
@@ -607,6 +650,10 @@ func (s *Server) handleSubmitScanRecord(w http.ResponseWriter, r *http.Request) 
 	}
 	if req.ScanID == "" || req.ImageDigest == "" {
 		http.Error(w, "scan_id and image_digest required", http.StatusBadRequest)
+		return
+	}
+	if !isValidPolicyResult(req.PolicyResult) {
+		http.Error(w, "policy_result must be one of: passed, warning, blocked, not-available", http.StatusBadRequest)
 		return
 	}
 	if !s.checkValidationCorrelation(w, req.ValidationRequestID, req.ImageDigest) {
@@ -635,13 +682,16 @@ func (s *Server) handleSubmitScanRecord(w http.ResponseWriter, r *http.Request) 
 		ScannedAt:           time.Now().UTC(),
 	}
 
-	// A blocked policy result is the only scan outcome that fails the
-	// overall validation request when this record is Terminal — a warning
-	// or an unavailable scanner (Source == "not-available") does not.
-	succeeded := req.PolicyResult != "blocked"
+	succeeded := terminalSucceededForPolicyResult(req.PolicyResult)
 	if err := s.store.AppendToolScanRecordCorrelated(
 		rec, req.ValidationRequestID, req.SentinelJobID, req.Terminal, succeeded,
 	); err != nil {
+		if errors.Is(err, index.ErrRecordConflict) {
+			slog.Warn("scan record content conflict — rejecting", "scan_id", req.ScanID,
+				"validation_request_id", req.ValidationRequestID, "sentinel_job_id", req.SentinelJobID, "err", err)
+			http.Error(w, "scan_id already used with different content", http.StatusConflict)
+			return
+		}
 		if errors.Is(err, index.ErrDuplicateRecord) {
 			slog.Info("ToolScanRecord already recorded (idempotent redelivery)", "scan_id", req.ScanID)
 			writeJSON(w, SubmitRecordResponse{RecordID: req.ScanID, CertificationStatus: "already_recorded"})

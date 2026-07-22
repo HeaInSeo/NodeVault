@@ -914,6 +914,79 @@ func TestTransitionValidationRequest_InvalidEdge_Rejected(t *testing.T) {
 	}
 }
 
+// TestTransitionValidationRequest_EnqueuePendingToRunning_Allowed guards the
+// fix for a real race: NodeSentinel can execute a job and submit a result
+// before NodeVault's own postBuildRegistration has processed the enqueue
+// response and driven the record to Queued. Without this edge, a result
+// arriving that early would leave the record orphaned at EnqueuePending
+// forever — see applyValidationCorrelationLocked.
+func TestTransitionValidationRequest_EnqueuePendingToRunning_Allowed(t *testing.T) {
+	s := newStore(t)
+	if err := s.CreateValidationRequestRecord(index.ValidationRequestRecord{ValidationRequestID: "vr-1"}); err != nil {
+		t.Fatalf("CreateValidationRequestRecord: %v", err)
+	}
+	// Default status is EnqueuePending (see CreateValidationRequestRecord).
+	if err := s.TransitionValidationRequest("vr-1", index.ValidationRunning, nil); err != nil {
+		t.Fatalf("TransitionValidationRequest EnqueuePending -> Running: %v", err)
+	}
+	got, err := s.GetValidationRequestRecord("vr-1")
+	if err != nil {
+		t.Fatalf("GetValidationRequestRecord: %v", err)
+	}
+	if got.ValidationStatus != index.ValidationRunning {
+		t.Errorf("ValidationStatus = %q, want Running", got.ValidationStatus)
+	}
+}
+
+// TestTransitionValidationRequest_LateEnqueueAck_DoesNotRegressFromRunning
+// is the other half of the same race guard: once a fast result has already
+// promoted the record past EnqueuePending, a late-arriving enqueue ACK
+// attempting its own Queued transition must be rejected, not regress a
+// record that has already moved forward.
+func TestTransitionValidationRequest_LateEnqueueAck_DoesNotRegressFromRunning(t *testing.T) {
+	s := newStore(t)
+	if err := s.CreateValidationRequestRecord(index.ValidationRequestRecord{ValidationRequestID: "vr-1"}); err != nil {
+		t.Fatalf("CreateValidationRequestRecord: %v", err)
+	}
+	if err := s.TransitionValidationRequest("vr-1", index.ValidationRunning, nil); err != nil {
+		t.Fatalf("TransitionValidationRequest EnqueuePending -> Running: %v", err)
+	}
+
+	// Simulate the late enqueue ACK's own Queued transition attempt.
+	err := s.TransitionValidationRequest("vr-1", index.ValidationQueued, func(r *index.ValidationRequestRecord) {
+		r.SentinelJobID = "job-from-late-ack"
+	})
+	if err == nil {
+		t.Fatal("expected the late ACK's Running -> Queued transition to be rejected")
+	}
+
+	got, getErr := s.GetValidationRequestRecord("vr-1")
+	if getErr != nil {
+		t.Fatalf("GetValidationRequestRecord: %v", getErr)
+	}
+	if got.ValidationStatus != index.ValidationRunning {
+		t.Errorf("ValidationStatus = %q, want unchanged Running (must not regress to Queued)", got.ValidationStatus)
+	}
+}
+
+// TestTransitionValidationRequest_RejectedEdge_WrapsErrInvalidTransition
+// locks in the sentinel error contract callers rely on to distinguish an
+// expected, already-progressed race (see pkg/build's postBuildRegistration,
+// which logs this at Info rather than Warn) from a genuine storage failure.
+func TestTransitionValidationRequest_RejectedEdge_WrapsErrInvalidTransition(t *testing.T) {
+	s := newStore(t)
+	if err := s.CreateValidationRequestRecord(index.ValidationRequestRecord{
+		ValidationRequestID: "vr-1", ValidationStatus: index.ValidationRunning,
+	}); err != nil {
+		t.Fatalf("CreateValidationRequestRecord: %v", err)
+	}
+
+	err := s.TransitionValidationRequest("vr-1", index.ValidationQueued, nil)
+	if !errors.Is(err, index.ErrInvalidTransition) {
+		t.Fatalf("err = %v, want it to wrap ErrInvalidTransition", err)
+	}
+}
+
 func TestTransitionValidationRequest_NotFound(t *testing.T) {
 	s := newStore(t)
 	err := s.TransitionValidationRequest("missing", index.ValidationQueued, nil)

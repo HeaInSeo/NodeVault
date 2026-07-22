@@ -612,10 +612,11 @@ func TestSubmitScanRecord_HappyPath(t *testing.T) {
 	ts, _ := newServerWithCert(t, &fakeCertSvc{})
 
 	body, _ := json.Marshal(catalogrest.SubmitScanRecordRequest{
-		ScanID:      "scan-rest-1",
-		ImageDigest: "sha256:scan111",
-		Scanner:     "trivy",
-		PolicyMode:  "gate_critical",
+		ScanID:       "scan-rest-1",
+		ImageDigest:  "sha256:scan111",
+		Scanner:      "trivy",
+		PolicyMode:   "gate_critical",
+		PolicyResult: "passed",
 	})
 
 	resp := doPost(t, ts, ts.URL+"/v1/validation/scan-records", body)

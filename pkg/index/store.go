@@ -1,6 +1,8 @@
 package index
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,6 +46,28 @@ var ErrNotFound = errors.New("index: entry not found")
 // network failure naturally resubmits the same ID — callers should treat
 // this as an idempotent no-op, not a genuine failure.
 var ErrDuplicateRecord = errors.New("index: record already exists")
+
+// ErrRecordConflict is returned by AppendToolCheckRecord(Correlated) and
+// AppendToolScanRecord(Correlated) when a record with the same CheckID/
+// ScanID already exists but its content fingerprint differs — see
+// checkRecordFingerprint/scanRecordFingerprint. Unlike ErrDuplicateRecord
+// (a safe idempotent redelivery of identical content), this means the same
+// ID was reused for a materially different result: silently accepting it
+// as "already recorded" would hide whichever content lost the race, and
+// certification would keep reflecting a result that no longer matches what
+// NodeSentinel most recently reported. Callers must reject this outright —
+// no store, no ValidationRequestRecord transition, no re-certification.
+var ErrRecordConflict = errors.New("index: record content conflict")
+
+// ErrInvalidTransition is returned by TransitionValidationRequest when the
+// record's current status has no allowed edge to the requested one (see
+// validValidationTransitions). Callers that call TransitionValidationRequest
+// speculatively — e.g. postBuildRegistration's own enqueue-ack Queued
+// transition, which can lose a race against a result that already promoted
+// the record past Queued — should check errors.Is(err, ErrInvalidTransition)
+// to log that as an expected, already-progressed outcome rather than a
+// genuine storage failure (a save() error, an I/O error, etc.).
+var ErrInvalidTransition = errors.New("index: invalid validation status transition")
 
 // New creates a Store backed by the JSON file at dir/vault-index.json.
 // The directory is created if it does not exist.
@@ -570,6 +594,11 @@ func (s *Store) appendToolCheckRecordLocked(r ToolCheckRecord) error {
 	}
 	for i := range s.idx.ToolCheckRecords {
 		if s.idx.ToolCheckRecords[i].CheckID == r.CheckID {
+			existing, incoming := checkRecordFingerprint(s.idx.ToolCheckRecords[i]), checkRecordFingerprint(r)
+			if existing != incoming {
+				return fmt.Errorf("%w: check_id=%q existing_fingerprint=%s incoming_fingerprint=%s",
+					ErrRecordConflict, r.CheckID, existing[:12], incoming[:12])
+			}
 			return fmt.Errorf("%w: check_id=%q", ErrDuplicateRecord, r.CheckID)
 		}
 	}
@@ -578,6 +607,77 @@ func (s *Store) appendToolCheckRecordLocked(r ToolCheckRecord) error {
 	}
 	s.idx.ToolCheckRecords = append(s.idx.ToolCheckRecords, r)
 	return nil
+}
+
+// checkRecordFingerprintFields is the semantic subset of ToolCheckRecord
+// that identifies "the same validation fact reported twice" — deliberately
+// excludes CheckID (the key being compared, not content) and CheckedAt
+// (a transport/receipt timestamp, not a fact about the validation itself).
+// ValidationRequestID/SentinelJobID ARE included: they're correlation
+// facts, not transport metadata — a redelivery of the same result must
+// still carry the same correlation, and a genuine change of either means
+// this is not the same report.
+type checkRecordFingerprintFields struct {
+	ToolSpecDigest          string
+	ImageDigest             string
+	Platform                string
+	ToolName                string
+	Version                 string
+	ValidationRequestID     string
+	SentinelJobID           string
+	Stage                   string
+	Terminal                bool
+	ValidationStatus        string
+	ValidationHash          string
+	Command                 string
+	ExitCode                int
+	ObservedIoProfile       *ObservedIoProfile
+	ObservedResourceProfile *ObservedResourceProfile
+	ContractCheck           *ContractCheck
+	FailureKind             string
+	FailureCode             string
+	Retryable               bool
+	FailureReason           string
+}
+
+// checkRecordFingerprint hashes the semantic content of r (see
+// checkRecordFingerprintFields) so appendToolCheckRecordLocked can tell a
+// safe idempotent redelivery (same CheckID, same fingerprint ->
+// ErrDuplicateRecord) apart from the same CheckID reused for a materially
+// different result (different fingerprint -> ErrRecordConflict). Uses
+// json.Marshal's deterministic field-order encoding of a fixed Go struct —
+// this only ever compares two hashes produced by this same function in this
+// same process, so canonical-across-languages encoding isn't a concern.
+//
+//nolint:gocritic // hugeParam: ToolCheckRecord by value is intentional — read-only.
+func checkRecordFingerprint(r ToolCheckRecord) string {
+	fields := checkRecordFingerprintFields{
+		ToolSpecDigest:          r.ToolSpecDigest,
+		ImageDigest:             r.ImageDigest,
+		Platform:                r.Platform,
+		ToolName:                r.ToolName,
+		Version:                 r.Version,
+		ValidationRequestID:     r.ValidationRequestID,
+		SentinelJobID:           r.SentinelJobID,
+		Stage:                   r.Stage,
+		Terminal:                r.Terminal,
+		ValidationStatus:        r.ValidationStatus,
+		ValidationHash:          r.ValidationHash,
+		Command:                 r.Command,
+		ExitCode:                r.ExitCode,
+		ObservedIoProfile:       r.ObservedIoProfile,
+		ObservedResourceProfile: r.ObservedResourceProfile,
+		ContractCheck:           r.ContractCheck,
+		FailureKind:             r.FailureKind,
+		FailureCode:             r.FailureCode,
+		Retryable:               r.Retryable,
+		FailureReason:           r.FailureReason,
+	}
+	// json.Marshal on a fixed struct type never fails (no channels/funcs/
+	// cyclic data among these field types), so the error is unreachable.
+	data, _ := json.Marshal(fields)
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 // GetToolCheckRecordByID returns the check record with the given CheckID.
@@ -649,6 +749,11 @@ func (s *Store) appendToolScanRecordLocked(r ToolScanRecord) error {
 	}
 	for i := range s.idx.ToolScanRecords {
 		if s.idx.ToolScanRecords[i].ScanID == r.ScanID {
+			existing, incoming := scanRecordFingerprint(s.idx.ToolScanRecords[i]), scanRecordFingerprint(r)
+			if existing != incoming {
+				return fmt.Errorf("%w: scan_id=%q existing_fingerprint=%s incoming_fingerprint=%s",
+					ErrRecordConflict, r.ScanID, existing[:12], incoming[:12])
+			}
 			return fmt.Errorf("%w: scan_id=%q", ErrDuplicateRecord, r.ScanID)
 		}
 	}
@@ -657,6 +762,55 @@ func (s *Store) appendToolScanRecordLocked(r ToolScanRecord) error {
 	}
 	s.idx.ToolScanRecords = append(s.idx.ToolScanRecords, r)
 	return nil
+}
+
+// scanRecordFingerprintFields/scanRecordFingerprint mirror
+// checkRecordFingerprintFields/checkRecordFingerprint — see those doc
+// comments. Excludes ScanID (the key) and ScannedAt (a receipt timestamp).
+type scanRecordFingerprintFields struct {
+	ImageDigest         string
+	ToolName            string
+	Platform            string
+	ValidationRequestID string
+	SentinelJobID       string
+	Stage               string
+	Terminal            bool
+	Scanner             string
+	ScannerVersion      string
+	DbDigest            string
+	Source              string
+	CriticalCount       int
+	HighCount           int
+	MediumCount         int
+	LowCount            int
+	PolicyMode          string
+	PolicyResult        string
+}
+
+//nolint:gocritic // hugeParam: ToolScanRecord by value is intentional — read-only.
+func scanRecordFingerprint(r ToolScanRecord) string {
+	fields := scanRecordFingerprintFields{
+		ImageDigest:         r.ImageDigest,
+		ToolName:            r.ToolName,
+		Platform:            r.Platform,
+		ValidationRequestID: r.ValidationRequestID,
+		SentinelJobID:       r.SentinelJobID,
+		Stage:               r.Stage,
+		Terminal:            r.Terminal,
+		Scanner:             r.Scanner,
+		ScannerVersion:      r.ScannerVersion,
+		DbDigest:            r.DbDigest,
+		Source:              r.Source,
+		CriticalCount:       r.CriticalCount,
+		HighCount:           r.HighCount,
+		MediumCount:         r.MediumCount,
+		LowCount:            r.LowCount,
+		PolicyMode:          r.PolicyMode,
+		PolicyResult:        r.PolicyResult,
+	}
+	data, _ := json.Marshal(fields)
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 // GetToolScanRecordByID returns the scan record with the given ScanID.
@@ -858,8 +1012,18 @@ func (s *Store) GetValidationRequestRecord(validationRequestID string) (Validati
 // any edge not listed here (e.g. Succeeded -> Running, Failed -> Queued),
 // so a caller applying a stale/out-of-order update cannot silently corrupt
 // a record that has already reached a terminal or in-progress status.
+// EnqueuePending -> Running exists for a real race, not as a design nicety:
+// NodeSentinel can execute a job and submit its result before NodeVault's
+// own postBuildRegistration has processed the enqueue response and driven
+// this record to Queued. Without this edge, a result arriving that early
+// would have both its Running promotion and any terminal transition
+// silently rejected (see applyValidationCorrelationLocked), orphaning the
+// record at EnqueuePending forever. Once here, forward progress is
+// one-way: Queued has no edge sourced from Running/Succeeded/Failed, so a
+// late-arriving enqueue ACK's own Queued transition attempt is rejected by
+// this same graph instead of regressing a record that already moved on.
 var validValidationTransitions = map[ValidationStatus][]ValidationStatus{
-	ValidationEnqueuePending: {ValidationQueued, ValidationUnavailable},
+	ValidationEnqueuePending: {ValidationQueued, ValidationUnavailable, ValidationRunning},
 	ValidationUnavailable:    {ValidationEnqueuePending},
 	ValidationQueued:         {ValidationRunning, ValidationFailed, ValidationInterrupted},
 	ValidationRunning:        {ValidationSucceeded, ValidationFailed, ValidationInterrupted},
@@ -910,7 +1074,7 @@ func (s *Store) transitionValidationRequestLocked(idx int, to ValidationStatus, 
 		}
 	}
 	if !allowed {
-		return fmt.Errorf("index: invalid validation status transition %s -> %s", current, to)
+		return fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, current, to)
 	}
 
 	if mutate != nil {

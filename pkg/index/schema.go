@@ -344,11 +344,13 @@ type ToolScanRecord struct {
 
 	// PolicyMode: "record_only" | "gate_critical" | "gate_high"
 	PolicyMode string `json:"policy_mode"`
-	// PolicyResult: "pass" | "warning" | "blocked" | "not-available". When
-	// this record is Terminal, PolicyResult determines the correlated
-	// ValidationRequestRecord's outcome: "blocked" -> Failed, anything else
-	// -> Succeeded (a security warning or an unavailable scanner does not
-	// fail the overall validation — see pkg/catalogrest's ingest handler).
+	// PolicyResult: "" | "passed" | "warning" | "blocked" | "not-available"
+	// (see pkg/catalogrest's isValidPolicyResult — empty is accepted for
+	// backward compatibility, anything else outside this set is rejected at
+	// ingest). When this record is Terminal, PolicyResult determines the
+	// correlated ValidationRequestRecord's outcome: "blocked" -> Failed,
+	// anything else -> Succeeded (a security warning or an unavailable
+	// scanner does not fail the overall validation).
 	PolicyResult string `json:"policy_result"`
 
 	ScannedAt time.Time `json:"scanned_at"`

@@ -1,9 +1,10 @@
-# Accepted-risk exceptions for scripts/govulncheck-gate.sh.
+# Accepted-risk exceptions for cmd/govulncheckgate.
 #
 # A call-graph-reachable finding from `govulncheck -format json` is allowed
 # through the CI gate ONLY if every field below matches AND `expires` is in
 # the future. Anything else (unlisted finding, module/package mismatch,
-# expired entry) fails CI — see scripts/govulncheck-gate.sh.
+# expired entry) fails CI — see cmd/govulncheckgate (invoked by CI and
+# `make vuln`).
 exceptions:
   - id: GO-2026-5932
     module: golang.org/x/crypto

@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"time"
@@ -72,10 +73,24 @@ func (g *GC) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := g.RunOnce(); err != nil {
-				slog.Error("package cache GC error", "err", err)
-			}
+			g.runTick()
 		}
+	}
+}
+
+// runTick runs one GC pass, recovering a panic so a single bad tick logs
+// loudly (with a stack trace) instead of crashing the whole process — this
+// loop runs in its own detached goroutine with no caller to catch a panic,
+// and NodeVault runs single-replica, so an unrecovered panic here would take
+// every other in-flight build/RPC down with it.
+func (g *GC) runTick() {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("package cache GC panic recovered", "panic", r, "stack", string(debug.Stack()))
+		}
+	}()
+	if err := g.RunOnce(); err != nil {
+		slog.Error("package cache GC error", "err", err)
 	}
 }
 

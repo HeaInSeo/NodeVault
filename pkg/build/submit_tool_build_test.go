@@ -773,3 +773,52 @@ func TestSubmitToolBuild_LatestAliasPushFails_BuildStillSucceeds(t *testing.T) {
 		t.Fatalf("final status = %q, want Succeeded despite latest alias push failure", last.GetStatus())
 	}
 }
+
+// panicBuilder panics instead of returning, simulating an unexpected bug deep
+// in the podbridge5/Buildah call chain (runSubmittedBuild runs detached from
+// the gRPC call in its own goroutine, so nothing else would catch this).
+type panicBuilder struct{}
+
+func (panicBuilder) Build(
+	context.Context, string, string,
+) (imageID, digest string, layerCacheHit bool, err error) {
+	panic("simulated unexpected builder failure")
+}
+
+func (panicBuilder) PushTag(context.Context, string, string) (string, error) {
+	return "", nil
+}
+
+func (panicBuilder) Close() error { return nil }
+
+// TestSubmitToolBuild_BuilderPanic_RecoveredAsFailedBuild verifies a panic
+// inside the detached build goroutine is recovered, the build is marked
+// Failed (not left stuck, not silently dropped), and — most importantly —
+// the test process itself survives. An unrecovered panic here would crash
+// the whole `go test` binary rather than fail an assertion, so reaching any
+// assertion below is itself part of what this test is checking.
+func TestSubmitToolBuild_BuilderPanic_RecoveredAsFailedBuild(t *testing.T) {
+	svc := newSubmitTestService(t)
+	svc.builder = panicBuilder{}
+
+	if _, err := svc.SubmitToolBuild(context.Background(), &nfv1.SubmitToolBuildRequest{
+		RequestId: "build-panic-1", ToolSpecDigest: "spec-123",
+	}); err != nil {
+		t.Fatalf("SubmitToolBuild: %v", err)
+	}
+	stream := newFakeStream()
+	if err := svc.WatchToolBuild(&nfv1.WatchToolBuildRequest{BuildId: "build-panic-1"}, stream); err != nil {
+		t.Fatalf("WatchToolBuild: %v", err)
+	}
+	last := stream.events[len(stream.events)-1]
+	if last.GetStatus() != string(buildstate.StatusFailed) {
+		t.Fatalf("final status = %q, want Failed after recovered panic", last.GetStatus())
+	}
+	got, err := svc.indexStore.GetToolBuildRecordByBuildID("build-panic-1")
+	if err != nil {
+		t.Fatalf("GetToolBuildRecordByBuildID: %v", err)
+	}
+	if !strings.Contains(got.FailureReason, "panicked") {
+		t.Errorf("FailureReason = %q, want it to mention the recovered panic", got.FailureReason)
+	}
+}

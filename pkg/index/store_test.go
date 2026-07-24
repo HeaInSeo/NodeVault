@@ -768,11 +768,11 @@ func TestNewIndex_StampsCurrentSchemaVersion(t *testing.T) {
 	// in-memory struct for a not-yet-existing file; the file is only created
 	// on the first write. Force that write so there's something on disk to
 	// inspect the stamped schema_version of.
-	if err := s.CreateValidationRequestRecord(index.ValidationRequestRecord{ValidationRequestID: "vr-stamp-check"}); err != nil {
+	if err = s.CreateValidationRequestRecord(index.ValidationRequestRecord{ValidationRequestID: "vr-stamp-check"}); err != nil {
 		t.Fatalf("CreateValidationRequestRecord: %v", err)
 	}
 
-	data, err := os.ReadFile(dir + "/vault-index.json")
+	data, err := os.ReadFile(dir + "/vault-index.json") //nolint:gosec // G304: dir is t.TempDir(), not user input.
 	if err != nil {
 		t.Fatalf("read vault-index.json: %v", err)
 	}

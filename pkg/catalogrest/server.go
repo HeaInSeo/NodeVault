@@ -480,7 +480,7 @@ func (s *Server) handleSubmitCheckRecord(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	rec := index.ToolCheckRecord{
+	rec := index.ToolCheckRecord{ //nolint:dupl // mirrors handleSubmitScanRecord — distinct types.
 		CheckID:             req.CheckID,
 		ToolSpecDigest:      req.ToolSpecDigest,
 		ImageDigest:         req.ImageDigest,
@@ -529,7 +529,7 @@ func (s *Server) handleSubmitCheckRecord(w http.ResponseWriter, r *http.Request)
 	succeeded := req.ValidationStatus == "succeeded"
 	if err := s.store.AppendToolCheckRecordCorrelated(
 		rec, req.ValidationRequestID, req.SentinelJobID, req.Terminal, succeeded, req.FailureReason,
-	); err != nil {
+	); err != nil { //nolint:dupl // mirrors scan-record handling below.
 		if errors.Is(err, index.ErrRecordConflict) {
 			slog.Warn("check record content conflict — rejecting", "check_id", req.CheckID,
 				"validation_request_id", req.ValidationRequestID, "sentinel_job_id", req.SentinelJobID, "err", err)
@@ -660,7 +660,7 @@ func (s *Server) handleSubmitScanRecord(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	rec := index.ToolScanRecord{
+	rec := index.ToolScanRecord{ //nolint:dupl // mirrors handleSubmitCheckRecord's record mapping — distinct types.
 		ScanID:              req.ScanID,
 		ImageDigest:         req.ImageDigest,
 		ToolName:            req.ToolName,
@@ -685,7 +685,7 @@ func (s *Server) handleSubmitScanRecord(w http.ResponseWriter, r *http.Request) 
 	succeeded := terminalSucceededForPolicyResult(req.PolicyResult)
 	if err := s.store.AppendToolScanRecordCorrelated(
 		rec, req.ValidationRequestID, req.SentinelJobID, req.Terminal, succeeded,
-	); err != nil {
+	); err != nil { //nolint:dupl // mirrors check-record handling above.
 		if errors.Is(err, index.ErrRecordConflict) {
 			slog.Warn("scan record content conflict — rejecting", "scan_id", req.ScanID,
 				"validation_request_id", req.ValidationRequestID, "sentinel_job_id", req.SentinelJobID, "err", err)

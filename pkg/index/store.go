@@ -587,7 +587,9 @@ func (s *Store) AppendToolCheckRecordCorrelated(
 	return s.save()
 }
 
-//nolint:gocritic // hugeParam: ToolCheckRecord by value is intentional — callers own their copy.
+// dupl: mirrors appendToolScanRecordLocked, distinct types. gocritic: by-value is intentional.
+//
+//nolint:dupl,gocritic
 func (s *Store) appendToolCheckRecordLocked(r ToolCheckRecord) error {
 	if r.CheckID == "" {
 		return errors.New("index: CheckID must not be empty")
@@ -1064,7 +1066,9 @@ func (s *Store) findValidationRequestIndex(validationRequestID string) int {
 // ValidationRequestRecords[idx], without saving — callers hold s.mu and
 // call s.save() themselves once, possibly after other locked writes in the
 // same critical section (see AppendToolCheckRecordCorrelated).
-func (s *Store) transitionValidationRequestLocked(idx int, to ValidationStatus, mutate func(*ValidationRequestRecord)) error {
+func (s *Store) transitionValidationRequestLocked(
+	idx int, to ValidationStatus, mutate func(*ValidationRequestRecord),
+) error {
 	current := s.idx.ValidationRequestRecords[idx].ValidationStatus
 	allowed := false
 	for _, next := range validValidationTransitions[current] {

@@ -584,10 +584,10 @@ func TestPostBuildRegistration_ValidationRequestRecordWriteFailure_StillEnqueues
 	if err != nil {
 		t.Fatalf("index.NewAt (svc store): %v", err)
 	}
-	if err := os.Chmod(svcIndexDir, 0o500); err != nil {
+	if err := os.Chmod(svcIndexDir, 0o500); err != nil { //nolint:gosec // G302: test dir perm, restricted on purpose to force a write failure.
 		t.Fatalf("chmod: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(svcIndexDir, 0o700) }) // let t.TempDir() clean up
+	t.Cleanup(func() { _ = os.Chmod(svcIndexDir, 0o700) }) //nolint:gosec // G302: restoring so t.TempDir() can clean up.
 
 	sentinel := &fakeSentinel{}
 	svc := &Service{registry: registrySvc, indexStore: svcIndexStore, sentinel: sentinel}

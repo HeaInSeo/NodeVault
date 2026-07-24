@@ -296,79 +296,97 @@ func (s *Service) postBuildRegistration(
 	// above), so there is always a real CasHash to enqueue against — no
 	// validation work is queued for a tool that was never registered.
 	if s.sentinel != nil {
-		imageRepo := imageRepoFromDestination(destination)
-
-		// validationRequestID is minted fresh for this call — postBuildRegistration
-		// runs at most once per build, so there is no retry path that would need
-		// to reuse an existing ID here (a future manual-revalidation entry point
-		// would mint its own ID the same way, via newValidationRequestID).
-		validationRequestID := newValidationRequestID()
-		if s.indexStore != nil {
-			if createErr := s.indexStore.CreateValidationRequestRecord(index.ValidationRequestRecord{
-				ValidationRequestID: validationRequestID,
-				BuildID:             req.GetRequestId(),
-				CasHash:             regResp.CasHash,
-				ImageDigest:         digest,
-			}); createErr != nil {
-				slog.Warn("index: failed to record validation request",
-					"validation_request_id", validationRequestID, "err", createErr)
-			}
-		}
-
-		enqReq := &nsv1.EnqueueValidationWorkRequest{
-			ArtifactKind:        "tool",
-			ImageRepository:     imageRepo,
-			ImageDigest:         digest,
-			ToolName:            req.GetToolName(),
-			Version:             req.GetVersion(),
-			CasHash:             regResp.CasHash,
-			RequestedActions:    []string{"smoke_run"},
-			ValidationRequestId: validationRequestID,
-		}
-		enqCtx, enqCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer enqCancel()
-		if enqResp, enqErr := s.sentinel.EnqueueValidationWork(enqCtx, enqReq); enqErr != nil {
-			metrics.SentinelEnqueueFailureTotal.Add(1)
-			slog.Warn("NodeSentinel EnqueueValidationWork failed (validation deferred)", "err", enqErr)
-			logFn("sentinel enqueue failed: " + enqErr.Error())
-			if s.indexStore != nil {
-				if transErr := s.indexStore.TransitionValidationRequest(
-					validationRequestID, index.ValidationUnavailable,
-					func(r *index.ValidationRequestRecord) { r.FailureReason = enqErr.Error() },
-				); transErr != nil {
-					slog.Warn("index: failed to mark validation request unavailable",
-						"validation_request_id", validationRequestID, "err", transErr)
-				}
-			}
-		} else {
-			metrics.SentinelEnqueueSuccessTotal.Add(1)
-			slog.Info("NodeSentinel job enqueued",
-				"job_id", enqResp.JobId, "status", enqResp.Status, "validation_request_id", validationRequestID)
-			logFn("sentinel job enqueued: " + enqResp.JobId)
-			if s.indexStore != nil {
-				if transErr := s.indexStore.TransitionValidationRequest(
-					validationRequestID, index.ValidationQueued,
-					func(r *index.ValidationRequestRecord) {
-						r.SentinelJobID = enqResp.JobId
-						r.QueuedAt = time.Now().UTC()
-					},
-				); transErr != nil {
-					if errors.Is(transErr, index.ErrInvalidTransition) {
-						// Expected race, not a failure: a result already promoted
-						// this record past Queued (see index.ValidationStatus's
-						// EnqueuePending -> Running edge) before this enqueue ACK
-						// was processed.
-						slog.Info("index: validation request already progressed past Queued (result arrived first)",
-							"validation_request_id", validationRequestID)
-					} else {
-						slog.Warn("index: failed to mark validation request queued",
-							"validation_request_id", validationRequestID, "err", transErr)
-					}
-				}
-			}
-		}
+		s.enqueueSentinelValidation(req, destination, digest, regResp.CasHash, logFn)
 	}
 	return nil
+}
+
+// enqueueSentinelValidation records a durable ValidationRequestRecord and asks
+// NodeSentinel to run L3/L4 validation for the just-registered tool. Split out
+// of postBuildRegistration to keep that function's cyclomatic complexity down;
+// callers must already have confirmed s.sentinel != nil. Entirely non-fatal —
+// every failure here only affects when/whether validation eventually runs, not
+// the build/registration result already returned to the caller.
+func (s *Service) enqueueSentinelValidation(
+	req *nfv1.BuildRequest,
+	destination, digest, casHash string,
+	logFn func(string),
+) {
+	imageRepo := imageRepoFromDestination(destination)
+
+	// validationRequestID is minted fresh for this call — postBuildRegistration
+	// runs at most once per build, so there is no retry path that would need
+	// to reuse an existing ID here (a future manual-revalidation entry point
+	// would mint its own ID the same way, via newValidationRequestID).
+	validationRequestID := newValidationRequestID()
+	if s.indexStore != nil {
+		if createErr := s.indexStore.CreateValidationRequestRecord(index.ValidationRequestRecord{
+			ValidationRequestID: validationRequestID,
+			BuildID:             req.GetRequestId(),
+			CasHash:             casHash,
+			ImageDigest:         digest,
+		}); createErr != nil {
+			slog.Warn("index: failed to record validation request",
+				"validation_request_id", validationRequestID, "err", createErr)
+		}
+	}
+
+	enqReq := &nsv1.EnqueueValidationWorkRequest{
+		ArtifactKind:        "tool",
+		ImageRepository:     imageRepo,
+		ImageDigest:         digest,
+		ToolName:            req.GetToolName(),
+		Version:             req.GetVersion(),
+		CasHash:             casHash,
+		RequestedActions:    []string{"smoke_run"},
+		ValidationRequestId: validationRequestID,
+	}
+	enqCtx, enqCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer enqCancel()
+	enqResp, enqErr := s.sentinel.EnqueueValidationWork(enqCtx, enqReq)
+	if enqErr != nil {
+		metrics.SentinelEnqueueFailureTotal.Add(1)
+		slog.Warn("NodeSentinel EnqueueValidationWork failed (validation deferred)", "err", enqErr)
+		logFn("sentinel enqueue failed: " + enqErr.Error())
+		if s.indexStore != nil {
+			if transErr := s.indexStore.TransitionValidationRequest(
+				validationRequestID, index.ValidationUnavailable,
+				func(r *index.ValidationRequestRecord) { r.FailureReason = enqErr.Error() },
+			); transErr != nil {
+				slog.Warn("index: failed to mark validation request unavailable",
+					"validation_request_id", validationRequestID, "err", transErr)
+			}
+		}
+		return
+	}
+
+	metrics.SentinelEnqueueSuccessTotal.Add(1)
+	slog.Info("NodeSentinel job enqueued",
+		"job_id", enqResp.JobId, "status", enqResp.Status, "validation_request_id", validationRequestID)
+	logFn("sentinel job enqueued: " + enqResp.JobId)
+	if s.indexStore == nil {
+		return
+	}
+	transErr := s.indexStore.TransitionValidationRequest(
+		validationRequestID, index.ValidationQueued,
+		func(r *index.ValidationRequestRecord) {
+			r.SentinelJobID = enqResp.JobId
+			r.QueuedAt = time.Now().UTC()
+		},
+	)
+	if transErr == nil {
+		return
+	}
+	if errors.Is(transErr, index.ErrInvalidTransition) {
+		// Expected race, not a failure: a result already promoted this record
+		// past Queued (see index.ValidationStatus's EnqueuePending -> Running
+		// edge) before this enqueue ACK was processed.
+		slog.Info("index: validation request already progressed past Queued (result arrived first)",
+			"validation_request_id", validationRequestID)
+		return
+	}
+	slog.Warn("index: failed to mark validation request queued",
+		"validation_request_id", validationRequestID, "err", transErr)
 }
 
 func (s *Service) buildExecution(layerCacheHit bool) *index.BuildExecution {

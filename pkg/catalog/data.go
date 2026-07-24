@@ -232,7 +232,7 @@ func (s *DataRegistryService) ListData(
 	var err error
 
 	if req.GetStableRef() != "" {
-		indexEntries, err = s.store.ListByStableRef(req.GetStableRef())
+		indexEntries, err = s.store.ListActiveByStableRef(req.GetStableRef())
 	} else {
 		indexEntries, err = s.store.ListActive()
 	}

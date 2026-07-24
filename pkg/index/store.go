@@ -166,7 +166,12 @@ func (s *Store) GetByImageDigest(digest string) (Entry, error) {
 	return Entry{}, fmt.Errorf("%w: image_digest=%q", ErrNotFound, digest)
 }
 
-// ListByStableRef returns all entries with the given stableRef.
+// ListByStableRef returns all entries with the given stableRef, regardless of
+// lifecycle_phase. It intentionally does NOT enforce the Active-only Catalog
+// exposure rule, and as of gap #19 it has no production callers —
+// pkg/certification now correlates by ImageDigest (GetByImageDigest). Any
+// caller that serves results to an external client (REST/gRPC listing) must
+// use ListActiveByStableRef instead.
 // Returns an empty slice (not an error) if none match.
 func (s *Store) ListByStableRef(stableRef string) ([]Entry, error) {
 	s.mu.RLock()
@@ -190,6 +195,25 @@ func (s *Store) ListActive() ([]Entry, error) {
 	var out []Entry
 	for i := range s.idx.Entries {
 		if s.idx.Entries[i].LifecyclePhase == PhaseActive {
+			out = append(out, s.idx.Entries[i])
+		}
+	}
+	return out, nil
+}
+
+// ListActiveByStableRef returns entries matching stableRef AND
+// lifecycle_phase == Active — the Catalog-exposure-safe counterpart to
+// ListByStableRef. Use this (not ListByStableRef) for any REST/gRPC listing
+// endpoint that narrows ListActive's results by stable_ref, so a
+// Retracted/Deleted/Pending entry is never exposed just because the caller
+// happened to query by stable_ref instead of listing everything.
+func (s *Store) ListActiveByStableRef(stableRef string) ([]Entry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var out []Entry
+	for i := range s.idx.Entries {
+		if s.idx.Entries[i].StableRef == stableRef && s.idx.Entries[i].LifecyclePhase == PhaseActive {
 			out = append(out, s.idx.Entries[i])
 		}
 	}

@@ -149,7 +149,7 @@ func TestHTTPMiddleware_ValidToken_CallsNext(t *testing.T) {
 	})
 	handler := grpcauth.HTTPMiddleware("s3cr3t", next)
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/webhooks/harbor", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/webhooks/harbor", http.NoBody)
 	req.Header.Set(grpcauth.HTTPHeaderName, "s3cr3t")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -170,7 +170,7 @@ func TestHTTPMiddleware_MissingToken_Rejected(t *testing.T) {
 	})
 	handler := grpcauth.HTTPMiddleware("s3cr3t", next)
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/webhooks/harbor", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/webhooks/harbor", http.NoBody)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -190,7 +190,7 @@ func TestHTTPMiddleware_WrongToken_Rejected(t *testing.T) {
 	})
 	handler := grpcauth.HTTPMiddleware("s3cr3t", next)
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/webhooks/harbor", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/webhooks/harbor", http.NoBody)
 	req.Header.Set(grpcauth.HTTPHeaderName, "wrong")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)

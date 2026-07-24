@@ -27,6 +27,17 @@ const (
 	smokeTimeout     = 5 * time.Minute
 	smokeJobTTL      = int32(120)
 	smokeJobDeadline = int64(300)
+
+	// watchReconnectBackoff bounds how quickly waitForJob retries establishing
+	// a new watch after a failed reconnect attempt (e.g. API server briefly
+	// unreachable), so repeated failures don't hammer the API server in a
+	// tight loop.
+	watchReconnectBackoff = 2 * time.Second
+
+	// reachabilityTimeout bounds the startup probe used to confirm the
+	// configured cluster is actually reachable, not just that the kubeconfig
+	// parsed successfully.
+	reachabilityTimeout = 10 * time.Second
 )
 
 // Service implements ValidateServiceServer.
@@ -47,7 +58,7 @@ func NewService() (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("k8s client: %w", err)
 	}
-	return &Service{kube: kube}, nil
+	return newServiceFromClient(kube)
 }
 
 // NewInClusterService creates a ValidateService using the in-cluster ServiceAccount
@@ -62,7 +73,43 @@ func NewInClusterService() (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("k8s client: %w", err)
 	}
+	return newServiceFromClient(kube)
+}
+
+// newServiceFromClient wraps kube in a Service, first confirming the cluster is
+// actually reachable. A well-formed kubeconfig that points at an unreachable
+// cluster (network partition, stale cert, wrong context) would otherwise only
+// surface later, per-RPC, as an ErrorMessage string — this makes that case
+// fail loud at startup, the same way a missing/malformed kubeconfig already does.
+func newServiceFromClient(kube kubernetes.Interface) (*Service, error) {
+	if err := checkReachable(kube); err != nil {
+		return nil, fmt.Errorf("cluster unreachable: %w", err)
+	}
 	return &Service{kube: kube}, nil
+}
+
+// checkReachable performs a lightweight, timeout-bounded probe against the API
+// server (ServerVersion) to verify it is actually reachable, not just that the
+// kubeconfig parsed into a valid rest.Config.
+func checkReachable(kube kubernetes.Interface) error {
+	ctx, cancel := context.WithTimeout(context.Background(), reachabilityTimeout)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := kube.Discovery().ServerVersion()
+		errCh <- err
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			return fmt.Errorf("server version: %w", err)
+		}
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("timed out after %s waiting for API server", reachabilityTimeout)
+	}
 }
 
 // DryRunJob submits a Job with server-side dry-run. Called internally by BuildService.
@@ -143,46 +190,101 @@ func (s *Service) ensureNamespace(ctx context.Context, ns string) error {
 	return nil
 }
 
-// waitForJob watches job until Succeeded or Failed (or context done).
+// waitForJob watches job until Succeeded or Failed (or context done). If the
+// watch channel closes for a reason other than the overall deadline expiring —
+// e.g. an API server restart, a network blip, or the watch's normal
+// relist/timeout expiry — this does not immediately report failure. Instead it
+// re-establishes a new watch (re-list + re-watch, the standard client-go
+// reconnect pattern) and keeps waiting, bounded by the same overall smoke-run
+// deadline. Only if re-establishing the watch keeps failing until that
+// deadline is reached do we give up, and the resulting error makes clear the
+// failure is about watch connectivity, not a known Job outcome.
 func (s *Service) waitForJob(ctx context.Context, jobName string) *nfv1.SmokeRunResult {
 	timeoutCtx, cancel := context.WithTimeout(ctx, smokeTimeout)
 	defer cancel()
 
-	watcher, err := s.kube.BatchV1().Jobs(smokeNamespace).Watch(timeoutCtx, metav1.ListOptions{
+	var lastReconnectErr error
+	for {
+		result, watchErr := s.watchJobOnce(timeoutCtx, jobName)
+		if result != nil {
+			return result
+		}
+		if watchErr == nil {
+			// Channel closed cleanly with no terminal event observed (relist/
+			// timeout expiry, or a dropped connection) — reconnect immediately.
+			continue
+		}
+		lastReconnectErr = watchErr
+		select {
+		case <-timeoutCtx.Done():
+			return &nfv1.SmokeRunResult{
+				Success: false,
+				ErrorMessage: fmt.Sprintf(
+					"smoke run watch reconnect failed repeatedly (job outcome unknown): %v",
+					lastReconnectErr,
+				),
+			}
+		case <-time.After(watchReconnectBackoff):
+		}
+	}
+}
+
+// watchJobOnce establishes a single watch session on jobName and consumes
+// events from it until either a terminal outcome is reached (Job
+// succeeded/failed/deleted, or the overall context is done) or the watch
+// channel closes. It returns:
+//   - (result, nil) when a terminal outcome was reached — the caller should
+//     return result directly.
+//   - (nil, nil) when the channel closed without a terminal event — the caller
+//     should reconnect.
+//   - (nil, err) when the watch could not even be established — the caller
+//     should retry after a backoff, bounded by the overall deadline.
+func (s *Service) watchJobOnce(ctx context.Context, jobName string) (*nfv1.SmokeRunResult, error) {
+	watcher, err := s.kube.BatchV1().Jobs(smokeNamespace).Watch(ctx, metav1.ListOptions{
 		FieldSelector: "metadata.name=" + jobName,
 	})
 	if err != nil {
-		return &nfv1.SmokeRunResult{Success: false, ErrorMessage: "watch smoke job: " + err.Error()}
+		return nil, fmt.Errorf("watch smoke job: %w", err)
 	}
 	defer watcher.Stop()
 
 	for {
 		select {
-		case <-timeoutCtx.Done():
-			return &nfv1.SmokeRunResult{Success: false, ErrorMessage: "smoke run timed out"}
+		case <-ctx.Done():
+			return &nfv1.SmokeRunResult{Success: false, ErrorMessage: "smoke run timed out"}, nil
 		case ev, ok := <-watcher.ResultChan():
 			if !ok {
-				return &nfv1.SmokeRunResult{Success: false, ErrorMessage: "watch channel closed"}
+				return nil, nil
 			}
-			if ev.Type == watch.Deleted {
-				return &nfv1.SmokeRunResult{Success: false, ErrorMessage: "smoke job deleted unexpectedly"}
-			}
-			j, ok := ev.Object.(*batchv1.Job)
-			if !ok {
-				continue
-			}
-			for _, cond := range j.Status.Conditions {
-				if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
-					slog.Warn("smoke run failed", "job", jobName, "msg", cond.Message)
-					return &nfv1.SmokeRunResult{Success: false, ErrorMessage: cond.Message}
-				}
-				if cond.Type == batchv1.JobComplete && cond.Status == corev1.ConditionTrue {
-					slog.Info("smoke run succeeded", "job", jobName)
-					return &nfv1.SmokeRunResult{Success: true, ExitCode: 0}
-				}
+			if result := handleJobEvent(jobName, ev); result != nil {
+				return result, nil
 			}
 		}
 	}
+}
+
+// handleJobEvent inspects a single watch event and returns a terminal
+// SmokeRunResult if the event indicates the Job finished (or was deleted), or
+// nil if waiting should continue.
+func handleJobEvent(jobName string, ev watch.Event) *nfv1.SmokeRunResult {
+	if ev.Type == watch.Deleted {
+		return &nfv1.SmokeRunResult{Success: false, ErrorMessage: "smoke job deleted unexpectedly"}
+	}
+	j, ok := ev.Object.(*batchv1.Job)
+	if !ok {
+		return nil
+	}
+	for _, cond := range j.Status.Conditions {
+		if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
+			slog.Warn("smoke run failed", "job", jobName, "msg", cond.Message)
+			return &nfv1.SmokeRunResult{Success: false, ErrorMessage: cond.Message}
+		}
+		if cond.Type == batchv1.JobComplete && cond.Status == corev1.ConditionTrue {
+			slog.Info("smoke run succeeded", "job", jobName)
+			return &nfv1.SmokeRunResult{Success: true, ExitCode: 0}
+		}
+	}
+	return nil
 }
 
 // collectLogs retrieves logs from the first pod of the smoke job.

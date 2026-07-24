@@ -2,13 +2,19 @@ package validate
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/watch"
+	discoveryfake "k8s.io/client-go/discovery/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
@@ -257,5 +263,125 @@ func TestEnsureNamespace_ExistingNamespace(t *testing.T) {
 
 	if err := svc.ensureNamespace(context.Background(), "pre-existing"); err != nil {
 		t.Fatalf("ensureNamespace for pre-existing ns: %v", err)
+	}
+}
+
+// ─── waitForJob watch reconnect (Bug 1) ───────────────────────────────────────
+
+// TestWaitForJob_ReconnectsAfterWatchChannelCloses simulates a watch channel
+// that closes mid-wait for a reason unrelated to context cancellation (e.g. an
+// API server restart or the watch's normal relist/timeout expiry). It asserts
+// that waitForJob re-establishes a new watch instead of immediately reporting a
+// false-negative failure, and that it succeeds once the second watch delivers
+// the Job's actual completion event.
+func TestWaitForJob_ReconnectsAfterWatchChannelCloses(t *testing.T) {
+	kube := fake.NewSimpleClientset()
+	svc := &Service{kube: kube}
+
+	var watchCalls int
+	kube.PrependWatchReactor("jobs", func(_ k8stesting.Action) (bool, watch.Interface, error) {
+		watchCalls++
+		if watchCalls == 1 {
+			// First watch: simulate a dropped/expired connection by handing back
+			// an already-closed watcher, so ResultChan() reports ok=false
+			// immediately with no terminal event ever observed.
+			w := watch.NewFake()
+			w.Stop()
+			return true, w, nil
+		}
+		// Second (reconnected) watch: deliver the real completion event.
+		w := watch.NewFake()
+		go func() {
+			job := &batchv1.Job{
+				ObjectMeta: metav1.ObjectMeta{Name: "smoke-recon"},
+				Status: batchv1.JobStatus{
+					Conditions: []batchv1.JobCondition{
+						{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+					},
+				},
+			}
+			w.Modify(job)
+		}()
+		return true, w, nil
+	})
+
+	result := svc.waitForJob(context.Background(), "smoke-recon")
+
+	if !result.Success {
+		t.Fatalf("expected success after watch reconnect, got: %+v", result)
+	}
+	if watchCalls < 2 {
+		t.Fatalf("expected waitForJob to re-establish the watch at least once, got %d Watch() calls", watchCalls)
+	}
+}
+
+// TestWaitForJob_ReconnectFailureRespectsDeadline confirms that when watch
+// re-establishment itself keeps failing (e.g. the API server is genuinely
+// unreachable), waitForJob does not retry forever — it gives up once the
+// overall smoke-run deadline passes, and the error clearly distinguishes a
+// reconnect failure from a known Job outcome.
+func TestWaitForJob_ReconnectFailureRespectsDeadline(t *testing.T) {
+	kube := fake.NewSimpleClientset()
+	svc := &Service{kube: kube}
+
+	kube.PrependWatchReactor("jobs", func(_ k8stesting.Action) (bool, watch.Interface, error) {
+		return true, nil, errors.New("connection refused")
+	})
+
+	// waitForJob internally bounds itself to smokeTimeout (5m) via ctx, but we
+	// don't want this test to take 5 minutes. Pass an already-short-lived
+	// parent context so the overall deadline is reached quickly.
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	result := svc.waitForJob(ctx, "smoke-unreachable")
+	elapsed := time.Since(start)
+
+	if result.Success {
+		t.Fatal("expected failure when watch reconnect keeps failing")
+	}
+	if !strings.Contains(result.ErrorMessage, "reconnect") {
+		t.Errorf("ErrorMessage should distinguish reconnect failure from a Job outcome, got: %q", result.ErrorMessage)
+	}
+	if elapsed > 5*time.Second {
+		t.Errorf("waitForJob should give up around the deadline, took %s", elapsed)
+	}
+}
+
+// ─── reachability check (Bug 2) ───────────────────────────────────────────────
+
+// TestNewServiceFromClient_UnreachableCluster confirms that a well-formed but
+// unreachable client (ServerVersion probe fails) causes construction to fail,
+// distinct from today's success-with-a-broken-client behavior.
+func TestNewServiceFromClient_UnreachableCluster(t *testing.T) {
+	kube := fake.NewSimpleClientset()
+	fakeDiscovery, ok := kube.Discovery().(*discoveryfake.FakeDiscovery)
+	if !ok {
+		t.Fatalf("expected *discoveryfake.FakeDiscovery, got %T", kube.Discovery())
+	}
+	fakeDiscovery.PrependReactor("get", "version", func(_ k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("dial tcp: i/o timeout")
+	})
+
+	svc, err := newServiceFromClient(kube)
+	if err == nil {
+		t.Fatal("expected an error when the cluster is unreachable")
+	}
+	if svc != nil {
+		t.Error("expected a nil Service when the reachability probe fails")
+	}
+}
+
+// TestNewServiceFromClient_Reachable confirms the happy path still succeeds.
+func TestNewServiceFromClient_Reachable(t *testing.T) {
+	kube := fake.NewSimpleClientset()
+
+	svc, err := newServiceFromClient(kube)
+	if err != nil {
+		t.Fatalf("newServiceFromClient: %v", err)
+	}
+	if svc == nil {
+		t.Fatal("expected a non-nil Service")
 	}
 }

@@ -222,7 +222,46 @@ jobs:
           retention-days: 14
 
   # ──────────────────────────────────────────────────────────────────
-  # 4. 취약점 스캔 (govulncheck)
+  # 4. Coverage regression (pkg/ only vs. checked-in baseline)
+  #
+  # NOT a required check yet (see docs/COVERAGE_POLICY.md, issue #50) — this
+  # job is allowed to fail without blocking merge until it has been observed
+  # on real PRs and someone deliberately promotes it in the branch ruleset.
+  # ──────────────────────────────────────────────────────────────────
+  coverage-regression:
+    name: Coverage Regression
+    needs: test-unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+          cache: true
+
+      - name: Download coverage profile
+        uses: actions/download-artifact@v7
+        with:
+          name: coverage-${{ github.run_id }}
+
+      - name: Check coverage regression
+        run: |
+          set -euo pipefail
+          go run ./cmd/coveragegate -profile coverage.out | tee coverage-regression.txt
+
+      - name: Upload coverage regression report
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: coverage-regression-${{ github.run_id }}
+          path: coverage-regression.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ──────────────────────────────────────────────────────────────────
+  # 5. 취약점 스캔 (govulncheck)
   # ──────────────────────────────────────────────────────────────────
   vuln-scan:
     name: Vulnerability Scan (govulncheck)

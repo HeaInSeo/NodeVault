@@ -1,0 +1,13 @@
+# pkg/ coverage baseline for cmd/coveragegate (NodeVault issue #50).
+#
+# baseline_percent is the statement-weighted aggregate coverage of packages
+# under pkg/ only (excludes protos/ generated stubs and cmd/ entrypoint
+# wiring — see docs/COVERAGE_POLICY.md). Measured from `main` at commit
+# 30c30ff (2026-07-24) via:
+#   go test -coverprofile=coverage.out -covermode=atomic ./...
+#   go run ./cmd/coveragegate -profile coverage.out
+#
+# Update only via a reviewed PR when coverage has genuinely and durably
+# improved — do not lower it to make a regressing PR pass.
+baseline_percent: 69.2
+tolerance_percent: 1.0

@@ -32,7 +32,7 @@ spec:
     spec:
       containers:
         - name: nodepalette
-          image: harbor.10.113.24.96.nip.io/nodevault/nodepalette:latest
+          image: harbor.lab.local/nodevault/nodepalette:latest
           imagePullPolicy: Always
           ports:
             - name: http
@@ -82,6 +82,10 @@ spec:
 ---
 # Cilium HTTPRoute — NodePalette REST 엔드포인트 외부 노출
 # ⚠ 현재 미사용 (Deployment 미사용이므로)
+# ⚠ hostname: 아래 nip.io 주소는 stale 컨벤션이다 — Harbor는 이미
+#   harbor.lab.local(CoreDNS 등록, infra-lab issue #34)로 전환됐다. 이
+#   manifest를 실제로 활성화하기 전에 infra-lab과 조율해 실제 CoreDNS에
+#   등록된 hostname으로 교체할 것 (추측으로 새 hostname을 넣지 않았다).
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:

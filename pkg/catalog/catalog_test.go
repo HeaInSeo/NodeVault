@@ -341,6 +341,33 @@ func TestListTools_StableRefFilter(t *testing.T) {
 	}
 }
 
+// TestListTools_StableRefFilter_ExcludesRetracted is the regression test for
+// the Catalog-exposure bug where the stable_ref-filtered branch of ListTools
+// bypassed the Active-only rule the unfiltered branch already enforced (see
+// TestRetractTool_TransitionsPhase, which only covers the unfiltered case).
+func TestListTools_StableRefFilter_ExcludesRetracted(t *testing.T) {
+	svc := newTestService(t)
+
+	reg, err := svc.RegisterTool(t.Context(), &nfv1.RegisterToolRequest{
+		ToolName: "bwa", Version: "1.0", Digest: "sha256:000",
+		ImageUri: "registry.example.com/bwa:1.0",
+	})
+	if err != nil {
+		t.Fatalf("RegisterTool: %v", err)
+	}
+	if _, retractErr := svc.RetractTool(t.Context(), &nfv1.RetractToolRequest{CasHash: reg.CasHash}); retractErr != nil {
+		t.Fatalf("RetractTool: %v", retractErr)
+	}
+
+	resp, err := svc.ListTools(t.Context(), &nfv1.ListToolsRequest{StableRef: "bwa@1.0"})
+	if err != nil {
+		t.Fatalf("ListTools with stable_ref filter: %v", err)
+	}
+	if len(resp.Tools) != 0 {
+		t.Errorf("expected a retracted tool to be excluded from stable_ref lookup, got %d", len(resp.Tools))
+	}
+}
+
 // TestListTools_ArtifactKindFilter verifies that artifact_kind filter works.
 func TestListTools_ArtifactKindFilter(t *testing.T) {
 	svc := newTestService(t)

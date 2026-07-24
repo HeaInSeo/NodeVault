@@ -130,6 +130,70 @@ func TestListByStableRef_NoMatch_EmptySlice(t *testing.T) {
 	}
 }
 
+// TestListByStableRef_IncludesNonActive verifies ListByStableRef is
+// intentionally NOT Active-only — it's an internal lookup helper, not a
+// Catalog-exposure listing. ListActiveByStableRef is the exposure-safe
+// counterpart; see its tests below.
+func TestListByStableRef_IncludesNonActive(t *testing.T) {
+	s := newStore(t)
+	retracted := toolEntry("hash-retracted", "bwa-mem2@2.2.1")
+	retracted.LifecyclePhase = index.PhaseRetracted
+	if err := s.Append(retracted); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	got, err := s.ListByStableRef("bwa-mem2@2.2.1")
+	if err != nil {
+		t.Fatalf("ListByStableRef: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected the retracted entry to still be returned, got %d entries", len(got))
+	}
+}
+
+// ── ListActiveByStableRef ─────────────────────────────────────────────────────
+
+// TestListActiveByStableRef_ExcludesNonActive is the regression test for the
+// Catalog-exposure bug: querying by stable_ref must apply the same
+// Active-only rule as the unfiltered ListActive() listing, not silently
+// bypass it.
+func TestListActiveByStableRef_ExcludesNonActive(t *testing.T) {
+	s := newStore(t)
+	active := toolEntry("hash-active", "bwa-mem2@2.2.1")
+	if err := s.Append(active); err != nil {
+		t.Fatalf("Append active: %v", err)
+	}
+	retracted := toolEntry("hash-retracted", "bwa-mem2@2.2.1")
+	retracted.LifecyclePhase = index.PhaseRetracted
+	if err := s.Append(retracted); err != nil {
+		t.Fatalf("Append retracted: %v", err)
+	}
+	pending := toolEntry("hash-pending", "bwa-mem2@2.2.1")
+	pending.LifecyclePhase = index.PhasePending
+	if err := s.Append(pending); err != nil {
+		t.Fatalf("Append pending: %v", err)
+	}
+
+	got, err := s.ListActiveByStableRef("bwa-mem2@2.2.1")
+	if err != nil {
+		t.Fatalf("ListActiveByStableRef: %v", err)
+	}
+	if len(got) != 1 || got[0].CasHash != "hash-active" {
+		t.Fatalf("expected only the Active entry, got %+v", got)
+	}
+}
+
+func TestListActiveByStableRef_NoMatch_EmptySlice(t *testing.T) {
+	s := newStore(t)
+	got, err := s.ListActiveByStableRef("nonexistent@1.0")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected empty slice, got %d entries", len(got))
+	}
+}
+
 // ── ListActive ────────────────────────────────────────────────────────────────
 
 func TestListActive_LifecyclePhaseOnly(t *testing.T) {

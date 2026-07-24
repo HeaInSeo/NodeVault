@@ -149,7 +149,7 @@ func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 	var entries []index.Entry
 	var err error
 	if stableRef != "" {
-		entries, err = s.store.ListByStableRef(stableRef)
+		entries, err = s.store.ListActiveByStableRef(stableRef)
 	} else {
 		entries, err = s.store.ListActive()
 	}
@@ -189,6 +189,13 @@ func (s *Server) handleGetTool(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		http.Error(w, "index error", http.StatusInternalServerError)
+		return
+	}
+	if entry.LifecyclePhase != index.PhaseActive {
+		// Catalog exposure rule: Active only — a direct cas_hash lookup must
+		// not surface a Retracted/Deleted/Pending entry just because the
+		// caller happened to know its hash.
+		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 
@@ -231,7 +238,7 @@ func (s *Server) handleListData(w http.ResponseWriter, r *http.Request) {
 	var entries []index.Entry
 	var err error
 	if stableRef != "" {
-		entries, err = s.store.ListByStableRef(stableRef)
+		entries, err = s.store.ListActiveByStableRef(stableRef)
 	} else {
 		entries, err = s.store.ListActive()
 	}
@@ -270,6 +277,11 @@ func (s *Server) handleGetData(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		http.Error(w, "index error", http.StatusInternalServerError)
+		return
+	}
+	if entry.LifecyclePhase != index.PhaseActive {
+		// Catalog exposure rule: Active only — see handleGetTool.
+		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 	if entry.ArtifactKind != index.KindData {

@@ -166,6 +166,28 @@ func TestListTools_StableRefFilter(t *testing.T) {
 	}
 }
 
+// TestListTools_StableRefFilter_ExcludesRetracted is the regression test for
+// the Catalog-exposure bug where querying by stable_ref bypassed the
+// Active-only rule that the unfiltered listing already enforced.
+func TestListTools_StableRefFilter_ExcludesRetracted(t *testing.T) {
+	ts, svc := newServer(t)
+	hash := registerTool(t, svc, "bwa", "1.0")
+	if _, err := svc.RetractTool(context.Background(), &nfv1.RetractToolRequest{CasHash: hash}); err != nil {
+		t.Fatalf("RetractTool: %v", err)
+	}
+
+	resp := doGet(t, ts, ts.URL+"/v1/catalog/tools?stable_ref=bwa@1.0")
+	defer func() { _ = resp.Body.Close() }()
+
+	var body catalogrest.ListToolsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Tools) != 0 {
+		t.Errorf("expected a retracted tool to be excluded from stable_ref lookup, got %d", len(body.Tools))
+	}
+}
+
 func TestListTools_ArtifactKindFilter(t *testing.T) {
 	ts, svc := newServer(t)
 	registerTool(t, svc, "bwa", "1.0")
@@ -244,6 +266,25 @@ func TestGetTool_NotFound(t *testing.T) {
 
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status: got %d want 404", resp.StatusCode)
+	}
+}
+
+// TestGetTool_Retracted_NotFound verifies a direct cas_hash lookup enforces
+// the same Active-only exposure rule as listing — NodePalette is a
+// read-only browse surface, not an admin inspector, so a caller must not be
+// able to see a Retracted/Deleted/Pending entry just by knowing its hash.
+func TestGetTool_Retracted_NotFound(t *testing.T) {
+	ts, svc := newServer(t)
+	hash := registerTool(t, svc, "bwa", "1.0")
+	if _, err := svc.RetractTool(context.Background(), &nfv1.RetractToolRequest{CasHash: hash}); err != nil {
+		t.Fatalf("RetractTool: %v", err)
+	}
+
+	resp := doGet(t, ts, ts.URL+"/v1/catalog/tools/"+hash)
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status: got %d want 404 for a retracted tool", resp.StatusCode)
 	}
 }
 

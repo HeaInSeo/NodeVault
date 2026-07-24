@@ -20,6 +20,8 @@ package reconcile
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"runtime/debug"
 	"time"
 
 	"github.com/HeaInSeo/NodeVault/pkg/index"
@@ -158,14 +160,29 @@ func (r *Reconciler) RunFastLoop(ctx context.Context, fastInterval time.Duration
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if err := r.FastRun(ctx); err != nil && ctx.Err() == nil {
-					fmt.Printf("reconcile: fast loop error: %v\n", err)
-					metrics.ReconcileErrorTotal.Add(1)
-				}
-				metrics.ReconcileFastTotal.Add(1)
+				r.runFastTick(ctx)
 			}
 		}
 	}()
+}
+
+// runFastTick runs one FastRun pass, recovering a panic so that a single bad
+// tick logs loudly (with a stack trace) instead of crashing the whole
+// process — this loop runs in its own detached goroutine with no caller to
+// catch a panic, and NodeVault runs single-replica, so an unrecovered panic
+// here would take every other in-flight build/RPC down with it.
+func (r *Reconciler) runFastTick(ctx context.Context) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("reconcile: fast loop panic recovered", "panic", rec, "stack", string(debug.Stack()))
+			metrics.ReconcileErrorTotal.Add(1)
+		}
+	}()
+	if err := r.FastRun(ctx); err != nil && ctx.Err() == nil {
+		fmt.Printf("reconcile: fast loop error: %v\n", err)
+		metrics.ReconcileErrorTotal.Add(1)
+	}
+	metrics.ReconcileFastTotal.Add(1)
 }
 
 // RunSlowLoop starts a background goroutine that calls SlowRun every slowInterval.
@@ -179,14 +196,26 @@ func (r *Reconciler) RunSlowLoop(ctx context.Context, slowInterval time.Duration
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if err := r.SlowRun(ctx); err != nil && ctx.Err() == nil {
-					fmt.Printf("reconcile: slow loop error: %v\n", err)
-					metrics.ReconcileErrorTotal.Add(1)
-				}
-				metrics.ReconcileSlowTotal.Add(1)
+				r.runSlowTick(ctx)
 			}
 		}
 	}()
+}
+
+// runSlowTick runs one SlowRun pass, recovering a panic for the same reason
+// runFastTick does — see its comment.
+func (r *Reconciler) runSlowTick(ctx context.Context) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("reconcile: slow loop panic recovered", "panic", rec, "stack", string(debug.Stack()))
+			metrics.ReconcileErrorTotal.Add(1)
+		}
+	}()
+	if err := r.SlowRun(ctx); err != nil && ctx.Err() == nil {
+		fmt.Printf("reconcile: slow loop error: %v\n", err)
+		metrics.ReconcileErrorTotal.Add(1)
+	}
+	metrics.ReconcileSlowTotal.Add(1)
 }
 
 // ── Health judgment ───────────────────────────────────────────────────────────

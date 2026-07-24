@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"runtime/debug"
 	"time"
 
 	"google.golang.org/grpc"
@@ -235,6 +236,7 @@ func (s *Service) runSubmittedBuild(
 	ctx context.Context, cancel context.CancelFunc, rec buildstate.Record, req *nfv1.BuildRequest,
 ) {
 	defer cancel()
+	defer s.recoverSubmittedBuildPanic(rec)
 	if _, err := s.buildState.Transition(rec.BuildID, buildstate.StatusResolving, "", time.Now().UTC()); err != nil {
 		s.abandonSubmittedBuild(rec, "resolving", err)
 		return
@@ -282,6 +284,27 @@ func (s *Service) runSubmittedBuild(
 	}
 
 	s.finalizeSubmittedBuild(rec, "succeeding", buildstate.StatusSucceeded, "")
+}
+
+// recoverSubmittedBuildPanic isolates a panic inside runSubmittedBuild to the
+// one build it occurred in. This goroutine runs detached from the
+// SubmitToolBuild gRPC call that started it, so no gRPC recovery interceptor
+// ever sees a panic here — left unrecovered, it would take down the whole
+// process, including every other in-flight build and RPC on this
+// single-replica service. The panic is still loud (slog.Error with a full
+// stack trace) and the build is still marked Failed through the normal
+// finalization path; only the failure's blast radius is narrowed from
+// "process" to "this build."
+//
+//nolint:gocritic // hugeParam: by-value snapshot is intentional — read-only helper, no pointer needed.
+func (s *Service) recoverSubmittedBuildPanic(rec buildstate.Record) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	slog.Error("panic in submitted build goroutine; build marked failed, process stays up",
+		"build_id", rec.BuildID, "panic", r, "stack", string(debug.Stack()))
+	s.failSubmittedBuild(rec, fmt.Errorf("internal error: build panicked: %v", r))
 }
 
 //nolint:gocritic // hugeParam: by-value snapshot is intentional — read-only helper, no pointer needed.

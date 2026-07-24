@@ -28,6 +28,7 @@ import (
 	"github.com/HeaInSeo/NodeVault/pkg/catalog"
 	"github.com/HeaInSeo/NodeVault/pkg/catalogrest"
 	"github.com/HeaInSeo/NodeVault/pkg/certification"
+	"github.com/HeaInSeo/NodeVault/pkg/grpcauth"
 	"github.com/HeaInSeo/NodeVault/pkg/index"
 	"github.com/HeaInSeo/NodeVault/pkg/metrics"
 	"github.com/HeaInSeo/NodeVault/pkg/ping"
@@ -203,7 +204,15 @@ func run() int {
 		return 1
 	}
 
-	srv := grpc.NewServer()
+	var grpcOpts []grpc.ServerOption
+	if secret, enabled := grpcauth.FromEnv(); enabled {
+		grpcOpts = append(grpcOpts,
+			grpc.UnaryInterceptor(grpcauth.UnaryInterceptor(secret)),
+			grpc.StreamInterceptor(grpcauth.StreamInterceptor(secret)),
+		)
+	}
+	grpcauth.LogStartupState(len(grpcOpts) > 0)
+	srv := grpc.NewServer(grpcOpts...)
 
 	// PingService — Phase 0 connectivity check.
 	nfv1.RegisterPingServiceServer(srv, ping.NewHandler())
@@ -423,12 +432,21 @@ func startBackground(
 	webhookMux := catalogrest.NewMuxWithCert(store, cat, dataCat, certSvc)
 	catalogrest.RegisterWebhook(webhookMux, store, rec)
 
+	var webhookHandler http.Handler = webhookMux
+	if secret, enabled := grpcauth.FromEnv(); enabled {
+		// Reuse the same shared secret as the gRPC gate for the webhook +
+		// validation REST endpoints. If enabling this against a live Harbor,
+		// its webhook config must be updated to send this header — see
+		// pkg/grpcauth's doc comment.
+		webhookHandler = grpcauth.HTTPMiddleware(secret, webhookMux)
+	}
+
 	go func() {
 		//nolint:gosec // webhookAddr is operator-configured (NODEVAULT_WEBHOOK_ADDR)
 		slog.Info("NodeVault webhook+validation server starting", "addr", webhookAddr)
 		webhookSrv := &http.Server{
 			Addr:         webhookAddr,
-			Handler:      webhookMux,
+			Handler:      webhookHandler,
 			ReadTimeout:  10 * time.Second,
 			WriteTimeout: 10 * time.Second,
 		}

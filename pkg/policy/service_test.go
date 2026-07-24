@@ -6,14 +6,22 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
+// validWasmPayload builds a minimal (fake) module that starts with the real wasm
+// magic bytes, followed by arbitrary content, so tests can exercise the happy path
+// without shipping a real compiled wasm binary as a fixture.
+func validWasmPayload(body string) []byte {
+	return append([]byte{0x00, 0x61, 0x73, 0x6d}, []byte(body)...)
+}
+
 func TestGetPolicyBundle_ReturnsBytes(t *testing.T) {
 	dir := t.TempDir()
 	wasmPath := filepath.Join(dir, "dockguard.wasm")
-	payload := []byte("fake-wasm-bytes")
+	payload := validWasmPayload("fake-wasm-bytes")
 	if err := os.WriteFile(wasmPath, payload, 0o600); err != nil {
 		t.Fatalf("write wasm: %v", err)
 	}
@@ -36,6 +44,81 @@ func TestGetPolicyBundle_FileMissing(t *testing.T) {
 	_, err := svc.GetPolicyBundle(context.Background(), &nfv1.GetPolicyBundleRequest{})
 	if err == nil {
 		t.Fatal("expected error for missing file, got nil")
+	}
+}
+
+func TestGetPolicyBundle_VersionTracksModTime(t *testing.T) {
+	dir := t.TempDir()
+
+	oldPath := filepath.Join(dir, "old.wasm")
+	if err := os.WriteFile(oldPath, validWasmPayload("old"), 0o600); err != nil {
+		t.Fatalf("write old wasm: %v", err)
+	}
+	oldTime := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(oldPath, oldTime, oldTime); err != nil {
+		t.Fatalf("chtimes old: %v", err)
+	}
+
+	newPath := filepath.Join(dir, "new.wasm")
+	if err := os.WriteFile(newPath, validWasmPayload("new"), 0o600); err != nil {
+		t.Fatalf("write new wasm: %v", err)
+	}
+	newTime := time.Now()
+	if err := os.Chtimes(newPath, newTime, newTime); err != nil {
+		t.Fatalf("chtimes new: %v", err)
+	}
+
+	oldSvc := &Service{wasmPath: oldPath}
+	oldResp, err := oldSvc.GetPolicyBundle(context.Background(), &nfv1.GetPolicyBundleRequest{})
+	if err != nil {
+		t.Fatalf("GetPolicyBundle(old): %v", err)
+	}
+
+	newSvc := &Service{wasmPath: newPath}
+	newResp, err := newSvc.GetPolicyBundle(context.Background(), &nfv1.GetPolicyBundleRequest{})
+	if err != nil {
+		t.Fatalf("GetPolicyBundle(new): %v", err)
+	}
+
+	if oldResp.Version == newResp.Version {
+		t.Fatalf("expected Version to differ between files with different mtimes, both got %q", oldResp.Version)
+	}
+	// Guard against the old bug where Version was hardcoded to the parent dir name
+	// (e.g. "policy" for assets/policy/dockguard.wasm) regardless of the actual build.
+	if oldResp.Version == "policy" || newResp.Version == "policy" {
+		t.Fatalf("Version looks like the old directory-name constant, not an mtime: old=%q new=%q", oldResp.Version, newResp.Version)
+	}
+	if _, err := time.Parse(time.RFC3339, newResp.Version); err != nil {
+		t.Errorf("Version %q is not RFC3339 (should match ListPolicies's BundleVersion format): %v", newResp.Version, err)
+	}
+}
+
+func TestGetPolicyBundle_EmptyFileRejected(t *testing.T) {
+	dir := t.TempDir()
+	wasmPath := filepath.Join(dir, "dockguard.wasm")
+	if err := os.WriteFile(wasmPath, []byte{}, 0o600); err != nil {
+		t.Fatalf("write empty wasm: %v", err)
+	}
+
+	svc := &Service{wasmPath: wasmPath}
+	_, err := svc.GetPolicyBundle(context.Background(), &nfv1.GetPolicyBundleRequest{})
+	if err == nil {
+		t.Fatal("expected error for empty wasm file, got nil (fake success)")
+	}
+}
+
+func TestGetPolicyBundle_TruncatedFileRejected(t *testing.T) {
+	dir := t.TempDir()
+	wasmPath := filepath.Join(dir, "dockguard.wasm")
+	// Missing the wasm magic header entirely — simulates a truncated/half-copied file.
+	if err := os.WriteFile(wasmPath, []byte("not-a-wasm-module"), 0o600); err != nil {
+		t.Fatalf("write bogus wasm: %v", err)
+	}
+
+	svc := &Service{wasmPath: wasmPath}
+	_, err := svc.GetPolicyBundle(context.Background(), &nfv1.GetPolicyBundleRequest{})
+	if err == nil {
+		t.Fatal("expected error for wasm file missing magic bytes, got nil (fake success)")
 	}
 }
 

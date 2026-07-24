@@ -20,6 +20,18 @@ var (
 
 	SentinelEnqueueSuccessTotal = expvar.NewInt("nodevault_sentinel_enqueue_success_total")
 	SentinelEnqueueFailureTotal = expvar.NewInt("nodevault_sentinel_enqueue_failure_total")
+
+	// ValidationCorrelation* counters classify how a validation result's
+	// validation_request_id resolved on ingest (see pkg/catalogrest).
+	// Matched/MissingID are expected in normal operation; Orphan and
+	// DigestMismatch indicate real problems worth alerting on — Orphan means
+	// a NodeSentinel job exists with no corresponding NodeVault record (see
+	// the known orphan-record gap from PR2-A), DigestMismatch means a
+	// result was rejected outright for referencing the wrong image.
+	ValidationCorrelationMatchedTotal        = expvar.NewInt("nodevault_validation_correlation_matched_total")
+	ValidationCorrelationMissingIDTotal      = expvar.NewInt("nodevault_validation_correlation_missing_id_total")
+	ValidationCorrelationOrphanTotal         = expvar.NewInt("nodevault_validation_correlation_orphan_total")
+	ValidationCorrelationDigestMismatchTotal = expvar.NewInt("nodevault_validation_correlation_digest_mismatch_total")
 )
 
 // StartServer starts the metrics HTTP server (non-blocking).

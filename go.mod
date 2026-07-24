@@ -19,6 +19,7 @@ require (
 	github.com/HeaInSeo/kube-slint v1.6.0
 	github.com/HeaInSeo/podbridge5 v0.1.9
 	github.com/HeaInSeo/sori v0.8.0-rc5
+	github.com/google/uuid v1.6.0
 	github.com/mattn/go-sqlite3 v1.14.45
 	github.com/openshift/imagebuilder v1.2.21
 	go.podman.io/storage v1.63.0
@@ -93,7 +94,6 @@ require (
 	github.com/google/go-containerregistry v0.21.5 // indirect
 	github.com/google/go-intervals v0.0.2 // indirect
 	github.com/google/pprof v0.0.0-20260402051712-545e8a4df936 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/mux v1.8.1 // indirect
 	github.com/gorilla/schema v1.4.1 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect

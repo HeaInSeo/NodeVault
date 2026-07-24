@@ -1,6 +1,7 @@
 package index_test
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"testing"
@@ -715,5 +716,281 @@ func TestLoad_SchemaV1File_ToolBuildAndImageSections_LoadEmptySlices(t *testing.
 	}
 	if err := s.AppendToolImageRecord(index.ToolImageRecord{ImageDigest: "sha256:after-migration"}); err != nil {
 		t.Errorf("AppendToolImageRecord after v1 load: %v", err)
+	}
+}
+
+// TestLoad_SchemaV3File_ValidationRequestSection_LoadsEmptySlice verifies
+// that a vault-index.json written before schema v4 (missing
+// validation_request_records) loads cleanly with that section empty, and
+// that a new ValidationRequestRecord can be created afterward. Regression
+// guard for the PR2-A schema bump — mirrors
+// TestLoad_SchemaV1File_ToolBuildAndImageSections_LoadEmptySlices above.
+func TestLoad_SchemaV3File_ValidationRequestSection_LoadsEmptySlice(t *testing.T) {
+	dir := t.TempDir()
+	v3JSON := `{"schema_version":3,"entries":[{"cas_hash":"hash-v3","artifact_kind":"tool","stable_ref":"bwa@1","lifecycle_phase":"Active","integrity_health":"Healthy"}]}`
+	if err := os.WriteFile(dir+"/vault-index.json", []byte(v3JSON), 0o600); err != nil {
+		t.Fatalf("write v3 fixture: %v", err)
+	}
+
+	s, err := index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("NewAt: %v", err)
+	}
+
+	if _, err := s.GetValidationRequestRecord("anything"); !errors.Is(err, index.ErrNotFound) {
+		t.Errorf("GetValidationRequestRecord on a pre-v4 file: err = %v, want ErrNotFound", err)
+	}
+
+	if err := s.CreateValidationRequestRecord(index.ValidationRequestRecord{
+		ValidationRequestID: "vr-after-migration",
+	}); err != nil {
+		t.Errorf("CreateValidationRequestRecord after v3 load: %v", err)
+	}
+}
+
+// TestNewIndex_StampsCurrentSchemaVersion is a regression guard for a bug an
+// independent review caught: schema.go's indexFile doc comment claimed
+// "schema_version >= 4: ... ValidationRequestRecords" while the schemaVersion
+// constant in this file was left at 3, so every freshly created index would
+// have been stamped with a version number one behind what the file's own
+// content actually required. Nothing currently branches on the stamped
+// number, so this produced no functional bug yet — but it would silently
+// misroute any future version-gated migration. This asserts the two stay in
+// sync going forward by checking the number actually written to disk, not
+// just the in-memory struct default.
+func TestNewIndex_StampsCurrentSchemaVersion(t *testing.T) {
+	dir := t.TempDir()
+	s, err := index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("NewAt: %v", err)
+	}
+	// NewAt alone does not write vault-index.json — load() only populates the
+	// in-memory struct for a not-yet-existing file; the file is only created
+	// on the first write. Force that write so there's something on disk to
+	// inspect the stamped schema_version of.
+	if err = s.CreateValidationRequestRecord(index.ValidationRequestRecord{ValidationRequestID: "vr-stamp-check"}); err != nil {
+		t.Fatalf("CreateValidationRequestRecord: %v", err)
+	}
+
+	data, err := os.ReadFile(dir + "/vault-index.json") //nolint:gosec // G304: dir is t.TempDir(), not user input.
+	if err != nil {
+		t.Fatalf("read vault-index.json: %v", err)
+	}
+	var stamped struct {
+		SchemaVersion int `json:"schema_version"`
+	}
+	if err := json.Unmarshal(data, &stamped); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	const wantSchemaVersion = 4 // bump alongside indexFile's doc comment in schema.go
+	if stamped.SchemaVersion != wantSchemaVersion {
+		t.Errorf("stamped schema_version = %d, want %d", stamped.SchemaVersion, wantSchemaVersion)
+	}
+}
+
+// ── ValidationRequestRecord ───────────────────────────────────────────────────
+
+func TestCreateValidationRequestRecord_Success(t *testing.T) {
+	s := newStore(t)
+
+	if err := s.CreateValidationRequestRecord(index.ValidationRequestRecord{
+		ValidationRequestID: "vr-1",
+		BuildID:             "build-1",
+		CasHash:             "hash-1",
+		ImageDigest:         "sha256:aaaa",
+	}); err != nil {
+		t.Fatalf("CreateValidationRequestRecord: %v", err)
+	}
+
+	got, err := s.GetValidationRequestRecord("vr-1")
+	if err != nil {
+		t.Fatalf("GetValidationRequestRecord: %v", err)
+	}
+	if got.ValidationStatus != index.ValidationEnqueuePending {
+		t.Errorf("ValidationStatus = %q, want %q (default)", got.ValidationStatus, index.ValidationEnqueuePending)
+	}
+	if got.RequestedAt.IsZero() {
+		t.Error("RequestedAt was not defaulted")
+	}
+	if got.BuildID != "build-1" {
+		t.Errorf("BuildID = %q, want build-1", got.BuildID)
+	}
+}
+
+func TestCreateValidationRequestRecord_EmptyID_Rejected(t *testing.T) {
+	s := newStore(t)
+	err := s.CreateValidationRequestRecord(index.ValidationRequestRecord{})
+	if err == nil {
+		t.Fatal("expected an error for empty ValidationRequestID")
+	}
+}
+
+func TestCreateValidationRequestRecord_DuplicateID_Rejected(t *testing.T) {
+	s := newStore(t)
+	rec := index.ValidationRequestRecord{ValidationRequestID: "vr-dup"}
+	if err := s.CreateValidationRequestRecord(rec); err != nil {
+		t.Fatalf("first CreateValidationRequestRecord: %v", err)
+	}
+	if err := s.CreateValidationRequestRecord(rec); err == nil {
+		t.Fatal("expected an error for a duplicate ValidationRequestID")
+	}
+}
+
+func TestGetValidationRequestRecord_NotFound(t *testing.T) {
+	s := newStore(t)
+	_, err := s.GetValidationRequestRecord("missing")
+	if !errors.Is(err, index.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestTransitionValidationRequest_EnqueuePendingToQueued_AppliesMutateAndStatus
+// exercises the success path CreateValidationRequestRecord's caller
+// actually uses: EnqueuePending -> Queued with SentinelJobID filled in.
+func TestTransitionValidationRequest_EnqueuePendingToQueued_AppliesMutateAndStatus(t *testing.T) {
+	s := newStore(t)
+	if err := s.CreateValidationRequestRecord(index.ValidationRequestRecord{ValidationRequestID: "vr-1"}); err != nil {
+		t.Fatalf("CreateValidationRequestRecord: %v", err)
+	}
+
+	err := s.TransitionValidationRequest("vr-1", index.ValidationQueued, func(r *index.ValidationRequestRecord) {
+		r.SentinelJobID = "job-123"
+	})
+	if err != nil {
+		t.Fatalf("TransitionValidationRequest: %v", err)
+	}
+
+	got, err := s.GetValidationRequestRecord("vr-1")
+	if err != nil {
+		t.Fatalf("GetValidationRequestRecord: %v", err)
+	}
+	if got.ValidationStatus != index.ValidationQueued {
+		t.Errorf("ValidationStatus = %q, want Queued", got.ValidationStatus)
+	}
+	if got.SentinelJobID != "job-123" {
+		t.Errorf("SentinelJobID = %q, want job-123", got.SentinelJobID)
+	}
+}
+
+// TestTransitionValidationRequest_InvalidEdge_Rejected is a direct
+// regression guard for the corruption scenario flagged in review: applying
+// an out-of-order or stale status update (here, a terminal Succeeded record
+// being pushed back to Running) must be rejected, not silently accepted.
+func TestTransitionValidationRequest_InvalidEdge_Rejected(t *testing.T) {
+	tests := []struct {
+		name string
+		from index.ValidationStatus
+		to   index.ValidationStatus
+	}{
+		{"succeeded cannot go back to running", index.ValidationSucceeded, index.ValidationRunning},
+		{"failed cannot go back to queued", index.ValidationFailed, index.ValidationQueued},
+		{"enqueue_pending cannot skip straight to succeeded", index.ValidationEnqueuePending, index.ValidationSucceeded},
+		{"queued cannot go back to enqueue_pending", index.ValidationQueued, index.ValidationEnqueuePending},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newStore(t)
+			if err := s.CreateValidationRequestRecord(index.ValidationRequestRecord{
+				ValidationRequestID: "vr-1",
+				ValidationStatus:    tt.from,
+			}); err != nil {
+				t.Fatalf("CreateValidationRequestRecord: %v", err)
+			}
+
+			err := s.TransitionValidationRequest("vr-1", tt.to, nil)
+			if err == nil {
+				t.Fatalf("expected an error transitioning %s -> %s, got nil", tt.from, tt.to)
+			}
+
+			got, getErr := s.GetValidationRequestRecord("vr-1")
+			if getErr != nil {
+				t.Fatalf("GetValidationRequestRecord: %v", getErr)
+			}
+			if got.ValidationStatus != tt.from {
+				t.Errorf("ValidationStatus after rejected transition = %q, want unchanged %q", got.ValidationStatus, tt.from)
+			}
+		})
+	}
+}
+
+// TestTransitionValidationRequest_EnqueuePendingToRunning_Allowed guards the
+// fix for a real race: NodeSentinel can execute a job and submit a result
+// before NodeVault's own postBuildRegistration has processed the enqueue
+// response and driven the record to Queued. Without this edge, a result
+// arriving that early would leave the record orphaned at EnqueuePending
+// forever — see applyValidationCorrelationLocked.
+func TestTransitionValidationRequest_EnqueuePendingToRunning_Allowed(t *testing.T) {
+	s := newStore(t)
+	if err := s.CreateValidationRequestRecord(index.ValidationRequestRecord{ValidationRequestID: "vr-1"}); err != nil {
+		t.Fatalf("CreateValidationRequestRecord: %v", err)
+	}
+	// Default status is EnqueuePending (see CreateValidationRequestRecord).
+	if err := s.TransitionValidationRequest("vr-1", index.ValidationRunning, nil); err != nil {
+		t.Fatalf("TransitionValidationRequest EnqueuePending -> Running: %v", err)
+	}
+	got, err := s.GetValidationRequestRecord("vr-1")
+	if err != nil {
+		t.Fatalf("GetValidationRequestRecord: %v", err)
+	}
+	if got.ValidationStatus != index.ValidationRunning {
+		t.Errorf("ValidationStatus = %q, want Running", got.ValidationStatus)
+	}
+}
+
+// TestTransitionValidationRequest_LateEnqueueAck_DoesNotRegressFromRunning
+// is the other half of the same race guard: once a fast result has already
+// promoted the record past EnqueuePending, a late-arriving enqueue ACK
+// attempting its own Queued transition must be rejected, not regress a
+// record that has already moved forward.
+func TestTransitionValidationRequest_LateEnqueueAck_DoesNotRegressFromRunning(t *testing.T) {
+	s := newStore(t)
+	if err := s.CreateValidationRequestRecord(index.ValidationRequestRecord{ValidationRequestID: "vr-1"}); err != nil {
+		t.Fatalf("CreateValidationRequestRecord: %v", err)
+	}
+	if err := s.TransitionValidationRequest("vr-1", index.ValidationRunning, nil); err != nil {
+		t.Fatalf("TransitionValidationRequest EnqueuePending -> Running: %v", err)
+	}
+
+	// Simulate the late enqueue ACK's own Queued transition attempt.
+	err := s.TransitionValidationRequest("vr-1", index.ValidationQueued, func(r *index.ValidationRequestRecord) {
+		r.SentinelJobID = "job-from-late-ack"
+	})
+	if err == nil {
+		t.Fatal("expected the late ACK's Running -> Queued transition to be rejected")
+	}
+
+	got, getErr := s.GetValidationRequestRecord("vr-1")
+	if getErr != nil {
+		t.Fatalf("GetValidationRequestRecord: %v", getErr)
+	}
+	if got.ValidationStatus != index.ValidationRunning {
+		t.Errorf("ValidationStatus = %q, want unchanged Running (must not regress to Queued)", got.ValidationStatus)
+	}
+}
+
+// TestTransitionValidationRequest_RejectedEdge_WrapsErrInvalidTransition
+// locks in the sentinel error contract callers rely on to distinguish an
+// expected, already-progressed race (see pkg/build's postBuildRegistration,
+// which logs this at Info rather than Warn) from a genuine storage failure.
+func TestTransitionValidationRequest_RejectedEdge_WrapsErrInvalidTransition(t *testing.T) {
+	s := newStore(t)
+	if err := s.CreateValidationRequestRecord(index.ValidationRequestRecord{
+		ValidationRequestID: "vr-1", ValidationStatus: index.ValidationRunning,
+	}); err != nil {
+		t.Fatalf("CreateValidationRequestRecord: %v", err)
+	}
+
+	err := s.TransitionValidationRequest("vr-1", index.ValidationQueued, nil)
+	if !errors.Is(err, index.ErrInvalidTransition) {
+		t.Fatalf("err = %v, want it to wrap ErrInvalidTransition", err)
+	}
+}
+
+func TestTransitionValidationRequest_NotFound(t *testing.T) {
+	s := newStore(t)
+	err := s.TransitionValidationRequest("missing", index.ValidationQueued, nil)
+	if !errors.Is(err, index.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }

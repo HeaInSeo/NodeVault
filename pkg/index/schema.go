@@ -270,6 +270,25 @@ type ToolCheckRecord struct {
 	ToolName       string `json:"tool_name,omitempty"`
 	Version        string `json:"version,omitempty"`
 
+	// ValidationRequestID/SentinelJobID correlate this record back to the
+	// ValidationRequestRecord NodeVault created when it enqueued this work,
+	// and to NodeSentinel's own job executing it. Empty for records
+	// submitted before this correlation existed, or by a caller that never
+	// supplied one (see AppendToolCheckRecordCorrelated's fail-open policy).
+	ValidationRequestID string `json:"validation_request_id,omitempty"`
+	SentinelJobID       string `json:"sentinel_job_id,omitempty"`
+
+	// Stage identifies which pipeline stage produced this record: "L3" |
+	// "L4" | "L5A" | "L5B" — L3/L4 failures are submitted through this same
+	// record type (see pkg/worker's l3/l4 failure reporting) rather than a
+	// separate wire format, so a validation request that dies before ever
+	// reaching L5 still gets a terminal record. Terminal marks whether this
+	// is the last record NodeSentinel will submit for the request — only a
+	// Terminal record closes out the correlated ValidationRequestRecord to
+	// Succeeded/Failed; a non-terminal one only promotes it to Running.
+	Stage    string `json:"stage,omitempty"`
+	Terminal bool   `json:"terminal,omitempty"`
+
 	// ValidationStatus: "succeeded" | "infra_failed" | "app_failed"
 	ValidationStatus string `json:"validation_status"`
 
@@ -284,8 +303,17 @@ type ToolCheckRecord struct {
 	ObservedResourceProfile *ObservedResourceProfile `json:"observed_resource_profile,omitempty"`
 	ContractCheck           *ContractCheck           `json:"contract_check,omitempty"`
 
-	FailureReason string    `json:"failure_reason,omitempty"`
-	CheckedAt     time.Time `json:"checked_at"`
+	// FailureKind/FailureCode/Retryable are set only when ValidationStatus
+	// != "succeeded": FailureKind is "infrastructure" | "application" |
+	// "policy" | "internal" — independent of Stage, since an infra-level
+	// failure (OOM, scheduling, timeout) can happen at any stage, not only
+	// the ones historically assumed infra-only.
+	FailureKind   string `json:"failure_kind,omitempty"`
+	FailureCode   string `json:"failure_code,omitempty"`
+	Retryable     bool   `json:"retryable,omitempty"`
+	FailureReason string `json:"failure_reason,omitempty"`
+
+	CheckedAt time.Time `json:"checked_at"`
 }
 
 // ToolScanRecord is the result of a NodeSentinel L5-b trivy security scan.
@@ -295,6 +323,13 @@ type ToolScanRecord struct {
 	ImageDigest string `json:"image_digest"`
 	ToolName    string `json:"tool_name,omitempty"`
 	Platform    string `json:"platform,omitempty"`
+
+	// See ToolCheckRecord's doc comments — same correlation and
+	// stage-position contract.
+	ValidationRequestID string `json:"validation_request_id,omitempty"`
+	SentinelJobID       string `json:"sentinel_job_id,omitempty"`
+	Stage               string `json:"stage,omitempty"`
+	Terminal            bool   `json:"terminal,omitempty"`
 
 	Scanner        string `json:"scanner,omitempty"`         // "trivy"
 	ScannerVersion string `json:"scanner_version,omitempty"` // "0.50.0"
@@ -309,7 +344,13 @@ type ToolScanRecord struct {
 
 	// PolicyMode: "record_only" | "gate_critical" | "gate_high"
 	PolicyMode string `json:"policy_mode"`
-	// PolicyResult: "pass" | "warning" | "blocked"
+	// PolicyResult: "" | "passed" | "warning" | "blocked" | "not-available"
+	// (see pkg/catalogrest's isValidPolicyResult — empty is accepted for
+	// backward compatibility, anything else outside this set is rejected at
+	// ingest). When this record is Terminal, PolicyResult determines the
+	// correlated ValidationRequestRecord's outcome: "blocked" -> Failed,
+	// anything else -> Succeeded (a security warning or an unavailable
+	// scanner does not fail the overall validation).
 	PolicyResult string `json:"policy_result"`
 
 	ScannedAt time.Time `json:"scanned_at"`
@@ -368,9 +409,67 @@ type ToolFunctionCatalogEntry struct {
 	ValidationHash string `json:"validation_hash,omitempty"`
 }
 
+// ValidationStatus is the lifecycle status of one NodeVault-issued
+// validation request against NodeSentinel. See ValidationRequestRecord and
+// validValidationTransitions (store.go) for the allowed state graph:
+//
+//	EnqueuePending -> Queued | Unavailable
+//	Unavailable    -> EnqueuePending            (manual/future-reconciler retry)
+//	Queued         -> Running | Failed | Interrupted
+//	Running        -> Succeeded | Failed | Interrupted
+//
+// PR2-A only ever produces EnqueuePending, Queued, and Unavailable — the
+// remaining edges are reachable once PR2-B wires NodeSentinel's result
+// records (ToolCheckRecord/ToolScanRecord) back into this status.
+type ValidationStatus string
+
+const (
+	ValidationEnqueuePending ValidationStatus = "EnqueuePending"
+	ValidationQueued         ValidationStatus = "Queued"
+	ValidationRunning        ValidationStatus = "Running"
+	ValidationSucceeded      ValidationStatus = "Succeeded"
+	ValidationFailed         ValidationStatus = "Failed"
+	ValidationUnavailable    ValidationStatus = "Unavailable"
+	ValidationInterrupted    ValidationStatus = "Interrupted"
+)
+
+// ValidationRequestRecord correlates one logical NodeSentinel validation
+// request with the build that triggered it and, once NodeSentinel
+// acknowledges it, the job executing it. Primary key: ValidationRequestID.
+//
+// ValidationRequestID identifies one logical validation request — NOT one
+// build. A single BuildID can end up with multiple ValidationRequestRecords
+// over time (re-validation after a fixture/profile change, a manual re-run,
+// a NodeSentinel implementation upgrade); BuildID is a foreign key here,
+// not the primary key, specifically so those don't collide with each other
+// or silently overwrite one another.
+type ValidationRequestRecord struct {
+	ValidationRequestID string `json:"validation_request_id"`
+
+	// BuildID is the FK into ToolBuildRecord that triggered this request.
+	BuildID string `json:"build_id,omitempty"`
+
+	CasHash        string `json:"cas_hash,omitempty"`
+	ImageDigest    string `json:"image_digest,omitempty"`
+	ToolSpecDigest string `json:"tool_spec_digest,omitempty"`
+
+	// SentinelJobID is NodeSentinel's own job identifier. Empty until
+	// EnqueueValidationWork acknowledges the request, at which point the
+	// status transitions EnqueuePending -> Queued at the same time.
+	SentinelJobID string `json:"sentinel_job_id,omitempty"`
+
+	ValidationStatus ValidationStatus `json:"validation_status"`
+	FailureReason    string           `json:"failure_reason,omitempty"`
+
+	RequestedAt time.Time `json:"requested_at"`
+	QueuedAt    time.Time `json:"queued_at,omitempty"`
+	CompletedAt time.Time `json:"completed_at,omitempty"`
+}
+
 // indexFile is the on-disk representation of the index.
 // schemaVersion 3 adds ToolCheckRecords, ToolScanRecords,
 // CertifiedToolImageRecords, and ToolFunctionCatalogEntries.
+// schemaVersion 4 adds ValidationRequestRecords.
 type indexFile struct {
 	SchemaVersion int     `json:"schema_version"`
 	Entries       []Entry `json:"entries"`
@@ -385,4 +484,7 @@ type indexFile struct {
 	ToolScanRecords            []ToolScanRecord           `json:"tool_scan_records,omitempty"`
 	CertifiedToolImageRecords  []CertifiedToolImageRecord `json:"certified_tool_image_records,omitempty"`
 	ToolFunctionCatalogEntries []ToolFunctionCatalogEntry `json:"tool_function_catalog_entries,omitempty"`
+
+	// schema_version >= 4: idempotent validation request correlation
+	ValidationRequestRecords []ValidationRequestRecord `json:"validation_request_records,omitempty"`
 }

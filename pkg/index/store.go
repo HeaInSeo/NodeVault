@@ -1,6 +1,8 @@
 package index
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,8 +16,9 @@ import (
 const (
 	// schemaVersion 3 adds ToolCheckRecords, ToolScanRecords,
 	// CertifiedToolImageRecords, and ToolFunctionCatalogEntries.
+	// schemaVersion 4 adds ValidationRequestRecords.
 	// Older files omit these fields; load() treats absent fields as empty slices.
-	schemaVersion   = 3
+	schemaVersion   = 4
 	defaultIndexDir = "assets/index"
 	indexFileName   = "vault-index.json"
 )
@@ -35,6 +38,36 @@ type Store struct {
 
 // ErrNotFound is returned when a requested entry does not exist.
 var ErrNotFound = errors.New("index: entry not found")
+
+// ErrDuplicateRecord is returned by AppendToolCheckRecord(Correlated) and
+// AppendToolScanRecord(Correlated) when a record with the same CheckID/
+// ScanID already exists. NodeSentinel's CheckID/ScanID are deterministic
+// per job (job ID is embedded in both), so a redelivery retry after a
+// network failure naturally resubmits the same ID — callers should treat
+// this as an idempotent no-op, not a genuine failure.
+var ErrDuplicateRecord = errors.New("index: record already exists")
+
+// ErrRecordConflict is returned by AppendToolCheckRecord(Correlated) and
+// AppendToolScanRecord(Correlated) when a record with the same CheckID/
+// ScanID already exists but its content fingerprint differs — see
+// checkRecordFingerprint/scanRecordFingerprint. Unlike ErrDuplicateRecord
+// (a safe idempotent redelivery of identical content), this means the same
+// ID was reused for a materially different result: silently accepting it
+// as "already recorded" would hide whichever content lost the race, and
+// certification would keep reflecting a result that no longer matches what
+// NodeSentinel most recently reported. Callers must reject this outright —
+// no store, no ValidationRequestRecord transition, no re-certification.
+var ErrRecordConflict = errors.New("index: record content conflict")
+
+// ErrInvalidTransition is returned by TransitionValidationRequest when the
+// record's current status has no allowed edge to the requested one (see
+// validValidationTransitions). Callers that call TransitionValidationRequest
+// speculatively — e.g. postBuildRegistration's own enqueue-ack Queued
+// transition, which can lose a race against a result that already promoted
+// the record past Queued — should check errors.Is(err, ErrInvalidTransition)
+// to log that as an expected, already-progressed outcome rather than a
+// genuine storage failure (a save() error, an I/O error, etc.).
+var ErrInvalidTransition = errors.New("index: invalid validation status transition")
 
 // New creates a Store backed by the JSON file at dir/vault-index.json.
 // The directory is created if it does not exist.
@@ -517,19 +550,136 @@ func (s *Store) AppendToolCheckRecord(r ToolCheckRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := s.appendToolCheckRecordLocked(r); err != nil {
+		return err
+	}
+	return s.save()
+}
+
+// AppendToolCheckRecordCorrelated stores a ToolCheckRecord and, in the same
+// locked critical section (one save() covering both), updates the
+// ValidationRequestRecord identified by validationRequestID: promotes
+// Queued -> Running (setting SentinelJobID if given), and — only when
+// terminal is true — closes it out to Succeeded (succeeded=true) or Failed
+// (succeeded=false, recording failureReason). This is what keeps "the
+// record was stored" and "the correlation status reflects it" from ever
+// observably diverging (see review guidance on PR2-B: record save and
+// ValidationRequestRecord status update must be atomic).
+//
+// validationRequestID may be empty or unknown to this store (no matching
+// ValidationRequestRecord) — both are silent no-ops here, matching the
+// fail-open correlation policy applied by the caller (pkg/catalogrest)
+// before this is ever invoked: a missing/orphan ID must not block storing
+// the record itself, only a *found* record with a mismatched image digest
+// does (and that rejection happens earlier, before this call).
+//
+//nolint:gocritic // hugeParam: ToolCheckRecord by value is intentional — callers own their copy.
+func (s *Store) AppendToolCheckRecordCorrelated(
+	r ToolCheckRecord, validationRequestID, sentinelJobID string, terminal, succeeded bool, failureReason string,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.appendToolCheckRecordLocked(r); err != nil {
+		return err
+	}
+	s.applyValidationCorrelationLocked(validationRequestID, sentinelJobID, terminal, succeeded, failureReason)
+	return s.save()
+}
+
+// dupl: mirrors appendToolScanRecordLocked, distinct types. gocritic: by-value is intentional.
+//
+//nolint:dupl,gocritic
+func (s *Store) appendToolCheckRecordLocked(r ToolCheckRecord) error {
 	if r.CheckID == "" {
 		return errors.New("index: CheckID must not be empty")
 	}
 	for i := range s.idx.ToolCheckRecords {
 		if s.idx.ToolCheckRecords[i].CheckID == r.CheckID {
-			return fmt.Errorf("index: tool check record %q already exists", r.CheckID)
+			existing, incoming := checkRecordFingerprint(s.idx.ToolCheckRecords[i]), checkRecordFingerprint(r)
+			if existing != incoming {
+				return fmt.Errorf("%w: check_id=%q existing_fingerprint=%s incoming_fingerprint=%s",
+					ErrRecordConflict, r.CheckID, existing[:12], incoming[:12])
+			}
+			return fmt.Errorf("%w: check_id=%q", ErrDuplicateRecord, r.CheckID)
 		}
 	}
 	if r.CheckedAt.IsZero() {
 		r.CheckedAt = time.Now().UTC()
 	}
 	s.idx.ToolCheckRecords = append(s.idx.ToolCheckRecords, r)
-	return s.save()
+	return nil
+}
+
+// checkRecordFingerprintFields is the semantic subset of ToolCheckRecord
+// that identifies "the same validation fact reported twice" — deliberately
+// excludes CheckID (the key being compared, not content) and CheckedAt
+// (a transport/receipt timestamp, not a fact about the validation itself).
+// ValidationRequestID/SentinelJobID ARE included: they're correlation
+// facts, not transport metadata — a redelivery of the same result must
+// still carry the same correlation, and a genuine change of either means
+// this is not the same report.
+type checkRecordFingerprintFields struct {
+	ToolSpecDigest          string
+	ImageDigest             string
+	Platform                string
+	ToolName                string
+	Version                 string
+	ValidationRequestID     string
+	SentinelJobID           string
+	Stage                   string
+	Terminal                bool
+	ValidationStatus        string
+	ValidationHash          string
+	Command                 string
+	ExitCode                int
+	ObservedIoProfile       *ObservedIoProfile
+	ObservedResourceProfile *ObservedResourceProfile
+	ContractCheck           *ContractCheck
+	FailureKind             string
+	FailureCode             string
+	Retryable               bool
+	FailureReason           string
+}
+
+// checkRecordFingerprint hashes the semantic content of r (see
+// checkRecordFingerprintFields) so appendToolCheckRecordLocked can tell a
+// safe idempotent redelivery (same CheckID, same fingerprint ->
+// ErrDuplicateRecord) apart from the same CheckID reused for a materially
+// different result (different fingerprint -> ErrRecordConflict). Uses
+// json.Marshal's deterministic field-order encoding of a fixed Go struct —
+// this only ever compares two hashes produced by this same function in this
+// same process, so canonical-across-languages encoding isn't a concern.
+//
+//nolint:gocritic // hugeParam: ToolCheckRecord by value is intentional — read-only.
+func checkRecordFingerprint(r ToolCheckRecord) string {
+	fields := checkRecordFingerprintFields{
+		ToolSpecDigest:          r.ToolSpecDigest,
+		ImageDigest:             r.ImageDigest,
+		Platform:                r.Platform,
+		ToolName:                r.ToolName,
+		Version:                 r.Version,
+		ValidationRequestID:     r.ValidationRequestID,
+		SentinelJobID:           r.SentinelJobID,
+		Stage:                   r.Stage,
+		Terminal:                r.Terminal,
+		ValidationStatus:        r.ValidationStatus,
+		ValidationHash:          r.ValidationHash,
+		Command:                 r.Command,
+		ExitCode:                r.ExitCode,
+		ObservedIoProfile:       r.ObservedIoProfile,
+		ObservedResourceProfile: r.ObservedResourceProfile,
+		ContractCheck:           r.ContractCheck,
+		FailureKind:             r.FailureKind,
+		FailureCode:             r.FailureCode,
+		Retryable:               r.Retryable,
+		FailureReason:           r.FailureReason,
+	}
+	// json.Marshal on a fixed struct type never fails (no channels/funcs/
+	// cyclic data among these field types), so the error is unreachable.
+	data, _ := json.Marshal(fields)
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 // GetToolCheckRecordByID returns the check record with the given CheckID.
@@ -569,19 +719,100 @@ func (s *Store) AppendToolScanRecord(r ToolScanRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := s.appendToolScanRecordLocked(r); err != nil {
+		return err
+	}
+	return s.save()
+}
+
+// AppendToolScanRecordCorrelated is AppendToolScanRecord's counterpart to
+// AppendToolCheckRecordCorrelated — see that method's doc comment. A scan
+// record has no ValidationStatus of its own; succeeded is the caller's
+// verdict derived from PolicyResult (e.g. "blocked" -> false).
+//
+//nolint:gocritic // hugeParam: ToolScanRecord by value is intentional — callers own their copy.
+func (s *Store) AppendToolScanRecordCorrelated(
+	r ToolScanRecord, validationRequestID, sentinelJobID string, terminal, succeeded bool,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.appendToolScanRecordLocked(r); err != nil {
+		return err
+	}
+	s.applyValidationCorrelationLocked(validationRequestID, sentinelJobID, terminal, succeeded, "")
+	return s.save()
+}
+
+//nolint:dupl,gocritic // dupl: same guard+append pattern, distinct types. gocritic: by value is intentional.
+func (s *Store) appendToolScanRecordLocked(r ToolScanRecord) error {
 	if r.ScanID == "" {
 		return errors.New("index: ScanID must not be empty")
 	}
 	for i := range s.idx.ToolScanRecords {
 		if s.idx.ToolScanRecords[i].ScanID == r.ScanID {
-			return fmt.Errorf("index: tool scan record %q already exists", r.ScanID)
+			existing, incoming := scanRecordFingerprint(s.idx.ToolScanRecords[i]), scanRecordFingerprint(r)
+			if existing != incoming {
+				return fmt.Errorf("%w: scan_id=%q existing_fingerprint=%s incoming_fingerprint=%s",
+					ErrRecordConflict, r.ScanID, existing[:12], incoming[:12])
+			}
+			return fmt.Errorf("%w: scan_id=%q", ErrDuplicateRecord, r.ScanID)
 		}
 	}
 	if r.ScannedAt.IsZero() {
 		r.ScannedAt = time.Now().UTC()
 	}
 	s.idx.ToolScanRecords = append(s.idx.ToolScanRecords, r)
-	return s.save()
+	return nil
+}
+
+// scanRecordFingerprintFields/scanRecordFingerprint mirror
+// checkRecordFingerprintFields/checkRecordFingerprint — see those doc
+// comments. Excludes ScanID (the key) and ScannedAt (a receipt timestamp).
+type scanRecordFingerprintFields struct {
+	ImageDigest         string
+	ToolName            string
+	Platform            string
+	ValidationRequestID string
+	SentinelJobID       string
+	Stage               string
+	Terminal            bool
+	Scanner             string
+	ScannerVersion      string
+	DbDigest            string
+	Source              string
+	CriticalCount       int
+	HighCount           int
+	MediumCount         int
+	LowCount            int
+	PolicyMode          string
+	PolicyResult        string
+}
+
+//nolint:gocritic // hugeParam: ToolScanRecord by value is intentional — read-only.
+func scanRecordFingerprint(r ToolScanRecord) string {
+	fields := scanRecordFingerprintFields{
+		ImageDigest:         r.ImageDigest,
+		ToolName:            r.ToolName,
+		Platform:            r.Platform,
+		ValidationRequestID: r.ValidationRequestID,
+		SentinelJobID:       r.SentinelJobID,
+		Stage:               r.Stage,
+		Terminal:            r.Terminal,
+		Scanner:             r.Scanner,
+		ScannerVersion:      r.ScannerVersion,
+		DbDigest:            r.DbDigest,
+		Source:              r.Source,
+		CriticalCount:       r.CriticalCount,
+		HighCount:           r.HighCount,
+		MediumCount:         r.MediumCount,
+		LowCount:            r.LowCount,
+		PolicyMode:          r.PolicyMode,
+		PolicyResult:        r.PolicyResult,
+	}
+	data, _ := json.Marshal(fields)
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 // GetToolScanRecordByID returns the scan record with the given ScanID.
@@ -729,6 +960,180 @@ func (s *Store) ListToolFunctionCatalogEntries(status PromotionStatus) ([]ToolFu
 		}
 	}
 	return out, nil
+}
+
+// ── ValidationRequestRecord ───────────────────────────────────────────────────
+
+// CreateValidationRequestRecord durably records a new logical validation
+// request in EnqueuePending status, before NodeVault calls NodeSentinel.
+// Returns an error if a record with the same ValidationRequestID already
+// exists — callers must mint a fresh ValidationRequestID per logical
+// request (see pkg/build's validation request ID generation) and only reuse
+// one to retry the exact same request after a transport/process failure.
+//
+//nolint:gocritic // hugeParam: ValidationRequestRecord by value is intentional — callers own their copy.
+func (s *Store) CreateValidationRequestRecord(r ValidationRequestRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if r.ValidationRequestID == "" {
+		return errors.New("index: ValidationRequestID must not be empty")
+	}
+	for i := range s.idx.ValidationRequestRecords {
+		if s.idx.ValidationRequestRecords[i].ValidationRequestID == r.ValidationRequestID {
+			return fmt.Errorf("index: validation request record %q already exists", r.ValidationRequestID)
+		}
+	}
+	if r.RequestedAt.IsZero() {
+		r.RequestedAt = time.Now().UTC()
+	}
+	if r.ValidationStatus == "" {
+		r.ValidationStatus = ValidationEnqueuePending
+	}
+	s.idx.ValidationRequestRecords = append(s.idx.ValidationRequestRecords, r)
+	return s.save()
+}
+
+// GetValidationRequestRecord returns the record with the given ValidationRequestID.
+// Returns ErrNotFound if no such record exists.
+func (s *Store) GetValidationRequestRecord(validationRequestID string) (ValidationRequestRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for i := range s.idx.ValidationRequestRecords {
+		if s.idx.ValidationRequestRecords[i].ValidationRequestID == validationRequestID {
+			return s.idx.ValidationRequestRecords[i], nil
+		}
+	}
+	return ValidationRequestRecord{}, fmt.Errorf("%w: validation_request_id=%q", ErrNotFound, validationRequestID)
+}
+
+// validValidationTransitions enumerates the only allowed
+// ValidationStatus -> ValidationStatus edges — see ValidationStatus's doc
+// comment for the full state graph. TransitionValidationRequest rejects
+// any edge not listed here (e.g. Succeeded -> Running, Failed -> Queued),
+// so a caller applying a stale/out-of-order update cannot silently corrupt
+// a record that has already reached a terminal or in-progress status.
+// EnqueuePending -> Running exists for a real race, not as a design nicety:
+// NodeSentinel can execute a job and submit its result before NodeVault's
+// own postBuildRegistration has processed the enqueue response and driven
+// this record to Queued. Without this edge, a result arriving that early
+// would have both its Running promotion and any terminal transition
+// silently rejected (see applyValidationCorrelationLocked), orphaning the
+// record at EnqueuePending forever. Once here, forward progress is
+// one-way: Queued has no edge sourced from Running/Succeeded/Failed, so a
+// late-arriving enqueue ACK's own Queued transition attempt is rejected by
+// this same graph instead of regressing a record that already moved on.
+var validValidationTransitions = map[ValidationStatus][]ValidationStatus{
+	ValidationEnqueuePending: {ValidationQueued, ValidationUnavailable, ValidationRunning},
+	ValidationUnavailable:    {ValidationEnqueuePending},
+	ValidationQueued:         {ValidationRunning, ValidationFailed, ValidationInterrupted},
+	ValidationRunning:        {ValidationSucceeded, ValidationFailed, ValidationInterrupted},
+}
+
+// TransitionValidationRequest moves the record identified by validationRequestID
+// from its current status to `to`, applying mutate (which may be nil) to the
+// record before the status itself is updated and saved. Returns an error if
+// the record does not exist, or if the current status has no allowed edge to
+// `to` in validValidationTransitions.
+func (s *Store) TransitionValidationRequest(
+	validationRequestID string, to ValidationStatus, mutate func(*ValidationRequestRecord),
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	idx := s.findValidationRequestIndex(validationRequestID)
+	if idx == -1 {
+		return fmt.Errorf("%w: validation_request_id=%q", ErrNotFound, validationRequestID)
+	}
+	if err := s.transitionValidationRequestLocked(idx, to, mutate); err != nil {
+		return fmt.Errorf("%w for %q", err, validationRequestID)
+	}
+	return s.save()
+}
+
+func (s *Store) findValidationRequestIndex(validationRequestID string) int {
+	for i := range s.idx.ValidationRequestRecords {
+		if s.idx.ValidationRequestRecords[i].ValidationRequestID == validationRequestID {
+			return i
+		}
+	}
+	return -1
+}
+
+// transitionValidationRequestLocked applies the from-current-status ->
+// `to` edge check and mutate callback for the record at s.idx.
+// ValidationRequestRecords[idx], without saving — callers hold s.mu and
+// call s.save() themselves once, possibly after other locked writes in the
+// same critical section (see AppendToolCheckRecordCorrelated).
+func (s *Store) transitionValidationRequestLocked(
+	idx int, to ValidationStatus, mutate func(*ValidationRequestRecord),
+) error {
+	current := s.idx.ValidationRequestRecords[idx].ValidationStatus
+	allowed := false
+	for _, next := range validValidationTransitions[current] {
+		if next == to {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, current, to)
+	}
+
+	if mutate != nil {
+		mutate(&s.idx.ValidationRequestRecords[idx])
+	}
+	s.idx.ValidationRequestRecords[idx].ValidationStatus = to
+	return nil
+}
+
+// applyValidationCorrelationLocked applies a validation result's
+// correlation side effects to the ValidationRequestRecord identified by
+// validationRequestID: promotes Queued -> Running (setting SentinelJobID if
+// given), then — only if terminal — closes it out to Succeeded/Failed. Must
+// be called with s.mu already held; does not call save().
+//
+// validationRequestID empty or not found: silent no-op — this is the
+// fail-open path for a missing/orphan ID (see AppendToolCheckRecordCorrelated's
+// doc comment); a *found* record with a mismatched image digest must be
+// rejected by the caller before ever reaching this method, not handled here.
+//
+// Any transition failure here (e.g. this result arrives after the request
+// already reached a terminal status — a duplicate/late redelivery) is
+// swallowed, not returned: a duplicate or out-of-order correlation update
+// must never fail the record append that already committed in the same
+// call.
+func (s *Store) applyValidationCorrelationLocked(
+	validationRequestID, sentinelJobID string, terminal, succeeded bool, failureReason string,
+) {
+	if validationRequestID == "" {
+		return
+	}
+	idx := s.findValidationRequestIndex(validationRequestID)
+	if idx == -1 {
+		return
+	}
+
+	_ = s.transitionValidationRequestLocked(idx, ValidationRunning, func(r *ValidationRequestRecord) {
+		if sentinelJobID != "" {
+			r.SentinelJobID = sentinelJobID
+		}
+	})
+
+	if !terminal {
+		return
+	}
+	target := ValidationSucceeded
+	if !succeeded {
+		target = ValidationFailed
+	}
+	_ = s.transitionValidationRequestLocked(idx, target, func(r *ValidationRequestRecord) {
+		r.CompletedAt = time.Now().UTC()
+		if !succeeded {
+			r.FailureReason = failureReason
+		}
+	})
 }
 
 // ── internal helpers ──────────────────────────────────────────────────────────

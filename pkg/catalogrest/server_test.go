@@ -73,6 +73,39 @@ func doGet(t *testing.T, ts *httptest.Server, url string) *http.Response {
 	return resp
 }
 
+// ── issue #71: NewMux (nil certSvc) must not accept validation writes ────────
+
+// TestNewMux_NilCertSvc_ValidationWriteRoutesNotRegistered verifies that a mux
+// built without a certification.Service (as cmd/palette's "read-only" binary
+// does via NewMux) has no route for the validation record intake endpoints,
+// so a misdirected NodeSentinel submission cannot be silently accepted
+// without certification. See HeaInSeo/NodeVault#71.
+func TestNewMux_NilCertSvc_ValidationWriteRoutesNotRegistered(t *testing.T) {
+	ts, _ := newServer(t)
+
+	body, _ := json.Marshal(catalogrest.SubmitCheckRecordRequest{
+		CheckID:          "chk-should-not-register",
+		ImageDigest:      "sha256:shouldnotregister",
+		ValidationStatus: "succeeded",
+	})
+	resp := doPost(t, ts, ts.URL+"/v1/validation/check-records", body)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("POST check-records on nil-cert mux: got %d want 404 (route must not be registered)", resp.StatusCode)
+	}
+
+	scanBody, _ := json.Marshal(catalogrest.SubmitScanRecordRequest{
+		ScanID:       "scan-should-not-register",
+		ImageDigest:  "sha256:shouldnotregister",
+		PolicyResult: "passed",
+	})
+	scanResp := doPost(t, ts, ts.URL+"/v1/validation/scan-records", scanBody)
+	defer func() { _ = scanResp.Body.Close() }()
+	if scanResp.StatusCode != http.StatusNotFound {
+		t.Errorf("POST scan-records on nil-cert mux: got %d want 404 (route must not be registered)", scanResp.StatusCode)
+	}
+}
+
 // ── GET /v1/catalog/tools ─────────────────────────────────────────────────────
 
 func TestListTools_Empty(t *testing.T) {

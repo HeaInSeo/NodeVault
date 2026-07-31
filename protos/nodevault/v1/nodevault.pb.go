@@ -73,58 +73,58 @@ func (BuildKind) EnumDescriptor() ([]byte, []int) {
 	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{0}
 }
 
-type RecipeVariant int32
+type RecipeKind int32
 
 const (
-	RecipeVariant_RECIPE_VARIANT_UNSPECIFIED    RecipeVariant = 0
-	RecipeVariant_RECIPE_VARIANT_CONDA          RecipeVariant = 1
-	RecipeVariant_RECIPE_VARIANT_MICROMAMBA     RecipeVariant = 2
-	RecipeVariant_RECIPE_VARIANT_PACKAGE_MIRROR RecipeVariant = 3
-	RecipeVariant_RECIPE_VARIANT_BIOCONTAINER   RecipeVariant = 4
+	RecipeKind_RECIPE_KIND_UNSPECIFIED    RecipeKind = 0
+	RecipeKind_RECIPE_KIND_CONDA          RecipeKind = 1
+	RecipeKind_RECIPE_KIND_MICROMAMBA     RecipeKind = 2
+	RecipeKind_RECIPE_KIND_PACKAGE_MIRROR RecipeKind = 3
+	RecipeKind_RECIPE_KIND_BIOCONTAINER   RecipeKind = 4
 )
 
-// Enum value maps for RecipeVariant.
+// Enum value maps for RecipeKind.
 var (
-	RecipeVariant_name = map[int32]string{
-		0: "RECIPE_VARIANT_UNSPECIFIED",
-		1: "RECIPE_VARIANT_CONDA",
-		2: "RECIPE_VARIANT_MICROMAMBA",
-		3: "RECIPE_VARIANT_PACKAGE_MIRROR",
-		4: "RECIPE_VARIANT_BIOCONTAINER",
+	RecipeKind_name = map[int32]string{
+		0: "RECIPE_KIND_UNSPECIFIED",
+		1: "RECIPE_KIND_CONDA",
+		2: "RECIPE_KIND_MICROMAMBA",
+		3: "RECIPE_KIND_PACKAGE_MIRROR",
+		4: "RECIPE_KIND_BIOCONTAINER",
 	}
-	RecipeVariant_value = map[string]int32{
-		"RECIPE_VARIANT_UNSPECIFIED":    0,
-		"RECIPE_VARIANT_CONDA":          1,
-		"RECIPE_VARIANT_MICROMAMBA":     2,
-		"RECIPE_VARIANT_PACKAGE_MIRROR": 3,
-		"RECIPE_VARIANT_BIOCONTAINER":   4,
+	RecipeKind_value = map[string]int32{
+		"RECIPE_KIND_UNSPECIFIED":    0,
+		"RECIPE_KIND_CONDA":          1,
+		"RECIPE_KIND_MICROMAMBA":     2,
+		"RECIPE_KIND_PACKAGE_MIRROR": 3,
+		"RECIPE_KIND_BIOCONTAINER":   4,
 	}
 )
 
-func (x RecipeVariant) Enum() *RecipeVariant {
-	p := new(RecipeVariant)
+func (x RecipeKind) Enum() *RecipeKind {
+	p := new(RecipeKind)
 	*p = x
 	return p
 }
 
-func (x RecipeVariant) String() string {
+func (x RecipeKind) String() string {
 	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
 }
 
-func (RecipeVariant) Descriptor() protoreflect.EnumDescriptor {
+func (RecipeKind) Descriptor() protoreflect.EnumDescriptor {
 	return file_nodevault_v1_nodevault_proto_enumTypes[1].Descriptor()
 }
 
-func (RecipeVariant) Type() protoreflect.EnumType {
+func (RecipeKind) Type() protoreflect.EnumType {
 	return &file_nodevault_v1_nodevault_proto_enumTypes[1]
 }
 
-func (x RecipeVariant) Number() protoreflect.EnumNumber {
+func (x RecipeKind) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use RecipeVariant.Descriptor instead.
-func (RecipeVariant) EnumDescriptor() ([]byte, []int) {
+// Deprecated: Use RecipeKind.Descriptor instead.
+func (RecipeKind) EnumDescriptor() ([]byte, []int) {
 	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{1}
 }
 
@@ -1254,7 +1254,7 @@ type ResolveRecipeRequest struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
 	ToolName             string                 `protobuf:"bytes,1,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
 	Version              string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
-	Variant              RecipeVariant          `protobuf:"varint,3,opt,name=variant,proto3,enum=nodevault.v1.RecipeVariant" json:"variant,omitempty"`
+	RecipeKind           RecipeKind             `protobuf:"varint,3,opt,name=recipe_kind,json=recipeKind,proto3,enum=nodevault.v1.RecipeKind" json:"recipe_kind,omitempty"`
 	Packages             []*PackageSpec         `protobuf:"bytes,4,rep,name=packages,proto3" json:"packages,omitempty"`
 	Channels             []string               `protobuf:"bytes,5,rep,name=channels,proto3" json:"channels,omitempty"`
 	PackageMirrorUri     string                 `protobuf:"bytes,6,opt,name=package_mirror_uri,json=packageMirrorUri,proto3" json:"package_mirror_uri,omitempty"`
@@ -1308,11 +1308,11 @@ func (x *ResolveRecipeRequest) GetVersion() string {
 	return ""
 }
 
-func (x *ResolveRecipeRequest) GetVariant() RecipeVariant {
+func (x *ResolveRecipeRequest) GetRecipeKind() RecipeKind {
 	if x != nil {
-		return x.Variant
+		return x.RecipeKind
 	}
-	return RecipeVariant_RECIPE_VARIANT_UNSPECIFIED
+	return RecipeKind_RECIPE_KIND_UNSPECIFIED
 }
 
 func (x *ResolveRecipeRequest) GetPackages() []*PackageSpec {
@@ -4027,11 +4027,12 @@ const file_nodevault_v1_nodevault_proto_rawDesc = "" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12B\n" +
 	"\n" +
 	"candidates\x18\x03 \x03(\v2\".nodevault.v1.BuildStringCandidateR\n" +
-	"candidates\"\xe3\x02\n" +
+	"candidates\"\xe7\x02\n" +
 	"\x14ResolveRecipeRequest\x12\x1b\n" +
 	"\ttool_name\x18\x01 \x01(\tR\btoolName\x12\x18\n" +
-	"\aversion\x18\x02 \x01(\tR\aversion\x125\n" +
-	"\avariant\x18\x03 \x01(\x0e2\x1b.nodevault.v1.RecipeVariantR\avariant\x125\n" +
+	"\aversion\x18\x02 \x01(\tR\aversion\x129\n" +
+	"\vrecipe_kind\x18\x03 \x01(\x0e2\x18.nodevault.v1.RecipeKindR\n" +
+	"recipeKind\x125\n" +
 	"\bpackages\x18\x04 \x03(\v2\x19.nodevault.v1.PackageSpecR\bpackages\x12\x1a\n" +
 	"\bchannels\x18\x05 \x03(\tR\bchannels\x12,\n" +
 	"\x12package_mirror_uri\x18\x06 \x01(\tR\x10packageMirrorUri\x125\n" +
@@ -4039,7 +4040,7 @@ const file_nodevault_v1_nodevault_proto_rawDesc = "" +
 	"\x0eclosed_network\x18\b \x01(\bR\rclosedNetwork\"\x81\x01\n" +
 	"\x15ResolveRecipeResponse\x12+\n" +
 	"\x11resolution_source\x18\x01 \x01(\tR\x10resolutionSource\x12;\n" +
-	"\bpackages\x18\x02 \x03(\v2\x1f.nodevault.v1.PackageResolutionR\bpackages\"\xc9\x04\n" +
+	"\bpackages\x18\x02 \x03(\v2\x1f.nodevault.v1.PackageResolutionR\bpackages\"\xcf\x04\n" +
 	"\fBuildRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12,\n" +
@@ -4054,7 +4055,7 @@ const file_nodevault_v1_nodevault_proto_rawDesc = "" +
 	"\x06script\x18\x06 \x01(\tR\x06script\x12*\n" +
 	"\x11base_image_digest\x18\x11 \x01(\tR\x0fbaseImageDigest\x12.\n" +
 	"\x13allow_runtime_tools\x18\x12 \x03(\tR\x11allowRuntimeTools\x12;\n" +
-	"\x1aallow_runtime_tools_reason\x18\x13 \x01(\tR\x17allowRuntimeToolsReasonJ\x04\b\a\x10\bJ\x04\b\b\x10\tJ\x04\b\f\x10\rJ\x04\b\r\x10\x0eJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10R\vinput_namesR\foutput_namesR\x06inputsR\aoutputsR\adisplayR\acommand\"\xde\x02\n" +
+	"\x1aallow_runtime_tools_reason\x18\x13 \x01(\tR\x17allowRuntimeToolsReasonJ\x04\b\a\x10\bJ\x04\b\b\x10\tJ\x04\b\v\x10\fJ\x04\b\f\x10\rJ\x04\b\r\x10\x0eJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10R\vinput_namesR\foutput_namesR\x06inputsR\aoutputsR\adisplayR\acommand\"\xde\x02\n" +
 	"\n" +
 	"BuildEvent\x120\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x1c.nodevault.v1.BuildEventKindR\x04kind\x12\x18\n" +
@@ -4275,13 +4276,14 @@ const file_nodevault_v1_nodevault_proto_rawDesc = "" +
 	"\tBuildKind\x12\x1a\n" +
 	"\x16BUILD_KIND_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13BUILD_KIND_TOOLSPEC\x10\x01\x12\x1f\n" +
-	"\x1bBUILD_KIND_TOOLFUNCTIONSPEC\x10\x02*\xac\x01\n" +
-	"\rRecipeVariant\x12\x1e\n" +
-	"\x1aRECIPE_VARIANT_UNSPECIFIED\x10\x00\x12\x18\n" +
-	"\x14RECIPE_VARIANT_CONDA\x10\x01\x12\x1d\n" +
-	"\x19RECIPE_VARIANT_MICROMAMBA\x10\x02\x12!\n" +
-	"\x1dRECIPE_VARIANT_PACKAGE_MIRROR\x10\x03\x12\x1f\n" +
-	"\x1bRECIPE_VARIANT_BIOCONTAINER\x10\x04*\x98\x02\n" +
+	"\x1bBUILD_KIND_TOOLFUNCTIONSPEC\x10\x02*\x9a\x01\n" +
+	"\n" +
+	"RecipeKind\x12\x1b\n" +
+	"\x17RECIPE_KIND_UNSPECIFIED\x10\x00\x12\x15\n" +
+	"\x11RECIPE_KIND_CONDA\x10\x01\x12\x1a\n" +
+	"\x16RECIPE_KIND_MICROMAMBA\x10\x02\x12\x1e\n" +
+	"\x1aRECIPE_KIND_PACKAGE_MIRROR\x10\x03\x12\x1c\n" +
+	"\x18RECIPE_KIND_BIOCONTAINER\x10\x04*\x98\x02\n" +
 	"\x0eBuildEventKind\x12 \n" +
 	"\x1cBUILD_EVENT_KIND_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14BUILD_EVENT_KIND_LOG\x10\x01\x12 \n" +
@@ -4337,7 +4339,7 @@ var file_nodevault_v1_nodevault_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
 var file_nodevault_v1_nodevault_proto_msgTypes = make([]protoimpl.MessageInfo, 55)
 var file_nodevault_v1_nodevault_proto_goTypes = []any{
 	(BuildKind)(0),                     // 0: nodevault.v1.BuildKind
-	(RecipeVariant)(0),                 // 1: nodevault.v1.RecipeVariant
+	(RecipeKind)(0),                    // 1: nodevault.v1.RecipeKind
 	(BuildEventKind)(0),                // 2: nodevault.v1.BuildEventKind
 	(*PortSpec)(nil),                   // 3: nodevault.v1.PortSpec
 	(*DisplaySpec)(nil),                // 4: nodevault.v1.DisplaySpec
@@ -4399,7 +4401,7 @@ var file_nodevault_v1_nodevault_proto_depIdxs = []int32{
 	57, // 0: nodevault.v1.PortSpec.constraints:type_name -> nodevault.v1.PortSpec.ConstraintsEntry
 	9,  // 1: nodevault.v1.ListPoliciesResponse.policies:type_name -> nodevault.v1.PolicyInfo
 	19, // 2: nodevault.v1.PackageResolution.candidates:type_name -> nodevault.v1.BuildStringCandidate
-	1,  // 3: nodevault.v1.ResolveRecipeRequest.variant:type_name -> nodevault.v1.RecipeVariant
+	1,  // 3: nodevault.v1.ResolveRecipeRequest.recipe_kind:type_name -> nodevault.v1.RecipeKind
 	18, // 4: nodevault.v1.ResolveRecipeRequest.packages:type_name -> nodevault.v1.PackageSpec
 	20, // 5: nodevault.v1.ResolveRecipeResponse.packages:type_name -> nodevault.v1.PackageResolution
 	0,  // 6: nodevault.v1.BuildRequest.kind:type_name -> nodevault.v1.BuildKind

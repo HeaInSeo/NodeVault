@@ -139,12 +139,12 @@ message CancelToolBuildResponse {
 // build gate validates that submitted conda/mamba package specs are fully pinned
 // as name=version=build.
 
-enum RecipeVariant {
-  RECIPE_VARIANT_UNSPECIFIED = 0;
-  RECIPE_VARIANT_CONDA = 1;
-  RECIPE_VARIANT_MICROMAMBA = 2;
-  RECIPE_VARIANT_PACKAGE_MIRROR = 3;
-  RECIPE_VARIANT_BIOCONTAINER = 4;
+enum RecipeKind {
+  RECIPE_KIND_UNSPECIFIED = 0;
+  RECIPE_KIND_CONDA = 1;
+  RECIPE_KIND_MICROMAMBA = 2;
+  RECIPE_KIND_PACKAGE_MIRROR = 3;
+  RECIPE_KIND_BIOCONTAINER = 4;
 }
 
 message PackageSpec {
@@ -169,7 +169,7 @@ message PackageResolution {
 message ResolveRecipeRequest {
   string tool_name = 1;
   string version = 2;
-  RecipeVariant variant = 3;
+  RecipeKind recipe_kind = 3;
   repeated PackageSpec packages = 4;
   repeated string channels = 5;
   string package_mirror_uri = 6;
@@ -214,7 +214,7 @@ message BuildRequest {
   repeated string allow_runtime_tools = 18;
   string allow_runtime_tools_reason = 19;
 
-  reserved 7, 8, 12, 13, 14, 15;
+  reserved 7, 8, 11, 12, 13, 14, 15;
   reserved "input_names", "output_names", "inputs", "outputs", "display", "command";
 }
 

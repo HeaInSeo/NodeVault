@@ -8,6 +8,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
@@ -137,7 +138,7 @@ func TestResolveRecipe_ClosedNetworkNoHarbor(t *testing.T) {
 	_, err := svc.ResolveRecipe(context.Background(), &nfv1.ResolveRecipeRequest{
 		ToolName:      "bwa",
 		Version:       "0.7.17",
-		Variant:       nfv1.RecipeVariant_RECIPE_VARIANT_CONDA,
+		RecipeKind:    nfv1.RecipeKind_RECIPE_KIND_CONDA,
 		Packages:      []*nfv1.PackageSpec{{Name: "bwa", Version: "0.7.17"}},
 		ClosedNetwork: true,
 	})
@@ -153,10 +154,10 @@ func TestResolveRecipe_ClosedNetworkNoHarbor(t *testing.T) {
 func TestResolveRecipe_UnsupportedVariant(t *testing.T) {
 	svc := newMinimalService()
 	_, err := svc.ResolveRecipe(context.Background(), &nfv1.ResolveRecipeRequest{
-		ToolName: "bwa",
-		Version:  "0.7.17",
-		Variant:  nfv1.RecipeVariant_RECIPE_VARIANT_UNSPECIFIED,
-		Packages: []*nfv1.PackageSpec{{Name: "bwa", Version: "0.7.17"}},
+		ToolName:   "bwa",
+		Version:    "0.7.17",
+		RecipeKind: nfv1.RecipeKind_RECIPE_KIND_UNSPECIFIED,
+		Packages:   []*nfv1.PackageSpec{{Name: "bwa", Version: "0.7.17"}},
 	})
 	st, _ := status.FromError(err)
 	if st.Code() != codes.InvalidArgument {
@@ -167,10 +168,10 @@ func TestResolveRecipe_UnsupportedVariant(t *testing.T) {
 func TestResolveRecipe_BioContainerUnimplemented(t *testing.T) {
 	svc := newMinimalService()
 	_, err := svc.ResolveRecipe(context.Background(), &nfv1.ResolveRecipeRequest{
-		ToolName: "bwa",
-		Version:  "0.7.17",
-		Variant:  nfv1.RecipeVariant_RECIPE_VARIANT_BIOCONTAINER,
-		Packages: []*nfv1.PackageSpec{{Name: "bwa", Version: "0.7.17"}},
+		ToolName:   "bwa",
+		Version:    "0.7.17",
+		RecipeKind: nfv1.RecipeKind_RECIPE_KIND_BIOCONTAINER,
+		Packages:   []*nfv1.PackageSpec{{Name: "bwa", Version: "0.7.17"}},
 	})
 	st, _ := status.FromError(err)
 	if st.Code() != codes.Unimplemented {
@@ -181,10 +182,10 @@ func TestResolveRecipe_BioContainerUnimplemented(t *testing.T) {
 func TestResolveRecipe_PackageMirrorMissingURI(t *testing.T) {
 	svc := newMinimalService()
 	_, err := svc.ResolveRecipe(context.Background(), &nfv1.ResolveRecipeRequest{
-		ToolName: "bwa",
-		Version:  "0.7.17",
-		Variant:  nfv1.RecipeVariant_RECIPE_VARIANT_PACKAGE_MIRROR,
-		Packages: []*nfv1.PackageSpec{{Name: "bwa", Version: "0.7.17"}},
+		ToolName:   "bwa",
+		Version:    "0.7.17",
+		RecipeKind: nfv1.RecipeKind_RECIPE_KIND_PACKAGE_MIRROR,
+		Packages:   []*nfv1.PackageSpec{{Name: "bwa", Version: "0.7.17"}},
 	})
 	st, _ := status.FromError(err)
 	if st.Code() != codes.InvalidArgument {
@@ -197,7 +198,7 @@ func TestResolveRecipe_PackageMirrorNotFound(t *testing.T) {
 	resp, err := svc.ResolveRecipe(context.Background(), &nfv1.ResolveRecipeRequest{
 		ToolName:         "bwa",
 		Version:          "0.7.17",
-		Variant:          nfv1.RecipeVariant_RECIPE_VARIANT_PACKAGE_MIRROR,
+		RecipeKind:       nfv1.RecipeKind_RECIPE_KIND_PACKAGE_MIRROR,
 		Packages:         []*nfv1.PackageSpec{{Name: "bwa", Version: "0.7.17"}},
 		PackageMirrorUri: "http://mirror.internal/conda",
 	})
@@ -206,6 +207,28 @@ func TestResolveRecipe_PackageMirrorNotFound(t *testing.T) {
 	}
 	if resp.GetResolutionSource() != "not_found" {
 		t.Errorf("expected not_found, got %q", resp.GetResolutionSource())
+	}
+}
+
+// ── wire compatibility: RecipeVariant -> RecipeKind rename ──────────────────
+//
+// RecipeVariant (field 3, "variant") was renamed to RecipeKind (field 3,
+// "recipe_kind") without changing the field number or any enum value number.
+// A pre-rename client only ever knew the raw wire bytes — field 3, varint 3
+// (RECIPE_VARIANT_PACKAGE_MIRROR) — so this test builds exactly that wire
+// payload by hand and confirms today's generated code still decodes it as
+// RECIPE_KIND_PACKAGE_MIRROR.
+func TestResolveRecipeRequest_PreRenameWireValue_DecodesAsRecipeKind(t *testing.T) {
+	// tag = (field_number 3 << 3) | wire_type 0 (varint) = 0x18; value = 3.
+	rawPreRenameField3 := []byte{0x18, 0x03}
+
+	req := &nfv1.ResolveRecipeRequest{}
+	if err := proto.Unmarshal(rawPreRenameField3, req); err != nil {
+		t.Fatalf("unmarshal pre-rename wire bytes: %v", err)
+	}
+
+	if got := req.GetRecipeKind(); got != nfv1.RecipeKind_RECIPE_KIND_PACKAGE_MIRROR {
+		t.Errorf("expected RECIPE_KIND_PACKAGE_MIRROR for raw value 3, got %v", got)
 	}
 }
 
@@ -249,11 +272,11 @@ func TestResolveRecipe_AllChannelsUnreachable_ReturnsUnavailable(t *testing.T) {
 
 	svc := newMinimalService()
 	_, err := svc.ResolveRecipe(context.Background(), &nfv1.ResolveRecipeRequest{
-		ToolName: "samtools",
-		Version:  "99.99.99-unreachable-test",
-		Variant:  nfv1.RecipeVariant_RECIPE_VARIANT_CONDA,
-		Packages: []*nfv1.PackageSpec{{Name: "samtools", Version: "99.99.99-unreachable-test"}},
-		Channels: []string{"bioconda-unreachable-test-channel"},
+		ToolName:   "samtools",
+		Version:    "99.99.99-unreachable-test",
+		RecipeKind: nfv1.RecipeKind_RECIPE_KIND_CONDA,
+		Packages:   []*nfv1.PackageSpec{{Name: "samtools", Version: "99.99.99-unreachable-test"}},
+		Channels:   []string{"bioconda-unreachable-test-channel"},
 	})
 
 	st, ok := status.FromError(err)

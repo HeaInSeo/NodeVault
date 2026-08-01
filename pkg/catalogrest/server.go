@@ -86,10 +86,16 @@ type Server struct {
 	store       *index.Store
 	catalog     *catalog.Catalog
 	dataCatalog *catalog.DataCatalog
-	certSvc     certService // nil = no automatic certification trigger
+	certSvc     certService // nil = validation write routes not registered (see NewMuxWithCert)
 }
 
-// NewMux creates an http.ServeMux pre-wired with Catalog REST endpoints.
+// NewMux creates an http.ServeMux pre-wired with the read-only Catalog REST
+// endpoints. Because no certification.Service is wired in, the validation
+// record intake routes (POST /v1/validation/check-records and
+// /scan-records) are NOT registered — see NewMuxWithCert's certSvc == nil
+// case. This makes NewMux safe for read-only deployments such as
+// cmd/palette (issue #71): there is no route that would accept an
+// uncertified write.
 // The caller is responsible for binding it to an *http.Server.
 func NewMux(store *index.Store, cat *catalog.Catalog, dataCat *catalog.DataCatalog) *http.ServeMux {
 	return NewMuxWithCert(store, cat, dataCat, nil)
@@ -98,6 +104,11 @@ func NewMux(store *index.Store, cat *catalog.Catalog, dataCat *catalog.DataCatal
 // NewMuxWithCert is like NewMux but wires in a certification.Service so that
 // POST /v1/validation/check-records and POST /v1/validation/scan-records can
 // trigger automatic certification evaluation after NodeSentinel submits records.
+//
+// If certSvc is nil, those two write routes are not registered at all: a
+// nil certSvc means there is nothing to evaluate certification against, and
+// silently accepting writes without certification is a certification-bypass
+// hazard (issue #71), not a degraded-but-safe mode.
 func NewMuxWithCert(
 	store *index.Store, cat *catalog.Catalog, dataCat *catalog.DataCatalog, certSvc certService,
 ) *http.ServeMux {
@@ -114,9 +125,11 @@ func NewMuxWithCert(
 	// Sprint 4: certified tool catalog (NodePalette primary source)
 	mux.HandleFunc("GET /v1/catalog/certified-tools", s.handleListCertifiedTools)
 	mux.HandleFunc("GET /v1/catalog/certified-tools/{cas_hash}", s.handleGetCertifiedTool)
-	// Sprint 3: NodeSentinel → NodeVault validation record push (REST, avoids cross-repo gRPC)
-	mux.HandleFunc("POST /v1/validation/check-records", s.handleSubmitCheckRecord)
-	mux.HandleFunc("POST /v1/validation/scan-records", s.handleSubmitScanRecord)
+	if certSvc != nil {
+		// Sprint 3: NodeSentinel → NodeVault validation record push (REST, avoids cross-repo gRPC)
+		mux.HandleFunc("POST /v1/validation/check-records", s.handleSubmitCheckRecord)
+		mux.HandleFunc("POST /v1/validation/scan-records", s.handleSubmitScanRecord)
+	}
 	// toolprofile referrer GC candidate visibility (index-local marking only;
 	// see docs/OBSERVED_PROFILE_SPEC.md §5.2)
 	mux.HandleFunc("GET /v1/gc/toolprofile-candidates", s.handleListToolProfileGCCandidates)

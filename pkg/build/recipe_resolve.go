@@ -68,18 +68,18 @@ func (s *Service) ResolveRecipe(
 	}
 
 	// External source query.
-	switch req.GetVariant() {
-	case nfv1.RecipeVariant_RECIPE_VARIANT_CONDA,
-		nfv1.RecipeVariant_RECIPE_VARIANT_MICROMAMBA:
+	switch req.GetRecipeKind() {
+	case nfv1.RecipeKind_RECIPE_KIND_CONDA,
+		nfv1.RecipeKind_RECIPE_KIND_MICROMAMBA:
 		return resolveCondaPackages(ctx, req)
-	case nfv1.RecipeVariant_RECIPE_VARIANT_PACKAGE_MIRROR:
+	case nfv1.RecipeKind_RECIPE_KIND_PACKAGE_MIRROR:
 		return resolvePackageMirror(ctx, req)
-	case nfv1.RecipeVariant_RECIPE_VARIANT_BIOCONTAINER:
+	case nfv1.RecipeKind_RECIPE_KIND_BIOCONTAINER:
 		return nil, status.Error(codes.Unimplemented,
 			"BioContainer external resolution is not yet supported (P3)")
 	default:
 		return nil, status.Errorf(codes.InvalidArgument,
-			"unsupported variant: %v", req.GetVariant())
+			"unsupported variant: %v", req.GetRecipeKind())
 	}
 }
 

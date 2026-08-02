@@ -191,6 +191,72 @@ func TestEvaluateAfterCheck_EmptyImageDigest(t *testing.T) {
 	}
 }
 
+// TestEvaluateAfterCheck_MultipleImagesSameStableRef is the gap #19 regression:
+// when two different images are registered under the same tool_name@version
+// (stableRef is 1:N per the constitution), certifying the SECOND image must
+// bind the catalog entry to the SECOND registration's CasHash — not the oldest.
+// The pre-fix code used ListByStableRef(...)[0] (oldest registration), so this
+// test fails before the ImageDigest-based lookup and passes after it.
+func TestEvaluateAfterCheck_MultipleImagesSameStableRef(t *testing.T) {
+	store := newStore(t)
+	svc := certification.New(store)
+
+	// Oldest registration under bwa@1.0 (image 1).
+	if err := store.Append(index.Entry{
+		CasHash:         "cas-img1-old",
+		ArtifactKind:    index.KindTool,
+		StableRef:       "bwa@1.0",
+		ToolName:        "bwa",
+		Version:         "1.0",
+		ImageDigest:     "sha256:img1",
+		LifecyclePhase:  index.PhaseActive,
+		IntegrityHealth: index.HealthHealthy,
+	}); err != nil {
+		t.Fatalf("store.Append img1: %v", err)
+	}
+	// Second registration under the SAME stableRef, different image (image 2).
+	if err := store.Append(index.Entry{
+		CasHash:         "cas-img2-new",
+		ArtifactKind:    index.KindTool,
+		StableRef:       "bwa@1.0",
+		ToolName:        "bwa",
+		Version:         "1.0",
+		ImageDigest:     "sha256:img2",
+		LifecyclePhase:  index.PhaseActive,
+		IntegrityHealth: index.HealthHealthy,
+	}); err != nil {
+		t.Fatalf("store.Append img2: %v", err)
+	}
+
+	// Certify the SECOND image.
+	check := newCheckRecord("chk-multi", "sha256:img2", "bwa", "1.0", "succeeded")
+	if err := store.AppendToolCheckRecord(check); err != nil {
+		t.Fatalf("AppendToolCheckRecord: %v", err)
+	}
+	if err := svc.EvaluateAfterCheck(check); err != nil {
+		t.Fatalf("EvaluateAfterCheck: %v", err)
+	}
+
+	cert, err := store.GetCertifiedToolImageRecord("sha256:img2")
+	if err != nil {
+		t.Fatalf("GetCertifiedToolImageRecord: %v", err)
+	}
+	if cert.CasHash != "cas-img2-new" {
+		t.Errorf("cert.CasHash: got %q want cas-img2-new (bound to the wrong image — gap #19)", cert.CasHash)
+	}
+
+	catEntries, err := store.ListToolFunctionCatalogEntries(index.PromotionActive)
+	if err != nil {
+		t.Fatalf("ListToolFunctionCatalogEntries: %v", err)
+	}
+	if len(catEntries) != 1 {
+		t.Fatalf("expected 1 catalog entry, got %d", len(catEntries))
+	}
+	if catEntries[0].CasHash != "cas-img2-new" {
+		t.Errorf("catalog CasHash: got %q want cas-img2-new (the certified image), not the oldest registration", catEntries[0].CasHash)
+	}
+}
+
 // TestEvaluateAfterScan_ExistingCheck verifies that when a scan arrives and a
 // succeeded check already exists, certification is triggered.
 func TestEvaluateAfterScan_ExistingCheck(t *testing.T) {

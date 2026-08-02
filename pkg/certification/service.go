@@ -111,10 +111,15 @@ func (s *Service) certify(check index.ToolCheckRecord, scan *index.ToolScanRecor
 		ScanID:          scanID,
 	}
 
-	// Lookup CasHash from index Entry if available (best-effort).
-	stableRef := fmt.Sprintf("%s@%s", check.ToolName, check.Version)
-	if entries, err := s.store.ListByStableRef(stableRef); err == nil && len(entries) > 0 {
-		cert.CasHash = entries[0].CasHash
+	// Lookup CasHash from the index Entry for the exact image that was
+	// validated. Look up by ImageDigest, not stableRef: stableRef
+	// (tool_name@version) is 1:N per the constitution, and ListByStableRef
+	// returns index order with no lifecycle filter or sort, so [0] is the
+	// oldest registration — which can bind this certification (of image A)
+	// to a different image B's catalog entry. check.ImageDigest is the image
+	// actually validated (gap #19).
+	if entry, err := s.store.GetByImageDigest(check.ImageDigest); err == nil {
+		cert.CasHash = entry.CasHash
 	}
 
 	if err := s.store.UpsertCertifiedToolImageRecord(cert); err != nil {

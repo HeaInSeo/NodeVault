@@ -86,6 +86,10 @@ metadata:
     ignore-check.kube-linter.io/no-read-only-root-fs: "Buildah graphroot/scratch/buildstate require filesystem writes; all write paths are on PVC or emptyDir mounts"
 spec:
   replicas: 1
+  # A single Pod holds 4 ReadWriteOnce PVCs; RollingUpdate would deadlock
+  # because the new Pod cannot attach the volumes still bound by the old Pod.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: nodevault-controlplane

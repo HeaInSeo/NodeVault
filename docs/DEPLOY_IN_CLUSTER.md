@@ -98,6 +98,12 @@ NodeVault의 현재 배포 storage driver는 `overlay`다. `vfs`와 `fuse-overla
 단일 replica여야 하며, replica 확장은 shared build-state/scheduling 설계가 정해진 뒤에만
 진행한다.
 
+단일 Pod이 RWO PVC 4개를 점유하므로 Deployment는 `strategy: Recreate`를 사용한다.
+기본 RollingUpdate는 새 Pod을 먼저 띄우려다 옛 Pod이 물고 있는 볼륨을 attach하지 못해
+교착하기 때문이다. Recreate는 옛 Pod을 먼저 내린 뒤 새 Pod을 띄우므로, 이미지 태그를
+바꿔 rollout을 거는 동안 **NodeVault 서비스가 잠시 중단(다운타임)된다.** 무중단 롤아웃은
+RWM 스토리지와 shared build-state 설계가 선행되어야 하며 현재 범위가 아니다.
+
 ```text
 /var/lib/nodevault/containers  nodevault-build-graphroot PVC (20Gi)
 /run/nodevault/containers      nodevault-build-runroot PVC (5Gi)

@@ -22,7 +22,7 @@ jobs:
     timeout-minutes: 20
     env:
       BUILD_TAGS: exclude_graphdriver_btrfs exclude_graphdriver_devicemapper
-      INFRA_LAB_ROOT: /opt/go/src/github.com/HeaInSeo/infra-lab
+      INFRA_LAB_ROOT: ${{ vars.INFRA_LAB_ROOT }}
     steps:
       - uses: actions/checkout@v7
 
@@ -37,10 +37,27 @@ jobs:
           set -euo pipefail
           command -v kubectl >/dev/null
 
+          # INFRA_LAB_ROOT comes from the repository variable vars.INFRA_LAB_ROOT
+          # (no longer hardcoded). Reject an empty value explicitly *before* it is
+          # used for globbing / canonical-path validation below — an unset variable
+          # renders as "" and would silently glob "/state/*/kubeconfig", yielding a
+          # misleading "multiple environments" error instead of the real cause.
+          if [ -z "${INFRA_LAB_ROOT}" ]; then
+            echo "INFRA_LAB_ROOT is empty — set it at Settings → Variables → INFRA_LAB_ROOT (repository variable)" >&2
+            exit 1
+          fi
+          echo "INFRA_LAB_ROOT=${INFRA_LAB_ROOT}"
+
+          # kubeconfig source precedence:
+          #   1. workflow_dispatch input kubeconfig_path — if provided, it wins;
+          #   2. otherwise resolve the single canonical kubeconfig under
+          #      ${INFRA_LAB_ROOT}/state/<environment>/kubeconfig.
           kubeconfig_path="${{ inputs.kubeconfig_path }}"
           if [ -n "${kubeconfig_path}" ]; then
+            echo "kubeconfig source: kubeconfig_path input (overrides vars.INFRA_LAB_ROOT resolution)"
             kubeconfig_path="$(realpath "${kubeconfig_path}" 2>/dev/null || true)"
           else
+            echo "kubeconfig source: resolved from vars.INFRA_LAB_ROOT (no kubeconfig_path input given)"
             shopt -s nullglob
             candidates=("${INFRA_LAB_ROOT}"/state/*/kubeconfig)
             if [ "${#candidates[@]}" -ne 1 ]; then

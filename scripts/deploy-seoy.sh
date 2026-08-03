@@ -26,7 +26,7 @@ LOCAL_DEPLOY="$(dirname "$0")/../deploy"
 LOCAL_ASSETS="$(dirname "$0")/../assets"
 KUBECONFIG_MODE="${KUBECONFIG_MODE:-remote}"
 LOCAL_KUBECONFIG="${LOCAL_KUBECONFIG:-}"
-REMOTE_KUBECONFIG_SOURCE="${REMOTE_KUBECONFIG_SOURCE:-/opt/go/src/github.com/HeaInSeo/infra-lab/state/seoy-libvirt-cilium/kubeconfig}"
+REMOTE_KUBECONFIG_SOURCE="${REMOTE_KUBECONFIG_SOURCE:-}"
 
 RESTART_ONLY=false
 if [[ "${1:-}" == "--restart-only" ]]; then
@@ -97,6 +97,7 @@ fi
 # ── 4. kubeconfig 배포 ─────────────────────────────────────────────────────────
 case "${KUBECONFIG_MODE}" in
   remote)
+    : "${REMOTE_KUBECONFIG_SOURCE:?KUBECONFIG_MODE=remote 이면 REMOTE_KUBECONFIG_SOURCE=/path/to/infra-lab/state/<environment>/kubeconfig 가 필요합니다 (머신 고유 기본 경로 제거됨).}"
     echo "==> kubeconfig 복사 (remote authoritative source: ${REMOTE_KUBECONFIG_SOURCE})..."
     # test -f를 && 체인 앞에 두면 소스가 없을 때 조용히 아무 일도 안 하고 넘어가
     # 버려서(예전 버그), 클러스터 환경이 바뀌어 기본 경로가 stale해져도 아무 경고

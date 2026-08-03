@@ -27,3 +27,6 @@ coverage.out
 # OS
 .DS_Store
 Thumbs.db
+
+# spec-kit per-developer session state
+.specify/feature.json

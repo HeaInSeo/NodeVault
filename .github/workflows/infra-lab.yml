@@ -46,6 +46,10 @@ jobs:
             echo "INFRA_LAB_ROOT is empty — set it at Settings → Variables → INFRA_LAB_ROOT (repository variable)" >&2
             exit 1
           fi
+          # Strip any trailing slash so globbing/canonical-path matching stays consistent:
+          # a value like "/x/infra-lab/" would otherwise glob "//state/*/kubeconfig" and
+          # realpath-normalize away the double slash, breaking the lexical case match below.
+          INFRA_LAB_ROOT="${INFRA_LAB_ROOT%/}"
           echo "INFRA_LAB_ROOT=${INFRA_LAB_ROOT}"
 
           # kubeconfig source precedence:

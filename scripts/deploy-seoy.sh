@@ -28,6 +28,13 @@ KUBECONFIG_MODE="${KUBECONFIG_MODE:-remote}"
 LOCAL_KUBECONFIG="${LOCAL_KUBECONFIG:-}"
 REMOTE_KUBECONFIG_SOURCE="${REMOTE_KUBECONFIG_SOURCE:-}"
 
+# KUBECONFIG_MODE=remote 는 REMOTE_KUBECONFIG_SOURCE 가 반드시 필요하다. 원격 호스트를
+# 건드리는 어떤 작업(user/디렉토리 생성, 바이너리·스토리지 배포)보다 앞에서 검증해,
+# 미설정 시 side effect 없이 즉시 실패한다. local/skip 모드는 이 변수가 필요 없다.
+if [[ "${KUBECONFIG_MODE}" == "remote" ]]; then
+  : "${REMOTE_KUBECONFIG_SOURCE:?KUBECONFIG_MODE=remote 이면 REMOTE_KUBECONFIG_SOURCE=/path/to/infra-lab/state/<environment>/kubeconfig 가 필요합니다 (머신 고유 기본 경로 제거됨).}"
+fi
+
 RESTART_ONLY=false
 if [[ "${1:-}" == "--restart-only" ]]; then
   RESTART_ONLY=true
@@ -97,7 +104,6 @@ fi
 # ── 4. kubeconfig 배포 ─────────────────────────────────────────────────────────
 case "${KUBECONFIG_MODE}" in
   remote)
-    : "${REMOTE_KUBECONFIG_SOURCE:?KUBECONFIG_MODE=remote 이면 REMOTE_KUBECONFIG_SOURCE=/path/to/infra-lab/state/<environment>/kubeconfig 가 필요합니다 (머신 고유 기본 경로 제거됨).}"
     echo "==> kubeconfig 복사 (remote authoritative source: ${REMOTE_KUBECONFIG_SOURCE})..."
     # test -f를 && 체인 앞에 두면 소스가 없을 때 조용히 아무 일도 안 하고 넘어가
     # 버려서(예전 버그), 클러스터 환경이 바뀌어 기본 경로가 stale해져도 아무 경고

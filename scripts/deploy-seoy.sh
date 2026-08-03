@@ -26,7 +26,14 @@ LOCAL_DEPLOY="$(dirname "$0")/../deploy"
 LOCAL_ASSETS="$(dirname "$0")/../assets"
 KUBECONFIG_MODE="${KUBECONFIG_MODE:-remote}"
 LOCAL_KUBECONFIG="${LOCAL_KUBECONFIG:-}"
-REMOTE_KUBECONFIG_SOURCE="${REMOTE_KUBECONFIG_SOURCE:-/opt/go/src/github.com/HeaInSeo/infra-lab/state/seoy-libvirt-cilium/kubeconfig}"
+REMOTE_KUBECONFIG_SOURCE="${REMOTE_KUBECONFIG_SOURCE:-}"
+
+# KUBECONFIG_MODE=remote 는 REMOTE_KUBECONFIG_SOURCE 가 반드시 필요하다. 원격 호스트를
+# 건드리는 어떤 작업(user/디렉토리 생성, 바이너리·스토리지 배포)보다 앞에서 검증해,
+# 미설정 시 side effect 없이 즉시 실패한다. local/skip 모드는 이 변수가 필요 없다.
+if [[ "${KUBECONFIG_MODE}" == "remote" ]]; then
+  : "${REMOTE_KUBECONFIG_SOURCE:?KUBECONFIG_MODE=remote 이면 REMOTE_KUBECONFIG_SOURCE=/path/to/infra-lab/state/<environment>/kubeconfig 가 필요합니다 (머신 고유 기본 경로 제거됨).}"
+fi
 
 RESTART_ONLY=false
 if [[ "${1:-}" == "--restart-only" ]]; then

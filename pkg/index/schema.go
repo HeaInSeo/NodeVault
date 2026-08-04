@@ -413,14 +413,23 @@ type ToolFunctionCatalogEntry struct {
 // validation request against NodeSentinel. See ValidationRequestRecord and
 // validValidationTransitions (store.go) for the allowed state graph:
 //
-//	EnqueuePending -> Queued | Unavailable
-//	Unavailable    -> EnqueuePending            (manual/future-reconciler retry)
+//	EnqueuePending -> Queued | Unavailable | Running
+//	Unavailable    -> EnqueuePending | EnqueueAbandoned
 //	Queued         -> Running | Failed | Interrupted
 //	Running        -> Succeeded | Failed | Interrupted
 //
-// PR2-A only ever produces EnqueuePending, Queued, and Unavailable — the
-// remaining edges are reachable once PR2-B wires NodeSentinel's result
-// records (ToolCheckRecord/ToolScanRecord) back into this status.
+// The reconcile enqueue-retry loop (pkg/reconcile.EnqueueRetrier) recovers a
+// request left in Unavailable by a transport/process enqueue failure: it
+// reuses the same ValidationRequestID and drives Unavailable -> EnqueuePending
+// -> Queued on success, or back to Unavailable (incrementing EnqueueAttempts
+// and setting a backed-off NextAttemptAt) on repeated failure. Once the
+// attempt budget is spent it escalates Unavailable -> EnqueueAbandoned, a
+// terminal status with no outgoing edge, so retries stop instead of looping.
+//
+// PR2-A produced only EnqueuePending, Queued, and Unavailable; the enqueue-
+// retry loop adds EnqueueAbandoned. The Running/Succeeded/Failed/Interrupted
+// edges become reachable once PR2-B wires NodeSentinel's result records
+// (ToolCheckRecord/ToolScanRecord) back into this status.
 type ValidationStatus string
 
 const (
@@ -431,6 +440,12 @@ const (
 	ValidationFailed         ValidationStatus = "Failed"
 	ValidationUnavailable    ValidationStatus = "Unavailable"
 	ValidationInterrupted    ValidationStatus = "Interrupted"
+	// ValidationEnqueueAbandoned is terminal: the enqueue-retry loop exhausted
+	// its attempt budget trying to hand this request to NodeSentinel (every
+	// attempt failed in transport/process before the work was ever queued). It
+	// has no outgoing transition — the request is given up on. This is distinct
+	// from ValidationFailed, which means a validation actually ran and failed.
+	ValidationEnqueueAbandoned ValidationStatus = "EnqueueAbandoned"
 )
 
 // ValidationRequestRecord correlates one logical NodeSentinel validation
@@ -460,6 +475,34 @@ type ValidationRequestRecord struct {
 
 	ValidationStatus ValidationStatus `json:"validation_status"`
 	FailureReason    string           `json:"failure_reason,omitempty"`
+
+	// ── enqueue replay + retry state (schema_version >= 4) ──────────────────
+	// The enqueue-retry loop (pkg/reconcile.EnqueueRetrier) needs enough of the
+	// original EnqueueValidationWorkRequest to re-send it verbatim after a
+	// transport/process failure. These mirror exactly what the initial enqueue
+	// sent — nothing is recomputed or added on retry. In particular
+	// RequestedActions is replayed as-is; a retry never turns on an observation
+	// action (profile/security) that was not originally requested.
+	//
+	// All fields are omitempty and zero-value safe: a ValidationRequestRecord
+	// written before these existed loads with them empty, and such a record is
+	// simply never retried (the loop skips any record missing ImageRepository/
+	// ToolName), so no backfill or migration is required.
+	ArtifactKind     string   `json:"artifact_kind,omitempty"`
+	ImageRepository  string   `json:"image_repository,omitempty"`
+	ToolName         string   `json:"tool_name,omitempty"`
+	Version          string   `json:"version,omitempty"`
+	RequestedActions []string `json:"requested_actions,omitempty"`
+
+	// EnqueueAttempts counts how many times an enqueue has actually been
+	// attempted for this logical request (the initial build-path attempt plus
+	// every retry). It is filled only from real attempt outcomes, never seeded
+	// to a placeholder. NextAttemptAt is the earliest time the loop may retry
+	// again; a zero value means "eligible now" — the initial failure leaves it
+	// zero so the first retry is prompt, and only repeated retry failures push
+	// it into the future via exponential backoff.
+	EnqueueAttempts int       `json:"enqueue_attempts,omitempty"`
+	NextAttemptAt   time.Time `json:"next_attempt_at,omitempty"`
 
 	RequestedAt time.Time `json:"requested_at"`
 	QueuedAt    time.Time `json:"queued_at,omitempty"`

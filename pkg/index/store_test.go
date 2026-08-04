@@ -1089,3 +1089,73 @@ func TestTransitionValidationRequest_NotFound(t *testing.T) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }
+
+// TestTransitionValidationRequest_UnavailableToAbandoned_Terminal is the direct
+// test for the enqueue-retry escalation edge: Unavailable -> EnqueueAbandoned is
+// allowed, and EnqueueAbandoned is terminal (no outgoing edge).
+func TestTransitionValidationRequest_UnavailableToAbandoned_Terminal(t *testing.T) {
+	s := newStore(t)
+	if err := s.CreateValidationRequestRecord(index.ValidationRequestRecord{ValidationRequestID: "vr-1"}); err != nil {
+		t.Fatalf("CreateValidationRequestRecord: %v", err)
+	}
+	if err := s.TransitionValidationRequest("vr-1", index.ValidationUnavailable, nil); err != nil {
+		t.Fatalf("EnqueuePending -> Unavailable: %v", err)
+	}
+	if err := s.TransitionValidationRequest("vr-1", index.ValidationEnqueueAbandoned, nil); err != nil {
+		t.Fatalf("Unavailable -> EnqueueAbandoned: %v, want allowed", err)
+	}
+	got, err := s.GetValidationRequestRecord("vr-1")
+	if err != nil {
+		t.Fatalf("GetValidationRequestRecord: %v", err)
+	}
+	if got.ValidationStatus != index.ValidationEnqueueAbandoned {
+		t.Errorf("status = %q, want EnqueueAbandoned", got.ValidationStatus)
+	}
+	// Terminal: every further transition must be rejected.
+	for _, to := range []index.ValidationStatus{
+		index.ValidationEnqueuePending, index.ValidationQueued,
+		index.ValidationRunning, index.ValidationSucceeded, index.ValidationFailed,
+	} {
+		if err := s.TransitionValidationRequest("vr-1", to, nil); !errors.Is(err, index.ErrInvalidTransition) {
+			t.Errorf("EnqueueAbandoned -> %s err = %v, want ErrInvalidTransition (terminal)", to, err)
+		}
+	}
+}
+
+// TestListValidationRequestsByStatus_FiltersAndDeepCopiesActions verifies the
+// enqueue-retry loop's accessor returns only matching records and that mutating
+// the returned RequestedActions cannot corrupt stored state.
+func TestListValidationRequestsByStatus_FiltersAndDeepCopiesActions(t *testing.T) {
+	s := newStore(t)
+	// vr-1 -> Unavailable (with actions), vr-2 stays EnqueuePending.
+	if err := s.CreateValidationRequestRecord(index.ValidationRequestRecord{
+		ValidationRequestID: "vr-1",
+		RequestedActions:    []string{"smoke_run"},
+	}); err != nil {
+		t.Fatalf("create vr-1: %v", err)
+	}
+	if err := s.TransitionValidationRequest("vr-1", index.ValidationUnavailable, nil); err != nil {
+		t.Fatalf("vr-1 -> Unavailable: %v", err)
+	}
+	if err := s.CreateValidationRequestRecord(index.ValidationRequestRecord{ValidationRequestID: "vr-2"}); err != nil {
+		t.Fatalf("create vr-2: %v", err)
+	}
+
+	got, err := s.ListValidationRequestsByStatus(index.ValidationUnavailable)
+	if err != nil {
+		t.Fatalf("ListValidationRequestsByStatus: %v", err)
+	}
+	if len(got) != 1 || got[0].ValidationRequestID != "vr-1" {
+		t.Fatalf("got %+v, want exactly vr-1", got)
+	}
+
+	// Mutating the returned slice must not affect stored state (deep copy).
+	got[0].RequestedActions[0] = "MUTATED"
+	reread, err := s.GetValidationRequestRecord("vr-1")
+	if err != nil {
+		t.Fatalf("GetValidationRequestRecord: %v", err)
+	}
+	if reread.RequestedActions[0] != "smoke_run" {
+		t.Errorf("stored RequestedActions = %v, want unchanged [smoke_run] (getter must deep-copy)", reread.RequestedActions)
+	}
+}

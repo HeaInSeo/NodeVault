@@ -1051,6 +1051,29 @@ func (s *Store) GetValidationRequestRecord(validationRequestID string) (Validati
 	return ValidationRequestRecord{}, fmt.Errorf("%w: validation_request_id=%q", ErrNotFound, validationRequestID)
 }
 
+// ListValidationRequestsByStatus returns copies of every ValidationRequestRecord
+// currently in the given status. The enqueue-retry loop uses it to find requests
+// stuck in ValidationUnavailable. RequestedActions is deep-copied so a caller can
+// rebuild an EnqueueValidationWorkRequest from the result without aliasing store
+// state. The error return mirrors the other List* accessors; it is always nil.
+func (s *Store) ListValidationRequestsByStatus(status ValidationStatus) ([]ValidationRequestRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]ValidationRequestRecord, 0, len(s.idx.ValidationRequestRecords))
+	for i := range s.idx.ValidationRequestRecords {
+		if s.idx.ValidationRequestRecords[i].ValidationStatus != status {
+			continue
+		}
+		rec := s.idx.ValidationRequestRecords[i]
+		if rec.RequestedActions != nil {
+			rec.RequestedActions = append([]string(nil), rec.RequestedActions...)
+		}
+		out = append(out, rec)
+	}
+	return out, nil
+}
+
 // validValidationTransitions enumerates the only allowed
 // ValidationStatus -> ValidationStatus edges — see ValidationStatus's doc
 // comment for the full state graph. TransitionValidationRequest rejects
@@ -1069,7 +1092,7 @@ func (s *Store) GetValidationRequestRecord(validationRequestID string) (Validati
 // this same graph instead of regressing a record that already moved on.
 var validValidationTransitions = map[ValidationStatus][]ValidationStatus{
 	ValidationEnqueuePending: {ValidationQueued, ValidationUnavailable, ValidationRunning},
-	ValidationUnavailable:    {ValidationEnqueuePending},
+	ValidationUnavailable:    {ValidationEnqueuePending, ValidationEnqueueAbandoned},
 	ValidationQueued:         {ValidationRunning, ValidationFailed, ValidationInterrupted},
 	ValidationRunning:        {ValidationSucceeded, ValidationFailed, ValidationInterrupted},
 }

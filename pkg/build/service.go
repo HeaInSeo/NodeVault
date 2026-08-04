@@ -56,6 +56,17 @@ type ReconcileTriggerer interface {
 
 const backendInPodBuildah = "in-pod-buildah"
 
+// sentinelArtifactKindTool / sentinelSmokeRunActions are the fixed
+// EnqueueValidationWorkRequest fields for a tool build's post-build L3/L4
+// validation. They are named (not inline literals) so the durable
+// ValidationRequestRecord and the live request always carry identical values:
+// the enqueue-retry loop replays the record verbatim, so any drift between the
+// two would change what a retry sends. sentinelSmokeRunActions is treated as
+// read-only; ListValidationRequestsByStatus deep-copies it on read.
+const sentinelArtifactKindTool = "tool"
+
+var sentinelSmokeRunActions = []string{"smoke_run"}
+
 func registryAddr() string {
 	return registryconfig.FromEnv().Addr
 }
@@ -312,46 +323,63 @@ func (s *Service) enqueueSentinelValidation(
 	destination, digest, casHash string,
 	logFn func(string),
 ) {
-	imageRepo := imageRepoFromDestination(destination)
-
-	// validationRequestID is minted fresh for this call — postBuildRegistration
-	// runs at most once per build, so there is no retry path that would need
-	// to reuse an existing ID here (a future manual-revalidation entry point
-	// would mint its own ID the same way, via newValidationRequestID).
+	// validationRequestID is minted fresh here — this is the initial enqueue
+	// for a newly registered tool, a brand-new logical request. The enqueue-
+	// retry loop (pkg/reconcile.EnqueueRetrier) reuses THIS id when it retries
+	// a request this attempt leaves in ValidationUnavailable; it never mints a
+	// new one (a future manual re-validation entry point would mint its own id
+	// the same way, via newValidationRequestID).
 	validationRequestID := newValidationRequestID()
+
+	// Build the request first so the durable ValidationRequestRecord can capture
+	// exactly what was sent: the enqueue-retry loop replays the record verbatim,
+	// so the record must mirror the live request field for field.
+	enqReq := &nsv1.EnqueueValidationWorkRequest{
+		ArtifactKind:        sentinelArtifactKindTool,
+		ImageRepository:     imageRepoFromDestination(destination),
+		ImageDigest:         digest,
+		ToolName:            req.GetToolName(),
+		Version:             req.GetVersion(),
+		CasHash:             casHash,
+		RequestedActions:    sentinelSmokeRunActions,
+		ValidationRequestId: validationRequestID,
+	}
 	if s.indexStore != nil {
 		if createErr := s.indexStore.CreateValidationRequestRecord(index.ValidationRequestRecord{
 			ValidationRequestID: validationRequestID,
 			BuildID:             req.GetRequestId(),
 			CasHash:             casHash,
 			ImageDigest:         digest,
+			ArtifactKind:        enqReq.ArtifactKind,
+			ImageRepository:     enqReq.ImageRepository,
+			ToolName:            enqReq.ToolName,
+			Version:             enqReq.Version,
+			RequestedActions:    enqReq.RequestedActions,
 		}); createErr != nil {
 			slog.Warn("index: failed to record validation request",
 				"validation_request_id", validationRequestID, "err", createErr)
 		}
 	}
 
-	enqReq := &nsv1.EnqueueValidationWorkRequest{
-		ArtifactKind:        "tool",
-		ImageRepository:     imageRepo,
-		ImageDigest:         digest,
-		ToolName:            req.GetToolName(),
-		Version:             req.GetVersion(),
-		CasHash:             casHash,
-		RequestedActions:    []string{"smoke_run"},
-		ValidationRequestId: validationRequestID,
-	}
 	enqCtx, enqCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer enqCancel()
 	enqResp, enqErr := s.sentinel.EnqueueValidationWork(enqCtx, enqReq)
 	if enqErr != nil {
 		metrics.SentinelEnqueueFailureTotal.Add(1)
-		slog.Warn("NodeSentinel EnqueueValidationWork failed (validation deferred)", "err", enqErr)
+		slog.Warn("NodeSentinel EnqueueValidationWork failed (validation deferred, reconciler will retry)", "err", enqErr)
 		logFn("sentinel enqueue failed: " + enqErr.Error())
 		if s.indexStore != nil {
+			// Record the failed first attempt (EnqueueAttempts=1) and leave
+			// NextAttemptAt zero so the enqueue-retry loop picks it up on its
+			// next tick. Retry backoff, jitter, the attempt budget, and
+			// terminal escalation are all owned by that loop
+			// (pkg/reconcile.EnqueueRetrier), never here.
 			if transErr := s.indexStore.TransitionValidationRequest(
 				validationRequestID, index.ValidationUnavailable,
-				func(r *index.ValidationRequestRecord) { r.FailureReason = enqErr.Error() },
+				func(r *index.ValidationRequestRecord) {
+					r.FailureReason = enqErr.Error()
+					r.EnqueueAttempts = 1
+				},
 			); transErr != nil {
 				slog.Warn("index: failed to mark validation request unavailable",
 					"validation_request_id", validationRequestID, "err", transErr)

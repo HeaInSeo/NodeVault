@@ -512,6 +512,22 @@ func TestPostBuildRegistration_SentinelEnqueueFailure_IsNonFatal(t *testing.T) {
 	if rec.FailureReason == "" {
 		t.Error("ValidationRequestRecord.FailureReason is empty, want the sentinel enqueue error")
 	}
+	// The failed first attempt must be recorded (EnqueueAttempts=1) with
+	// NextAttemptAt left zero, so the reconcile enqueue-retry loop picks it up
+	// promptly. The replay fields must be persisted so the loop can re-send the
+	// exact same request.
+	if rec.EnqueueAttempts != 1 {
+		t.Errorf("EnqueueAttempts = %d, want 1 after the initial failed attempt", rec.EnqueueAttempts)
+	}
+	if !rec.NextAttemptAt.IsZero() {
+		t.Errorf("NextAttemptAt = %v, want zero (eligible for prompt retry)", rec.NextAttemptAt)
+	}
+	if rec.ImageRepository != "harbor.example.com/library/test-tool" || rec.ToolName != "test-tool" {
+		t.Errorf("replay fields not persisted: ImageRepository=%q ToolName=%q", rec.ImageRepository, rec.ToolName)
+	}
+	if len(rec.RequestedActions) != 1 || rec.RequestedActions[0] != "smoke_run" {
+		t.Errorf("RequestedActions = %v, want [smoke_run] persisted for verbatim replay", rec.RequestedActions)
+	}
 }
 
 // TestPostBuildRegistration_NilIndexStore_StillEnqueuesWithoutPanicking is a

@@ -3,6 +3,7 @@ package catalog_test
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -813,5 +814,116 @@ func TestDeleteTool_ActiveForbidden_StillFails(t *testing.T) {
 	}
 	if entry.LifecyclePhase != index.PhaseActive {
 		t.Errorf("LifecyclePhase after forbidden delete: got %q want Active", entry.LifecyclePhase)
+	}
+}
+
+// TestRetractTool_ConcurrentIdempotent closes the TOCTOU window between the
+// pre-read and SetLifecyclePhase. When duplicate RetractTool requests overlap,
+// only the first advances Active → Retracted; the rest reach SetLifecyclePhase
+// with the phase already Retracted and hit the Retracted → Retracted self-edge.
+// Every overlapping request must still return success (idempotent under a racing
+// retry), never FailedPrecondition.
+func TestRetractTool_ConcurrentIdempotent(t *testing.T) {
+	cat := newTestCatalog(t)
+	store, err := index.NewAt(t.TempDir())
+	if err != nil {
+		t.Fatalf("index.NewAt: %v", err)
+	}
+	svc := catalog.NewToolRegistryService(cat, store)
+
+	reg, err := svc.RegisterTool(t.Context(), &nfv1.RegisterToolRequest{
+		ToolName: "featurecounts",
+		Version:  "2.0.6",
+		Digest:   "sha256:1a1",
+		ImageUri: "registry.example.com/test:latest",
+	})
+	if err != nil {
+		t.Fatalf("RegisterTool: %v", err)
+	}
+
+	ctx := t.Context()
+	const n = 64
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start // release all goroutines together to maximize overlap
+			_, e := svc.RetractTool(ctx, &nfv1.RetractToolRequest{CasHash: reg.CasHash})
+			errs[i] = e
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	for i, e := range errs {
+		if e != nil {
+			t.Errorf("concurrent RetractTool[%d] must be idempotent success, got: %v", i, e)
+		}
+	}
+	entry, err := store.GetByCasHash(reg.CasHash)
+	if err != nil {
+		t.Fatalf("GetByCasHash: %v", err)
+	}
+	if entry.LifecyclePhase != index.PhaseRetracted {
+		t.Errorf("final LifecyclePhase: got %q want Retracted", entry.LifecyclePhase)
+	}
+}
+
+// TestDeleteTool_ConcurrentIdempotent is the DeleteTool analog: overlapping
+// Delete requests on a Retracted tool race Retracted → Deleted, and every loser
+// hits the Deleted → Deleted self-edge. All must return success once the
+// tombstone (the Deleted-marked entry) exists.
+func TestDeleteTool_ConcurrentIdempotent(t *testing.T) {
+	cat := newTestCatalog(t)
+	store, err := index.NewAt(t.TempDir())
+	if err != nil {
+		t.Fatalf("index.NewAt: %v", err)
+	}
+	svc := catalog.NewToolRegistryService(cat, store)
+
+	reg, err := svc.RegisterTool(t.Context(), &nfv1.RegisterToolRequest{
+		ToolName: "subread",
+		Version:  "2.0.6",
+		Digest:   "sha256:2b2",
+		ImageUri: "registry.example.com/test:latest",
+	})
+	if err != nil {
+		t.Fatalf("RegisterTool: %v", err)
+	}
+	if _, err = svc.RetractTool(t.Context(), &nfv1.RetractToolRequest{CasHash: reg.CasHash}); err != nil {
+		t.Fatalf("RetractTool: %v", err)
+	}
+
+	ctx := t.Context()
+	const n = 64
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			_, e := svc.DeleteTool(ctx, &nfv1.DeleteToolRequest{CasHash: reg.CasHash})
+			errs[i] = e
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	for i, e := range errs {
+		if e != nil {
+			t.Errorf("concurrent DeleteTool[%d] must be idempotent success, got: %v", i, e)
+		}
+	}
+	entry, err := store.GetByCasHash(reg.CasHash)
+	if err != nil {
+		t.Fatalf("GetByCasHash: %v", err)
+	}
+	if entry.LifecyclePhase != index.PhaseDeleted {
+		t.Errorf("final LifecyclePhase: got %q want Deleted", entry.LifecyclePhase)
 	}
 }

@@ -363,6 +363,17 @@ func (s *ToolRegistryService) RetractTool(
 			return nil, status.Errorf(codes.NotFound, "tool %s not found", req.CasHash)
 		}
 		if errors.Is(err, index.ErrInvalidLifecycleTransition) {
+			// A concurrent Retract may have advanced the phase to Retracted between
+			// the pre-read above and this call, so SetLifecyclePhase rejected the
+			// Retracted → Retracted self-edge. Re-read: if the phase is already at
+			// the target, the racing retry is still idempotent success. Any other
+			// current phase is a genuine forbidden edge (§4.4) → FailedPrecondition.
+			if cur, getErr := s.store.GetByCasHash(req.CasHash); getErr == nil && cur.LifecyclePhase == index.PhaseRetracted {
+				return &nfv1.RetractToolResponse{
+					CasHash:        req.CasHash,
+					LifecyclePhase: string(index.PhaseRetracted),
+				}, nil
+			}
 			// The request is well-formed; the rejection is about the resource's
 			// current lifecycle_phase (§4.4), so FailedPrecondition — not Internal,
 			// which would read as a server fault. err carries current → target.
@@ -415,6 +426,18 @@ func (s *ToolRegistryService) DeleteTool(
 			return nil, status.Errorf(codes.NotFound, "tool %s not found", req.CasHash)
 		}
 		if errors.Is(err, index.ErrInvalidLifecycleTransition) {
+			// A concurrent Delete may have advanced the phase to Deleted between the
+			// pre-read above and this call, so SetLifecyclePhase rejected the
+			// Deleted → Deleted self-edge. Re-read: if the phase is already at the
+			// target (tombstone present), the racing retry is still idempotent
+			// success. Any other current phase is a genuine forbidden edge (§4.4,
+			// e.g. Active → Deleted) → FailedPrecondition.
+			if cur, getErr := s.store.GetByCasHash(req.CasHash); getErr == nil && cur.LifecyclePhase == index.PhaseDeleted {
+				return &nfv1.DeleteToolResponse{
+					CasHash:        req.CasHash,
+					LifecyclePhase: string(index.PhaseDeleted),
+				}, nil
+			}
 			// The request is well-formed; the rejection is about the resource's
 			// current lifecycle_phase (§4.4), so FailedPrecondition — not Internal,
 			// which would read as a server fault. err carries current → target.

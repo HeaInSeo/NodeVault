@@ -344,6 +344,12 @@ func (s *ToolRegistryService) RetractTool(
 		if errors.Is(err, index.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "tool %s not found", req.CasHash)
 		}
+		if errors.Is(err, index.ErrInvalidLifecycleTransition) {
+			// The request is well-formed; the rejection is about the resource's
+			// current lifecycle_phase (§4.4), so FailedPrecondition — not Internal,
+			// which would read as a server fault. err carries current → target.
+			return nil, status.Errorf(codes.FailedPrecondition, "retract %s: %v", req.CasHash, err)
+		}
 		return nil, status.Errorf(codes.Internal, "retract: %v", err)
 	}
 	return &nfv1.RetractToolResponse{
@@ -353,7 +359,8 @@ func (s *ToolRegistryService) RetractTool(
 }
 
 // DeleteTool transitions lifecycle_phase → Deleted.
-// Retracted → Deleted is the recommended sequence.
+// Retracted → Deleted is the required sequence — Active → Deleted is a forbidden
+// transition (§4.4), rejected with FailedPrecondition.
 // NodeVault only.
 //
 //nolint:dupl // DeleteTool and RetractTool are intentionally parallel — same shape, different phases.
@@ -369,6 +376,12 @@ func (s *ToolRegistryService) DeleteTool(
 	if err := s.store.SetLifecyclePhase(req.CasHash, index.PhaseDeleted); err != nil {
 		if errors.Is(err, index.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "tool %s not found", req.CasHash)
+		}
+		if errors.Is(err, index.ErrInvalidLifecycleTransition) {
+			// The request is well-formed; the rejection is about the resource's
+			// current lifecycle_phase (§4.4), so FailedPrecondition — not Internal,
+			// which would read as a server fault. err carries current → target.
+			return nil, status.Errorf(codes.FailedPrecondition, "delete %s: %v", req.CasHash, err)
 		}
 		return nil, status.Errorf(codes.Internal, "delete: %v", err)
 	}

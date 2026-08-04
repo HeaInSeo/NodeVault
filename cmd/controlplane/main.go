@@ -46,6 +46,7 @@ const (
 	defaultBuildStateDB  = "assets/buildstate/build-state.db"
 	defaultFastReconcile = 5 * time.Minute
 	defaultSlowReconcile = 30 * time.Minute
+	defaultEnqueueRetry  = 2 * time.Minute
 
 	buildBackendInPodBuildah      = "in-pod-buildah"
 	buildBackendDisabled          = "disabled"
@@ -235,6 +236,17 @@ func run() int {
 
 	sentinel, sentinelClose := initSentinelClient(&rc)
 	defer sentinelClose()
+
+	// Enqueue-retry loop: recover NodeSentinel enqueues that failed in
+	// transport/process (the build path marks those ValidationUnavailable and
+	// does not retry). Only meaningful when NodeSentinel is enabled — a nil
+	// sentinel means no enqueues happen, so there is nothing to retry.
+	if sentinel != nil {
+		enqueueRetryInterval := parseDuration("NODEVAULT_ENQUEUE_RETRY", defaultEnqueueRetry)
+		reconcile.NewEnqueueRetrier(indexStore, sentinel, reconcile.EnqueueRetryConfig{}).
+			RunLoop(ctx, enqueueRetryInterval)
+		slog.Info("enqueue-retry loop started", "interval", enqueueRetryInterval)
+	}
 
 	if registerErr := registerBuildService(
 		srv, &rc, registrySvc, indexStore, buildStateStore, rec, sentinel,

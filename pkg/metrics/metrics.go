@@ -21,6 +21,13 @@ var (
 	SentinelEnqueueSuccessTotal = expvar.NewInt("nodevault_sentinel_enqueue_success_total")
 	SentinelEnqueueFailureTotal = expvar.NewInt("nodevault_sentinel_enqueue_failure_total")
 
+	// Enqueue-retry loop (pkg/reconcile.EnqueueRetrier) outcomes: a retry that
+	// finally handed the work to NodeSentinel, a retry attempt that failed
+	// again, and a request abandoned after exhausting its attempt budget.
+	SentinelEnqueueRetrySuccessTotal = expvar.NewInt("nodevault_sentinel_enqueue_retry_success_total")
+	SentinelEnqueueRetryFailureTotal = expvar.NewInt("nodevault_sentinel_enqueue_retry_failure_total")
+	SentinelEnqueueAbandonedTotal    = expvar.NewInt("nodevault_sentinel_enqueue_abandoned_total")
+
 	// ValidationCorrelation* counters classify how a validation result's
 	// validation_request_id resolved on ingest (see pkg/catalogrest).
 	// Matched/MissingID are expected in normal operation; Orphan and

@@ -1097,9 +1097,23 @@ func (s *Store) ListValidationRequestsByStatus(status ValidationStatus) ([]Valid
 // pkg/reconcile.EnqueueRetrier.retryOne) and, on a successful re-enqueue,
 // moves straight to Queued. Unavailable -> EnqueuePending remains for a
 // manual/future re-arm path.
+//
+// Unavailable -> Running is the same early-result race as EnqueuePending ->
+// Running, reachable because the enqueue-retry loop also recovers a request
+// stranded in EnqueuePending by marking it Unavailable (see
+// pkg/reconcile.EnqueueRetrier.recoverStrandedPending). If that record's
+// original enqueue had actually reached NodeSentinel before the crash, its job
+// is already running, so a result can arrive while the record sits Unavailable
+// awaiting re-send. Without this edge that result's correlation would be
+// silently rejected (see applyValidationCorrelationLocked), orphaning the record
+// at Unavailable forever. This edge is a correlation path only; the retry loop
+// never transitions to Running, so its retry/backoff/escalation flow is
+// unaffected. It does not weaken rejection of genuine transport failures either:
+// a request that truly never reached NodeSentinel has no job and so no result
+// ever arrives to exercise the edge.
 var validValidationTransitions = map[ValidationStatus][]ValidationStatus{
 	ValidationEnqueuePending: {ValidationQueued, ValidationUnavailable, ValidationRunning},
-	ValidationUnavailable:    {ValidationEnqueuePending, ValidationQueued, ValidationEnqueueAbandoned},
+	ValidationUnavailable:    {ValidationEnqueuePending, ValidationQueued, ValidationRunning, ValidationEnqueueAbandoned},
 	ValidationQueued:         {ValidationRunning, ValidationFailed, ValidationInterrupted},
 	ValidationRunning:        {ValidationSucceeded, ValidationFailed, ValidationInterrupted},
 }
@@ -1194,9 +1208,13 @@ func (s *Store) transitionValidationRequestLocked(
 
 // applyValidationCorrelationLocked applies a validation result's
 // correlation side effects to the ValidationRequestRecord identified by
-// validationRequestID: promotes Queued -> Running (setting SentinelJobID if
-// given), then — only if terminal — closes it out to Succeeded/Failed. Must
-// be called with s.mu already held; does not call save().
+// validationRequestID: promotes the record to Running (setting SentinelJobID if
+// given), then — only if terminal — closes it out to Succeeded/Failed. The
+// promotion is valid from Queued, from EnqueuePending, or from Unavailable (all
+// three have a Running edge in validValidationTransitions), so an early result —
+// including one for a request the enqueue-retry loop recovered to Unavailable —
+// correlates rather than being orphaned. Must be called with s.mu already held;
+// does not call save().
 //
 // validationRequestID empty or not found: silent no-op — this is the
 // fail-open path for a missing/orphan ID (see AppendToolCheckRecordCorrelated's

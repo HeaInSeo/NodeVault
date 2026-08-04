@@ -5,6 +5,12 @@
 // request ValidationUnavailable (EnqueueAttempts=1, NextAttemptAt zero) and
 // does not retry it; this loop owns every retry from there on.
 //
+// It also recovers a second stranding: the build path persists a request in
+// EnqueuePending before it calls NodeSentinel, so a crash before that enqueue
+// produces any outcome leaves the record stuck in EnqueuePending with no scanner
+// to recover it. RetryDue converts such a record to Unavailable once it is older
+// than PendingStaleAfter, from where the same-id re-send path below picks it up.
+//
 // Contract:
 //   - Reuse the same ValidationRequestID — a retry is the same logical request,
 //     never a new one (see index.ValidationRequestRecord's doc comment).
@@ -59,6 +65,13 @@ type EnqueueRetryConfig struct {
 	JitterFrac float64
 	// EnqueueTimeout bounds a single EnqueueValidationWork call.
 	EnqueueTimeout time.Duration
+	// PendingStaleAfter is how long a record may sit in EnqueuePending before the
+	// loop treats it as stranded — the build path persists a request in
+	// EnqueuePending before it calls NodeSentinel, so a crash before that enqueue
+	// produces any outcome leaves the record there with no scanner to recover it.
+	// It must exceed EnqueueTimeout so a genuinely in-flight enqueue is never
+	// misjudged stranded; withDefaults raises it if a caller sets it too low.
+	PendingStaleAfter time.Duration
 }
 
 const (
@@ -67,6 +80,7 @@ const (
 	defaultMaxEnqueueBackoff  = 15 * time.Minute
 	defaultEnqueueJitterFrac  = 0.2
 	defaultEnqueueTimeout     = 5 * time.Second
+	defaultPendingStaleAfter  = 30 * time.Second
 )
 
 func (c EnqueueRetryConfig) withDefaults() EnqueueRetryConfig {
@@ -91,6 +105,17 @@ func (c EnqueueRetryConfig) withDefaults() EnqueueRetryConfig {
 	}
 	if c.EnqueueTimeout <= 0 {
 		c.EnqueueTimeout = defaultEnqueueTimeout
+	}
+	if c.PendingStaleAfter <= 0 {
+		c.PendingStaleAfter = defaultPendingStaleAfter
+	}
+	// A record still inside an in-flight enqueue (which may run up to
+	// EnqueueTimeout) must never be judged stranded, so PendingStaleAfter has to
+	// stay strictly above EnqueueTimeout. If a caller set it too low, raise it to
+	// a clear margin above the timeout rather than silently trusting a value that
+	// would mistake in-flight work for a stranded record.
+	if c.PendingStaleAfter <= c.EnqueueTimeout {
+		c.PendingStaleAfter = c.EnqueueTimeout + defaultPendingStaleAfter
 	}
 	return c
 }
@@ -154,10 +179,12 @@ func (r *EnqueueRetrier) runTick(ctx context.Context) {
 	}
 }
 
-// RetryDue runs one pass: for every request stuck in ValidationUnavailable it
+// RetryDue runs one pass. For every request stuck in ValidationUnavailable it
 // escalates an exhausted request to ValidationEnqueueAbandoned, skips one still
 // inside its backoff window or missing the replay fields, and otherwise retries
-// the enqueue reusing the same ValidationRequestID.
+// the enqueue reusing the same ValidationRequestID. It then recovers any request
+// stranded in EnqueuePending past PendingStaleAfter by converting it to
+// Unavailable for re-send (see recoverStrandedPending).
 func (r *EnqueueRetrier) RetryDue(ctx context.Context) error {
 	recs, err := r.store.ListValidationRequestsByStatus(index.ValidationUnavailable)
 	if err != nil {
@@ -185,7 +212,74 @@ func (r *EnqueueRetrier) RetryDue(ctx context.Context) error {
 			r.retryOne(ctx, rec)
 		}
 	}
+	return r.recoverStrandedPending(ctx, now)
+}
+
+// recoverStrandedPending recovers requests stranded in EnqueuePending. The build
+// path persists a ValidationRequestRecord in EnqueuePending before it calls
+// NodeSentinel (pkg/build.Service), so a crash between that persist and the
+// enqueue's own outcome leaves the record in EnqueuePending with no scanner to
+// recover it — the Unavailable pass in RetryDue never sees it.
+//
+// This pass converts any EnqueuePending record older than PendingStaleAfter to
+// Unavailable; the Unavailable pass then re-sends it (same id, same payload) on a
+// later tick through the existing retryOne path, so backoff, the attempt budget,
+// and terminal escalation all apply unchanged. A record younger than
+// PendingStaleAfter may be a genuinely in-flight enqueue and is left untouched, as
+// is one missing the replay fields (it cannot be re-sent, so no backfill).
+func (r *EnqueueRetrier) recoverStrandedPending(ctx context.Context, now time.Time) error {
+	recs, err := r.store.ListValidationRequestsByStatus(index.ValidationEnqueuePending)
+	if err != nil {
+		return fmt.Errorf("enqueue retry: list pending: %w", err)
+	}
+	for i := range recs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		rec := recs[i]
+		switch {
+		case rec.ImageRepository == "" || rec.ToolName == "":
+			// No replay fields: cannot be re-sent. Leave it exactly as found —
+			// same no-backfill policy the Unavailable pass applies.
+			continue
+		case now.Sub(rec.RequestedAt) < r.cfg.PendingStaleAfter:
+			continue // still within the in-flight window; may not be stranded
+		default:
+			r.recoverPending(rec, now)
+		}
+	}
 	return nil
+}
+
+// recoverPending drives one stranded record EnqueuePending -> Unavailable so the
+// Unavailable retry pass re-sends it with the same ValidationRequestID. It leaves
+// EnqueueAttempts as found so the record keeps its full retry budget; a crash may
+// have left an enqueue already accepted by NodeSentinel, but NodeSentinel's
+// same-id idempotency makes the re-send safe either way. An ErrInvalidTransition
+// means the record raced off EnqueuePending — the build path's own outcome or an
+// early result landed first — so there is nothing to recover.
+//
+//nolint:gocritic // hugeParam: ValidationRequestRecord by value is intentional (snapshot).
+func (r *EnqueueRetrier) recoverPending(rec index.ValidationRequestRecord, now time.Time) {
+	reason := fmt.Sprintf("recovered from stranded EnqueuePending after %s with no enqueue outcome persisted",
+		now.Sub(rec.RequestedAt).Round(time.Second))
+	err := r.store.TransitionValidationRequest(
+		rec.ValidationRequestID, index.ValidationUnavailable,
+		func(rr *index.ValidationRequestRecord) {
+			rr.FailureReason = reason
+		},
+	)
+	switch {
+	case err == nil:
+		metrics.SentinelEnqueuePendingRecoveredTotal.Add(1)
+		slog.Warn("recovered stranded EnqueuePending validation request for re-enqueue",
+			"validation_request_id", rec.ValidationRequestID, "requested_at", rec.RequestedAt)
+	case errors.Is(err, index.ErrInvalidTransition):
+		// Raced off EnqueuePending (build-path outcome or early result). Nothing to do.
+	default:
+		slog.Warn("index: failed to recover stranded EnqueuePending validation request",
+			"validation_request_id", rec.ValidationRequestID, "err", err)
+	}
 }
 
 // escalate drives Unavailable -> EnqueueAbandoned (terminal). An

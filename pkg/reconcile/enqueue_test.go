@@ -5,6 +5,7 @@ package reconcile
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -89,6 +90,65 @@ func seedUnavailable(t *testing.T, store *index.Store, id string, attempts int, 
 		}); err != nil {
 		t.Fatalf("seed transition to Unavailable: %v", err)
 	}
+}
+
+// seedPending creates a ValidationRequestRecord left in EnqueuePending exactly as
+// the build path leaves it before it calls NodeSentinel, with an explicit
+// RequestedAt so tests control its age against the fake clock. replay controls
+// whether the ImageRepository/ToolName replay fields are present. EnqueueAttempts
+// is left 0, matching a record that crashed before any enqueue outcome.
+func seedPending(t *testing.T, store *index.Store, id string, requestedAt time.Time, replay bool) {
+	t.Helper()
+	rec := index.ValidationRequestRecord{
+		ValidationRequestID: id,
+		BuildID:             "build-" + id,
+		CasHash:             "cas-" + id,
+		ImageDigest:         "sha256:" + id,
+		RequestedAt:         requestedAt,
+	}
+	if replay {
+		rec.ArtifactKind = "tool"
+		rec.ImageRepository = "harbor.example.com/library/" + id
+		rec.ToolName = id
+		rec.Version = "1.0.0"
+		rec.RequestedActions = []string{"smoke_run"}
+	}
+	if err := store.CreateValidationRequestRecord(rec); err != nil {
+		t.Fatalf("CreateValidationRequestRecord: %v", err)
+	}
+	if got := getRec(t, store, id).ValidationStatus; got != index.ValidationEnqueuePending {
+		t.Fatalf("seed status = %q, want EnqueuePending", got)
+	}
+}
+
+// idempotentSentinel models NodeSentinel's same-id idempotency contract: an
+// EnqueueValidationWork for a ValidationRequestId already seen returns the same
+// JobId and creates no new logical job. NodeVault's recovery re-send depends on
+// that contract holding on the NodeSentinel side; the enforcement itself lives in
+// the NodeSentinel repo (not modified here). This fake locks NodeVault's half of
+// the contract — it must always re-send the exact same ValidationRequestId so the
+// dedup key is stable.
+type idempotentSentinel struct {
+	jobs  map[string]string // validation_request_id -> job_id
+	calls int
+	seq   int
+}
+
+func (s *idempotentSentinel) EnqueueValidationWork(
+	_ context.Context, req *nsv1.EnqueueValidationWorkRequest,
+) (*nsv1.EnqueueValidationWorkResponse, error) {
+	s.calls++
+	if s.jobs == nil {
+		s.jobs = map[string]string{}
+	}
+	id := req.GetValidationRequestId()
+	if job, ok := s.jobs[id]; ok {
+		return &nsv1.EnqueueValidationWorkResponse{JobId: job, Status: "Queued"}, nil
+	}
+	s.seq++
+	job := fmt.Sprintf("job-%d", s.seq)
+	s.jobs[id] = job
+	return &nsv1.EnqueueValidationWorkResponse{JobId: job, Status: "Queued"}, nil
 }
 
 func getRec(t *testing.T, store *index.Store, id string) index.ValidationRequestRecord {
@@ -365,5 +425,232 @@ func TestEnqueueRetrier_ExhaustsBudgetThenAbandons(t *testing.T) {
 	}
 	if rec.EnqueueAttempts != 5 {
 		t.Errorf("EnqueueAttempts = %d, want 5 at abandonment", rec.EnqueueAttempts)
+	}
+}
+
+// TestEnqueueRetrier_RecoversStrandedEnqueuePending is the outbox guard: a record
+// the build path left in EnqueuePending (persisted before its enqueue, then
+// crashed before any outcome) is recovered once it is older than
+// PendingStaleAfter. The loop converts it to Unavailable and, on the next tick,
+// re-sends it with the SAME ValidationRequestID, driving it to Queued. Before this
+// change RetryDue only scanned Unavailable, so the record stayed stranded forever.
+func TestEnqueueRetrier_RecoversStrandedEnqueuePending(t *testing.T) {
+	store := newStore(t)
+	clk := &fakeClock{t: time.Unix(1_700_000_000, 0).UTC()}
+	// Stranded 60s ago; default PendingStaleAfter is 30s, so it is stale.
+	seedPending(t, store, "vp-1", clk.t.Add(-60*time.Second), true)
+
+	enq := &fakeEnqueuer{jobID: "job-42"}
+	r := newTestRetrier(t, store, enq, clk, EnqueueRetryConfig{})
+
+	// Tick 1 recovers the stranded record to Unavailable (no re-send yet).
+	if err := r.RetryDue(context.Background()); err != nil {
+		t.Fatalf("RetryDue tick 1: %v", err)
+	}
+	if len(enq.reqs) != 0 {
+		t.Fatalf("enqueue calls after recovery tick = %d, want 0 (re-send happens next tick)", len(enq.reqs))
+	}
+	rec := getRec(t, store, "vp-1")
+	if rec.ValidationStatus != index.ValidationUnavailable {
+		t.Fatalf("status after recovery = %q, want Unavailable", rec.ValidationStatus)
+	}
+	if rec.EnqueueAttempts != 0 {
+		t.Errorf("EnqueueAttempts = %d, want 0 preserved (full budget kept)", rec.EnqueueAttempts)
+	}
+	if rec.FailureReason == "" {
+		t.Error("FailureReason empty, want a stranded-recovery explanation")
+	}
+
+	// Tick 2 re-sends via the existing Unavailable path, reusing the same id.
+	if err := r.RetryDue(context.Background()); err != nil {
+		t.Fatalf("RetryDue tick 2: %v", err)
+	}
+	if len(enq.reqs) != 1 {
+		t.Fatalf("enqueue calls = %d, want 1", len(enq.reqs))
+	}
+	if got := enq.reqs[0].GetValidationRequestId(); got != "vp-1" {
+		t.Errorf("re-sent ValidationRequestId = %q, want vp-1 (same id must be reused)", got)
+	}
+	if acts := enq.reqs[0].GetRequestedActions(); len(acts) != 1 || acts[0] != "smoke_run" {
+		t.Errorf("RequestedActions = %v, want [smoke_run] replayed verbatim (no added action)", acts)
+	}
+	rec = getRec(t, store, "vp-1")
+	if rec.ValidationStatus != index.ValidationQueued {
+		t.Errorf("status after re-send = %q, want Queued", rec.ValidationStatus)
+	}
+	if rec.SentinelJobID != "job-42" {
+		t.Errorf("SentinelJobID = %q, want job-42", rec.SentinelJobID)
+	}
+}
+
+// TestEnqueueRetrier_ResultCorrelatesAfterRecoveryBeforeReenqueue covers the
+// window codex P1 flagged: a stranded request whose original enqueue actually
+// reached NodeSentinel is recovered to Unavailable, and before the next re-send
+// tick a terminal result for the already-running job arrives. It must correlate
+// (Unavailable -> Running -> terminal) rather than be swallowed, and a later
+// RetryDue tick must then leave the now-terminal record alone (no re-send, no
+// corruption).
+func TestEnqueueRetrier_ResultCorrelatesAfterRecoveryBeforeReenqueue(t *testing.T) {
+	store := newStore(t)
+	clk := &fakeClock{t: time.Unix(1_700_000_000, 0).UTC()}
+	seedPending(t, store, "vp-1", clk.t.Add(-2*time.Minute), true) // stranded, stale
+
+	enq := &fakeEnqueuer{alwaysFail: true} // a re-send, if attempted, would fail
+	r := newTestRetrier(t, store, enq, clk, EnqueueRetryConfig{})
+
+	// Tick 1: recover the stranded record to Unavailable (no re-send yet).
+	if err := r.RetryDue(context.Background()); err != nil {
+		t.Fatalf("RetryDue tick 1: %v", err)
+	}
+	if got := getRec(t, store, "vp-1").ValidationStatus; got != index.ValidationUnavailable {
+		t.Fatalf("status after recovery = %q, want Unavailable", got)
+	}
+
+	// A terminal result for the already-running job arrives while Unavailable.
+	if err := store.AppendToolCheckRecordCorrelated(
+		index.ToolCheckRecord{
+			CheckID: "chk-1", ImageDigest: "sha256:vp-1", ValidationStatus: "succeeded",
+			Terminal: true, ValidationRequestID: "vp-1", SentinelJobID: "job-1",
+		},
+		"vp-1", "job-1", true, true, "",
+	); err != nil {
+		t.Fatalf("AppendToolCheckRecordCorrelated: %v", err)
+	}
+	if got := getRec(t, store, "vp-1").ValidationStatus; got != index.ValidationSucceeded {
+		t.Fatalf("status after result = %q, want Succeeded (must correlate, not be swallowed)", got)
+	}
+
+	// Tick 2: the record is terminal now (not Unavailable), so nothing is re-sent
+	// and the terminal state is preserved.
+	if err := r.RetryDue(context.Background()); err != nil {
+		t.Fatalf("RetryDue tick 2: %v", err)
+	}
+	if len(enq.reqs) != 0 {
+		t.Errorf("enqueue calls = %d, want 0 (terminal record must not be re-sent)", len(enq.reqs))
+	}
+	if got := getRec(t, store, "vp-1").ValidationStatus; got != index.ValidationSucceeded {
+		t.Errorf("status = %q, want Succeeded preserved", got)
+	}
+}
+
+// TestEnqueueRetrier_LeavesFreshEnqueuePending proves a record still inside the
+// PendingStaleAfter window is treated as possibly-in-flight and left completely
+// untouched — never converted, never re-sent.
+func TestEnqueueRetrier_LeavesFreshEnqueuePending(t *testing.T) {
+	store := newStore(t)
+	clk := &fakeClock{t: time.Unix(1_700_000_000, 0).UTC()}
+	// Only 10s old; default PendingStaleAfter is 30s, so it is still in-flight.
+	seedPending(t, store, "vr-fresh", clk.t.Add(-10*time.Second), true)
+
+	enq := &fakeEnqueuer{alwaysFail: true}
+	r := newTestRetrier(t, store, enq, clk, EnqueueRetryConfig{})
+
+	if err := r.RetryDue(context.Background()); err != nil {
+		t.Fatalf("RetryDue: %v", err)
+	}
+	if len(enq.reqs) != 0 {
+		t.Fatalf("enqueue calls = %d, want 0 (fresh pending is not stranded)", len(enq.reqs))
+	}
+	rec := getRec(t, store, "vr-fresh")
+	if rec.ValidationStatus != index.ValidationEnqueuePending {
+		t.Errorf("status = %q, want EnqueuePending left untouched", rec.ValidationStatus)
+	}
+	if rec.FailureReason != "" {
+		t.Errorf("FailureReason = %q, want empty (record must not be modified)", rec.FailureReason)
+	}
+}
+
+// TestEnqueueRetrier_SkipsStrandedPendingMissingReplayFields verifies a stale
+// EnqueuePending record without the replay fields (pre-feature) is left untouched:
+// it cannot be re-sent, so it is neither converted nor backfilled.
+func TestEnqueueRetrier_SkipsStrandedPendingMissingReplayFields(t *testing.T) {
+	store := newStore(t)
+	clk := &fakeClock{t: time.Unix(1_700_000_000, 0).UTC()}
+	seedPending(t, store, "vr-old", clk.t.Add(-10*time.Minute), false) // replay=false, well past stale
+
+	enq := &fakeEnqueuer{alwaysFail: true}
+	r := newTestRetrier(t, store, enq, clk, EnqueueRetryConfig{})
+
+	if err := r.RetryDue(context.Background()); err != nil {
+		t.Fatalf("RetryDue: %v", err)
+	}
+	if len(enq.reqs) != 0 {
+		t.Fatalf("enqueue calls = %d, want 0 (cannot rebuild request)", len(enq.reqs))
+	}
+	rec := getRec(t, store, "vr-old")
+	if rec.ValidationStatus != index.ValidationEnqueuePending {
+		t.Errorf("status = %q, want EnqueuePending left untouched (no backfill)", rec.ValidationStatus)
+	}
+}
+
+// TestEnqueueRetryConfig_PendingStaleAfterExceedsTimeout locks the config
+// invariant: PendingStaleAfter takes a default and, however a caller sets it,
+// always ends strictly greater than EnqueueTimeout so an in-flight enqueue is
+// never misjudged stranded.
+func TestEnqueueRetryConfig_PendingStaleAfterExceedsTimeout(t *testing.T) {
+	// Zero-value config: default applied and it exceeds the (defaulted) timeout.
+	got := EnqueueRetryConfig{}.withDefaults()
+	if got.PendingStaleAfter != defaultPendingStaleAfter {
+		t.Errorf("default PendingStaleAfter = %v, want %v", got.PendingStaleAfter, defaultPendingStaleAfter)
+	}
+	if got.PendingStaleAfter <= got.EnqueueTimeout {
+		t.Errorf("PendingStaleAfter %v must exceed EnqueueTimeout %v", got.PendingStaleAfter, got.EnqueueTimeout)
+	}
+
+	// Too-low value (<= EnqueueTimeout) is raised above the timeout.
+	tooLow := EnqueueRetryConfig{EnqueueTimeout: 60 * time.Second, PendingStaleAfter: 20 * time.Second}.withDefaults()
+	if tooLow.PendingStaleAfter <= tooLow.EnqueueTimeout {
+		t.Errorf("PendingStaleAfter %v was not raised above EnqueueTimeout %v",
+			tooLow.PendingStaleAfter, tooLow.EnqueueTimeout)
+	}
+
+	// Equal value is also rejected (must be strictly greater).
+	eq := EnqueueRetryConfig{EnqueueTimeout: 30 * time.Second, PendingStaleAfter: 30 * time.Second}.withDefaults()
+	if eq.PendingStaleAfter <= eq.EnqueueTimeout {
+		t.Errorf("equal PendingStaleAfter %v was not raised above EnqueueTimeout %v",
+			eq.PendingStaleAfter, eq.EnqueueTimeout)
+	}
+
+	// An explicit safe value (> timeout) is preserved untouched.
+	if v := (EnqueueRetryConfig{EnqueueTimeout: 5 * time.Second, PendingStaleAfter: 45 * time.Second}).
+		withDefaults().PendingStaleAfter; v != 45*time.Second {
+		t.Errorf("explicit PendingStaleAfter = %v, want 45s preserved", v)
+	}
+}
+
+// TestEnqueueRetrier_SameIDReenqueueIsIdempotent locks NodeVault's half of the
+// NodeSentinel same-id idempotency contract. A stranded EnqueuePending whose
+// original enqueue actually reached NodeSentinel before the crash is recovered and
+// re-sent; because the re-send reuses the same ValidationRequestID, an idempotent
+// NodeSentinel returns the ORIGINAL job and creates no duplicate. The record ends
+// bound to that original job, not a second one. (NodeSentinel's own dedup
+// enforcement lives in the NodeSentinel repo and is not modified here.)
+func TestEnqueueRetrier_SameIDReenqueueIsIdempotent(t *testing.T) {
+	store := newStore(t)
+	clk := &fakeClock{t: time.Unix(1_700_000_000, 0).UTC()}
+	seedPending(t, store, "vr-1", clk.t.Add(-2*time.Minute), true) // stale
+
+	// Model the ambiguous crash: the original enqueue already registered job-1 on
+	// NodeSentinel for vr-1 before the process died persisting the outcome.
+	sent := &idempotentSentinel{jobs: map[string]string{"vr-1": "job-1"}, seq: 1}
+	r := newTestRetrier(t, store, sent, clk, EnqueueRetryConfig{})
+
+	// Tick 1 recovers to Unavailable; tick 2 re-sends the same id.
+	if err := r.RetryDue(context.Background()); err != nil {
+		t.Fatalf("RetryDue tick 1: %v", err)
+	}
+	if err := r.RetryDue(context.Background()); err != nil {
+		t.Fatalf("RetryDue tick 2: %v", err)
+	}
+
+	if len(sent.jobs) != 1 {
+		t.Errorf("distinct sentinel jobs = %d, want 1 (same-id re-send must not create a new job)", len(sent.jobs))
+	}
+	rec := getRec(t, store, "vr-1")
+	if rec.ValidationStatus != index.ValidationQueued {
+		t.Errorf("status = %q, want Queued", rec.ValidationStatus)
+	}
+	if rec.SentinelJobID != "job-1" {
+		t.Errorf("SentinelJobID = %q, want job-1 (the original job, not a duplicate)", rec.SentinelJobID)
 	}
 }

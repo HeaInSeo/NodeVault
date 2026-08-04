@@ -674,3 +674,144 @@ func TestGetTool_IndexPresentCASMissing_DataLoss(t *testing.T) {
 		t.Fatalf("GetTool error = %v, want codes.DataLoss", err)
 	}
 }
+
+// TestRetractTool_Idempotent verifies that calling RetractTool twice succeeds.
+// The store transition table is strict (Retracted → Retracted is rejected as a
+// self-edge), so command-level idempotency lives in the service: the second call
+// observes the phase is already Retracted and returns success without a store
+// write. LifecycleUpdatedAt must be unchanged by the second call, proving no-op.
+func TestRetractTool_Idempotent(t *testing.T) {
+	cat := newTestCatalog(t)
+	store, err := index.NewAt(t.TempDir())
+	if err != nil {
+		t.Fatalf("index.NewAt: %v", err)
+	}
+	svc := catalog.NewToolRegistryService(cat, store)
+
+	reg, err := svc.RegisterTool(t.Context(), &nfv1.RegisterToolRequest{
+		ToolName: "salmon",
+		Version:  "1.10.0",
+		Digest:   "sha256:ddd",
+		ImageUri: "registry.example.com/test:latest",
+	})
+	if err != nil {
+		t.Fatalf("RegisterTool: %v", err)
+	}
+
+	first, err := svc.RetractTool(t.Context(), &nfv1.RetractToolRequest{CasHash: reg.CasHash})
+	if err != nil {
+		t.Fatalf("RetractTool (first): %v", err)
+	}
+	if first.LifecyclePhase != string(index.PhaseRetracted) {
+		t.Errorf("first LifecyclePhase: got %q want Retracted", first.LifecyclePhase)
+	}
+	entryAfterFirst, err := store.GetByCasHash(reg.CasHash)
+	if err != nil {
+		t.Fatalf("GetByCasHash: %v", err)
+	}
+
+	second, err := svc.RetractTool(t.Context(), &nfv1.RetractToolRequest{CasHash: reg.CasHash})
+	if err != nil {
+		t.Fatalf("RetractTool (second) must be idempotent success, got: %v", err)
+	}
+	if second.LifecyclePhase != string(index.PhaseRetracted) {
+		t.Errorf("second LifecyclePhase: got %q want Retracted", second.LifecyclePhase)
+	}
+	entryAfterSecond, err := store.GetByCasHash(reg.CasHash)
+	if err != nil {
+		t.Fatalf("GetByCasHash: %v", err)
+	}
+	if !entryAfterSecond.LifecycleUpdatedAt.Equal(entryAfterFirst.LifecycleUpdatedAt) {
+		t.Errorf("idempotent RetractTool must not write the store: LifecycleUpdatedAt changed %v -> %v",
+			entryAfterFirst.LifecycleUpdatedAt, entryAfterSecond.LifecycleUpdatedAt)
+	}
+}
+
+// TestDeleteTool_Idempotent verifies that calling DeleteTool twice succeeds once
+// the tool is Deleted (tombstone present). Deleted → Deleted is a rejected
+// self-edge in the store, so the second success is command-level idempotency:
+// the phase is already Deleted and the entry (tombstone) still exists.
+func TestDeleteTool_Idempotent(t *testing.T) {
+	cat := newTestCatalog(t)
+	store, err := index.NewAt(t.TempDir())
+	if err != nil {
+		t.Fatalf("index.NewAt: %v", err)
+	}
+	svc := catalog.NewToolRegistryService(cat, store)
+
+	reg, err := svc.RegisterTool(t.Context(), &nfv1.RegisterToolRequest{
+		ToolName: "kallisto",
+		Version:  "0.50.1",
+		Digest:   "sha256:eee",
+		ImageUri: "registry.example.com/test:latest",
+	})
+	if err != nil {
+		t.Fatalf("RegisterTool: %v", err)
+	}
+
+	// Required sequence: Active → Retracted → Deleted.
+	if _, err = svc.RetractTool(t.Context(), &nfv1.RetractToolRequest{CasHash: reg.CasHash}); err != nil {
+		t.Fatalf("RetractTool: %v", err)
+	}
+	if _, err = svc.DeleteTool(t.Context(), &nfv1.DeleteToolRequest{CasHash: reg.CasHash}); err != nil {
+		t.Fatalf("DeleteTool (first): %v", err)
+	}
+	entryAfterFirst, err := store.GetByCasHash(reg.CasHash)
+	if err != nil {
+		t.Fatalf("GetByCasHash (tombstone must exist): %v", err)
+	}
+
+	second, err := svc.DeleteTool(t.Context(), &nfv1.DeleteToolRequest{CasHash: reg.CasHash})
+	if err != nil {
+		t.Fatalf("DeleteTool (second) must be idempotent success, got: %v", err)
+	}
+	if second.LifecyclePhase != string(index.PhaseDeleted) {
+		t.Errorf("second LifecyclePhase: got %q want Deleted", second.LifecyclePhase)
+	}
+	entryAfterSecond, err := store.GetByCasHash(reg.CasHash)
+	if err != nil {
+		t.Fatalf("GetByCasHash: %v", err)
+	}
+	if !entryAfterSecond.LifecycleUpdatedAt.Equal(entryAfterFirst.LifecycleUpdatedAt) {
+		t.Errorf("idempotent DeleteTool must not write the store: LifecycleUpdatedAt changed %v -> %v",
+			entryAfterFirst.LifecycleUpdatedAt, entryAfterSecond.LifecycleUpdatedAt)
+	}
+}
+
+// TestDeleteTool_ActiveForbidden_StillFails guards that command-level idempotency
+// did not relax the forbidden Active → Deleted edge. Idempotency applies only when
+// the tool is already at the target phase; skipping Retracted must still fail with
+// FailedPrecondition.
+func TestDeleteTool_ActiveForbidden_StillFails(t *testing.T) {
+	cat := newTestCatalog(t)
+	store, err := index.NewAt(t.TempDir())
+	if err != nil {
+		t.Fatalf("index.NewAt: %v", err)
+	}
+	svc := catalog.NewToolRegistryService(cat, store)
+
+	reg, err := svc.RegisterTool(t.Context(), &nfv1.RegisterToolRequest{
+		ToolName: "minimap2",
+		Version:  "2.28",
+		Digest:   "sha256:fff",
+		ImageUri: "registry.example.com/test:latest",
+	})
+	if err != nil {
+		t.Fatalf("RegisterTool: %v", err)
+	}
+
+	// Active → Deleted (skipping Retracted) is forbidden.
+	_, err = svc.DeleteTool(t.Context(), &nfv1.DeleteToolRequest{CasHash: reg.CasHash})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("DeleteTool on Active tool = %v, want codes.FailedPrecondition", err)
+	}
+
+	// The entry must remain Active — the rejected call performed no write.
+	entry, err := store.GetByCasHash(reg.CasHash)
+	if err != nil {
+		t.Fatalf("GetByCasHash: %v", err)
+	}
+	if entry.LifecyclePhase != index.PhaseActive {
+		t.Errorf("LifecyclePhase after forbidden delete: got %q want Active", entry.LifecyclePhase)
+	}
+}

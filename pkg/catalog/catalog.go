@@ -340,6 +340,24 @@ func (s *ToolRegistryService) RetractTool(
 	if s.store == nil {
 		return nil, status.Error(codes.Unavailable, "tool registry unavailable")
 	}
+	// Command-level idempotency: a Retract of an already-Retracted tool is a
+	// no-op success. The store transition table stays strict (SetLifecyclePhase
+	// rejects the Retracted → Retracted self-edge), so the current phase is read
+	// here rather than relaxing the table. Only "already at target" is idempotent;
+	// forbidden edges still surface as FailedPrecondition below.
+	entry, err := s.store.GetByCasHash(req.CasHash)
+	if err != nil {
+		if errors.Is(err, index.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "tool %s not found", req.CasHash)
+		}
+		return nil, status.Errorf(codes.Internal, "retract: %v", err)
+	}
+	if entry.LifecyclePhase == index.PhaseRetracted {
+		return &nfv1.RetractToolResponse{
+			CasHash:        req.CasHash,
+			LifecyclePhase: string(index.PhaseRetracted),
+		}, nil
+	}
 	if err := s.store.SetLifecyclePhase(req.CasHash, index.PhaseRetracted); err != nil {
 		if errors.Is(err, index.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "tool %s not found", req.CasHash)
@@ -372,6 +390,25 @@ func (s *ToolRegistryService) DeleteTool(
 	}
 	if s.store == nil {
 		return nil, status.Error(codes.Unavailable, "tool registry unavailable")
+	}
+	// Command-level idempotency: a Delete of an already-Deleted tool is a no-op
+	// success once the tombstone (the Deleted-marked index entry) exists. The
+	// store transition table stays strict (SetLifecyclePhase rejects the
+	// Deleted → Deleted self-edge), so the current phase is read here. Only
+	// "already at target" is idempotent; forbidden edges (e.g. Active → Deleted)
+	// still surface as FailedPrecondition below.
+	entry, err := s.store.GetByCasHash(req.CasHash)
+	if err != nil {
+		if errors.Is(err, index.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "tool %s not found", req.CasHash)
+		}
+		return nil, status.Errorf(codes.Internal, "delete: %v", err)
+	}
+	if entry.LifecyclePhase == index.PhaseDeleted {
+		return &nfv1.DeleteToolResponse{
+			CasHash:        req.CasHash,
+			LifecyclePhase: string(index.PhaseDeleted),
+		}, nil
 	}
 	if err := s.store.SetLifecyclePhase(req.CasHash, index.PhaseDeleted); err != nil {
 		if errors.Is(err, index.ErrNotFound) {

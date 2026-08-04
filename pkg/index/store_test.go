@@ -1122,6 +1122,76 @@ func TestTransitionValidationRequest_UnavailableToAbandoned_Terminal(t *testing.
 	}
 }
 
+// TestTransitionValidationRequest_UnavailableToRunning_Allowed guards the
+// correlation edge the enqueue-outbox recovery needs: a request the retry loop
+// recovered to Unavailable may have had its original enqueue actually reach
+// NodeSentinel before the crash, so its job can already be running. A result for
+// that job must be able to promote the record Unavailable -> Running rather than
+// be silently rejected — see validValidationTransitions and
+// applyValidationCorrelationLocked.
+func TestTransitionValidationRequest_UnavailableToRunning_Allowed(t *testing.T) {
+	s := newStore(t)
+	if err := s.CreateValidationRequestRecord(index.ValidationRequestRecord{ValidationRequestID: "vr-1"}); err != nil {
+		t.Fatalf("CreateValidationRequestRecord: %v", err)
+	}
+	if err := s.TransitionValidationRequest("vr-1", index.ValidationUnavailable, nil); err != nil {
+		t.Fatalf("EnqueuePending -> Unavailable: %v", err)
+	}
+	if err := s.TransitionValidationRequest("vr-1", index.ValidationRunning, nil); err != nil {
+		t.Fatalf("Unavailable -> Running: %v, want allowed", err)
+	}
+	got, err := s.GetValidationRequestRecord("vr-1")
+	if err != nil {
+		t.Fatalf("GetValidationRequestRecord: %v", err)
+	}
+	if got.ValidationStatus != index.ValidationRunning {
+		t.Errorf("status = %q, want Running", got.ValidationStatus)
+	}
+}
+
+// TestAppendToolCheckRecordCorrelated_FromUnavailable_Correlates is the P1
+// regression guard: a terminal validation result arriving for a request the
+// enqueue-retry loop recovered to Unavailable (its job was really running) must
+// correlate through to a terminal status, not be swallowed. Before Unavailable
+// gained a Running edge, applyValidationCorrelationLocked's Unavailable -> Running
+// promotion was rejected and the record stayed Unavailable forever.
+func TestAppendToolCheckRecordCorrelated_FromUnavailable_Correlates(t *testing.T) {
+	s := newStore(t)
+	if err := s.CreateValidationRequestRecord(index.ValidationRequestRecord{ValidationRequestID: "vr-1"}); err != nil {
+		t.Fatalf("CreateValidationRequestRecord: %v", err)
+	}
+	if err := s.TransitionValidationRequest("vr-1", index.ValidationUnavailable, nil); err != nil {
+		t.Fatalf("-> Unavailable: %v", err)
+	}
+
+	rec := index.ToolCheckRecord{
+		CheckID:             "chk-1",
+		ImageDigest:         "sha256:abc",
+		ValidationStatus:    "app_failed",
+		Terminal:            true,
+		ValidationRequestID: "vr-1",
+		SentinelJobID:       "job-1",
+	}
+	if err := s.AppendToolCheckRecordCorrelated(rec, "vr-1", "job-1", true, false, "smoke run failed"); err != nil {
+		t.Fatalf("AppendToolCheckRecordCorrelated: %v", err)
+	}
+
+	got, err := s.GetValidationRequestRecord("vr-1")
+	if err != nil {
+		t.Fatalf("GetValidationRequestRecord: %v", err)
+	}
+	if got.ValidationStatus != index.ValidationFailed {
+		t.Errorf("status = %q, want Failed (terminal result must correlate from Unavailable, not be swallowed)",
+			got.ValidationStatus)
+	}
+	if got.SentinelJobID != "job-1" {
+		t.Errorf("SentinelJobID = %q, want job-1 (correlation must record the job)", got.SentinelJobID)
+	}
+	if got.FailureReason != "smoke run failed" {
+		t.Errorf("FailureReason = %q, want the result's reason", got.FailureReason)
+	}
+}
+
 // TestListValidationRequestsByStatus_FiltersAndDeepCopiesActions verifies the
 // enqueue-retry loop's accessor returns only matching records and that mutating
 // the returned RequestedActions cannot corrupt stored state.

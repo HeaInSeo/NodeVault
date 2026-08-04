@@ -414,7 +414,7 @@ type ToolFunctionCatalogEntry struct {
 // validValidationTransitions (store.go) for the allowed state graph:
 //
 //	EnqueuePending -> Queued | Unavailable | Running
-//	Unavailable    -> EnqueuePending | Queued | EnqueueAbandoned
+//	Unavailable    -> EnqueuePending | Queued | Running | EnqueueAbandoned
 //	Queued         -> Running | Failed | Interrupted
 //	Running        -> Succeeded | Failed | Interrupted
 //

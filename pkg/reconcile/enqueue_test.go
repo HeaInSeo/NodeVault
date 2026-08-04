@@ -483,6 +483,56 @@ func TestEnqueueRetrier_RecoversStrandedEnqueuePending(t *testing.T) {
 	}
 }
 
+// TestEnqueueRetrier_ResultCorrelatesAfterRecoveryBeforeReenqueue covers the
+// window codex P1 flagged: a stranded request whose original enqueue actually
+// reached NodeSentinel is recovered to Unavailable, and before the next re-send
+// tick a terminal result for the already-running job arrives. It must correlate
+// (Unavailable -> Running -> terminal) rather than be swallowed, and a later
+// RetryDue tick must then leave the now-terminal record alone (no re-send, no
+// corruption).
+func TestEnqueueRetrier_ResultCorrelatesAfterRecoveryBeforeReenqueue(t *testing.T) {
+	store := newStore(t)
+	clk := &fakeClock{t: time.Unix(1_700_000_000, 0).UTC()}
+	seedPending(t, store, "vp-1", clk.t.Add(-2*time.Minute), true) // stranded, stale
+
+	enq := &fakeEnqueuer{alwaysFail: true} // a re-send, if attempted, would fail
+	r := newTestRetrier(t, store, enq, clk, EnqueueRetryConfig{})
+
+	// Tick 1: recover the stranded record to Unavailable (no re-send yet).
+	if err := r.RetryDue(context.Background()); err != nil {
+		t.Fatalf("RetryDue tick 1: %v", err)
+	}
+	if got := getRec(t, store, "vp-1").ValidationStatus; got != index.ValidationUnavailable {
+		t.Fatalf("status after recovery = %q, want Unavailable", got)
+	}
+
+	// A terminal result for the already-running job arrives while Unavailable.
+	if err := store.AppendToolCheckRecordCorrelated(
+		index.ToolCheckRecord{
+			CheckID: "chk-1", ImageDigest: "sha256:vp-1", ValidationStatus: "succeeded",
+			Terminal: true, ValidationRequestID: "vp-1", SentinelJobID: "job-1",
+		},
+		"vp-1", "job-1", true, true, "",
+	); err != nil {
+		t.Fatalf("AppendToolCheckRecordCorrelated: %v", err)
+	}
+	if got := getRec(t, store, "vp-1").ValidationStatus; got != index.ValidationSucceeded {
+		t.Fatalf("status after result = %q, want Succeeded (must correlate, not be swallowed)", got)
+	}
+
+	// Tick 2: the record is terminal now (not Unavailable), so nothing is re-sent
+	// and the terminal state is preserved.
+	if err := r.RetryDue(context.Background()); err != nil {
+		t.Fatalf("RetryDue tick 2: %v", err)
+	}
+	if len(enq.reqs) != 0 {
+		t.Errorf("enqueue calls = %d, want 0 (terminal record must not be re-sent)", len(enq.reqs))
+	}
+	if got := getRec(t, store, "vp-1").ValidationStatus; got != index.ValidationSucceeded {
+		t.Errorf("status = %q, want Succeeded preserved", got)
+	}
+}
+
 // TestEnqueueRetrier_LeavesFreshEnqueuePending proves a record still inside the
 // PendingStaleAfter window is treated as possibly-in-flight and left completely
 // untouched — never converted, never re-sent.

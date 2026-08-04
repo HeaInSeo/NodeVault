@@ -1090,9 +1090,16 @@ func (s *Store) ListValidationRequestsByStatus(status ValidationStatus) ([]Valid
 // one-way: Queued has no edge sourced from Running/Succeeded/Failed, so a
 // late-arriving enqueue ACK's own Queued transition attempt is rejected by
 // this same graph instead of regressing a record that already moved on.
+//
+// Unavailable -> Queued is the enqueue-retry loop's success edge: it retries
+// while the record is still Unavailable (never persisting an intermediate
+// EnqueuePending, so a crash mid-retry cannot strand the record — see
+// pkg/reconcile.EnqueueRetrier.retryOne) and, on a successful re-enqueue,
+// moves straight to Queued. Unavailable -> EnqueuePending remains for a
+// manual/future re-arm path.
 var validValidationTransitions = map[ValidationStatus][]ValidationStatus{
 	ValidationEnqueuePending: {ValidationQueued, ValidationUnavailable, ValidationRunning},
-	ValidationUnavailable:    {ValidationEnqueuePending, ValidationEnqueueAbandoned},
+	ValidationUnavailable:    {ValidationEnqueuePending, ValidationQueued, ValidationEnqueueAbandoned},
 	ValidationQueued:         {ValidationRunning, ValidationFailed, ValidationInterrupted},
 	ValidationRunning:        {ValidationSucceeded, ValidationFailed, ValidationInterrupted},
 }
@@ -1114,6 +1121,37 @@ func (s *Store) TransitionValidationRequest(
 	}
 	if err := s.transitionValidationRequestLocked(idx, to, mutate); err != nil {
 		return fmt.Errorf("%w for %q", err, validationRequestID)
+	}
+	return s.save()
+}
+
+// UpdateValidationRequestRetryState updates the retry-bookkeeping fields of an
+// Unavailable request in place, without a status change. The enqueue-retry loop
+// uses it to record a failed retry's incremented attempt count, backed-off
+// NextAttemptAt, and last error while the record stays Unavailable — so a crash
+// mid-retry leaves it exactly where RetryDue will find it again, never stranded
+// in EnqueuePending. It errors (ErrInvalidTransition) if the record is not
+// currently Unavailable, and pins the status across mutate, so it cannot be
+// used to smuggle a record around validValidationTransitions.
+func (s *Store) UpdateValidationRequestRetryState(
+	validationRequestID string, mutate func(*ValidationRequestRecord),
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	idx := s.findValidationRequestIndex(validationRequestID)
+	if idx == -1 {
+		return fmt.Errorf("%w: validation_request_id=%q", ErrNotFound, validationRequestID)
+	}
+	current := s.idx.ValidationRequestRecords[idx].ValidationStatus
+	if current != ValidationUnavailable {
+		return fmt.Errorf("%w: retry-state update requires Unavailable, got %s for %q",
+			ErrInvalidTransition, current, validationRequestID)
+	}
+	if mutate != nil {
+		mutate(&s.idx.ValidationRequestRecords[idx])
+		// Pin the status: this method is bookkeeping only, never a transition.
+		s.idx.ValidationRequestRecords[idx].ValidationStatus = current
 	}
 	return s.save()
 }

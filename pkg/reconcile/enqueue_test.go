@@ -21,11 +21,17 @@ type fakeEnqueuer struct {
 	failFirstN int
 	alwaysFail bool
 	jobID      string
+	// onCall, if set, runs at the start of each EnqueueValidationWork — used to
+	// observe the durable record's status at the exact moment of the RPC.
+	onCall func(*nsv1.EnqueueValidationWorkRequest)
 }
 
 func (f *fakeEnqueuer) EnqueueValidationWork(
 	_ context.Context, req *nsv1.EnqueueValidationWorkRequest,
 ) (*nsv1.EnqueueValidationWorkResponse, error) {
+	if f.onCall != nil {
+		f.onCall(req)
+	}
 	f.reqs = append(f.reqs, req)
 	if f.alwaysFail || len(f.reqs) <= f.failFirstN {
 		return nil, errors.New("simulated transient enqueue failure")
@@ -145,6 +151,60 @@ func TestEnqueueRetrier_RetrySucceeds_ReusesSameRequestID(t *testing.T) {
 	}
 	if !rec.NextAttemptAt.IsZero() {
 		t.Errorf("NextAttemptAt = %v, want cleared after success", rec.NextAttemptAt)
+	}
+}
+
+// TestEnqueueRetryConfig_DefaultsApplyJitter is the P2 guard: a default
+// EnqueueRetryConfig{} must get the default jitter fraction, not zero —
+// otherwise a backlog that built up during an outage retries as a synchronized
+// cohort. Before the fix withDefaults left a zero JitterFrac untouched.
+func TestEnqueueRetryConfig_DefaultsApplyJitter(t *testing.T) {
+	got := EnqueueRetryConfig{}.withDefaults()
+	if got.JitterFrac != defaultEnqueueJitterFrac {
+		t.Errorf("default JitterFrac = %v, want %v (zero-value config must apply default jitter)",
+			got.JitterFrac, defaultEnqueueJitterFrac)
+	}
+	if got.JitterFrac <= 0 {
+		t.Errorf("default JitterFrac = %v, want > 0 to desync retry cohorts", got.JitterFrac)
+	}
+	// An explicit in-range value is preserved.
+	if v := (EnqueueRetryConfig{JitterFrac: 0.5}).withDefaults().JitterFrac; v != 0.5 {
+		t.Errorf("explicit JitterFrac = %v, want 0.5 preserved", v)
+	}
+}
+
+// TestEnqueueRetrier_RetryDoesNotStrandEnqueuePending is the P1 guard: the retry
+// path must never persist a bare EnqueuePending status. The record stays
+// Unavailable across the RPC, so a crash mid-retry leaves it recoverable by the
+// next RetryDue (which only scans Unavailable). We observe the durable status
+// at the exact moment of the enqueue call, and after a failed retry. Before the
+// fix, retryOne persisted Unavailable -> EnqueuePending before the RPC, so the
+// observed status would be EnqueuePending and the failed record would be
+// stranded there.
+func TestEnqueueRetrier_RetryDoesNotStrandEnqueuePending(t *testing.T) {
+	store := newStore(t)
+	seedUnavailable(t, store, "vr-1", 1, time.Time{}, true)
+
+	enq := &fakeEnqueuer{alwaysFail: true}
+	var observed []index.ValidationStatus
+	enq.onCall = func(*nsv1.EnqueueValidationWorkRequest) {
+		observed = append(observed, getRec(t, store, "vr-1").ValidationStatus)
+	}
+	clk := &fakeClock{t: time.Unix(1_700_000_000, 0).UTC()}
+	r := newTestRetrier(t, store, enq, clk, EnqueueRetryConfig{})
+
+	if err := r.RetryDue(context.Background()); err != nil {
+		t.Fatalf("RetryDue: %v", err)
+	}
+	if len(observed) != 1 {
+		t.Fatalf("enqueue observations = %d, want 1", len(observed))
+	}
+	if observed[0] != index.ValidationUnavailable {
+		t.Errorf("status during RPC = %q, want Unavailable (must not persist a bare EnqueuePending)", observed[0])
+	}
+	// After a failed retry the record is still Unavailable, never EnqueuePending.
+	if got := getRec(t, store, "vr-1").ValidationStatus; got != index.ValidationUnavailable {
+		t.Errorf("status after failed retry = %q, want Unavailable", got)
 	}
 }
 

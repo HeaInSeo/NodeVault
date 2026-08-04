@@ -82,7 +82,11 @@ func (c EnqueueRetryConfig) withDefaults() EnqueueRetryConfig {
 	if c.MaxBackoff < c.BaseBackoff {
 		c.MaxBackoff = c.BaseBackoff
 	}
-	if c.JitterFrac < 0 || c.JitterFrac > 1 {
+	// <=0 (including the zero value) takes the default, matching the other
+	// knobs. A default EnqueueRetryConfig{} must still apply jitter, otherwise
+	// requests that piled up during an outage would retry as a synchronized
+	// cohort; a caller cannot select exactly zero jitter, by design.
+	if c.JitterFrac <= 0 || c.JitterFrac > 1 {
 		c.JitterFrac = defaultEnqueueJitterFrac
 	}
 	if c.EnqueueTimeout <= 0 {
@@ -221,22 +225,13 @@ func (r *EnqueueRetrier) escalate(rec index.ValidationRequestRecord) {
 func (r *EnqueueRetrier) retryOne(ctx context.Context, rec index.ValidationRequestRecord) {
 	attempt := rec.EnqueueAttempts + 1
 
-	// Mark the attempt in-flight (Unavailable -> EnqueuePending) and count it up
-	// front, so a crash mid-enqueue still consumes budget rather than allowing
-	// unbounded retries. An ErrInvalidTransition means a result raced this
-	// record forward; skip it.
-	if err := r.store.TransitionValidationRequest(
-		rec.ValidationRequestID, index.ValidationEnqueuePending,
-		func(rr *index.ValidationRequestRecord) { rr.EnqueueAttempts = attempt },
-	); err != nil {
-		if errors.Is(err, index.ErrInvalidTransition) {
-			return
-		}
-		slog.Warn("index: failed to arm enqueue retry",
-			"validation_request_id", rec.ValidationRequestID, "err", err)
-		return
-	}
-
+	// Deliberately do NOT persist an intermediate EnqueuePending status here.
+	// The record stays Unavailable across the RPC, so a crash mid-enqueue
+	// leaves it exactly where the next RetryDue will find it (Unavailable) —
+	// never stranded in EnqueuePending with no scanner to recover it. The
+	// attempt is counted only on a definitive outcome (success -> Queued, or
+	// failure -> incremented count, still Unavailable); a crash simply re-runs
+	// this attempt, still bounded by the budget on every non-crash outcome.
 	enqReq := &nsv1.EnqueueValidationWorkRequest{
 		ArtifactKind:        rec.ArtifactKind,
 		ImageRepository:     rec.ImageRepository,
@@ -254,10 +249,10 @@ func (r *EnqueueRetrier) retryOne(ctx context.Context, rec index.ValidationReque
 		r.onRetryFailure(rec.ValidationRequestID, attempt, err)
 		return
 	}
-	r.onRetrySuccess(rec.ValidationRequestID, resp)
+	r.onRetrySuccess(rec.ValidationRequestID, attempt, resp)
 }
 
-func (r *EnqueueRetrier) onRetrySuccess(id string, resp *nsv1.EnqueueValidationWorkResponse) {
+func (r *EnqueueRetrier) onRetrySuccess(id string, attempt int, resp *nsv1.EnqueueValidationWorkResponse) {
 	// The enqueue call itself succeeded — that is what this counter tracks,
 	// independent of the bookkeeping transition below.
 	metrics.SentinelEnqueueRetrySuccessTotal.Add(1)
@@ -266,6 +261,7 @@ func (r *EnqueueRetrier) onRetrySuccess(id string, resp *nsv1.EnqueueValidationW
 	err := r.store.TransitionValidationRequest(
 		id, index.ValidationQueued,
 		func(rr *index.ValidationRequestRecord) {
+			rr.EnqueueAttempts = attempt
 			rr.SentinelJobID = jobID
 			rr.QueuedAt = queuedAt
 			rr.FailureReason = ""
@@ -277,9 +273,9 @@ func (r *EnqueueRetrier) onRetrySuccess(id string, resp *nsv1.EnqueueValidationW
 		slog.Info("NodeSentinel enqueue retry succeeded",
 			"validation_request_id", id, "job_id", jobID)
 	case errors.Is(err, index.ErrInvalidTransition):
-		// A result arrived first and drove EnqueuePending -> Running: the retry
-		// still succeeded, the record simply already moved past Queued.
-		slog.Info("NodeSentinel enqueue retry succeeded; record already progressed past Queued",
+		// Defensive: a concurrent transition moved the record off Unavailable
+		// before this write. The retry itself still succeeded.
+		slog.Info("NodeSentinel enqueue retry succeeded; record already progressed",
 			"validation_request_id", id)
 	default:
 		slog.Warn("index: failed to mark retried validation request queued",
@@ -292,16 +288,19 @@ func (r *EnqueueRetrier) onRetryFailure(id string, attempt int, enqErr error) {
 	nextAt := r.now().Add(r.backoff(attempt))
 	slog.Warn("NodeSentinel enqueue retry failed (will retry after backoff)",
 		"validation_request_id", id, "attempt", attempt, "next_attempt_at", nextAt, "err", enqErr)
-	err := r.store.TransitionValidationRequest(
-		id, index.ValidationUnavailable,
+	// Stay Unavailable — only the retry bookkeeping changes. Keeping the record
+	// in Unavailable (rather than routing it back through EnqueuePending) is
+	// what guarantees a crash here cannot strand it: the next RetryDue still
+	// finds it under ValidationUnavailable.
+	err := r.store.UpdateValidationRequestRetryState(
+		id,
 		func(rr *index.ValidationRequestRecord) {
+			rr.EnqueueAttempts = attempt
 			rr.FailureReason = enqErr.Error()
 			rr.NextAttemptAt = nextAt
 		},
 	)
-	// ErrInvalidTransition here means a result raced the record off
-	// EnqueuePending; no retry needs rescheduling in that case.
-	if err != nil && !errors.Is(err, index.ErrInvalidTransition) {
+	if err != nil {
 		slog.Warn("index: failed to reschedule validation request retry",
 			"validation_request_id", id, "err", err)
 	}

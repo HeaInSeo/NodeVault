@@ -414,17 +414,20 @@ type ToolFunctionCatalogEntry struct {
 // validValidationTransitions (store.go) for the allowed state graph:
 //
 //	EnqueuePending -> Queued | Unavailable | Running
-//	Unavailable    -> EnqueuePending | EnqueueAbandoned
+//	Unavailable    -> EnqueuePending | Queued | EnqueueAbandoned
 //	Queued         -> Running | Failed | Interrupted
 //	Running        -> Succeeded | Failed | Interrupted
 //
 // The reconcile enqueue-retry loop (pkg/reconcile.EnqueueRetrier) recovers a
 // request left in Unavailable by a transport/process enqueue failure: it
-// reuses the same ValidationRequestID and drives Unavailable -> EnqueuePending
-// -> Queued on success, or back to Unavailable (incrementing EnqueueAttempts
-// and setting a backed-off NextAttemptAt) on repeated failure. Once the
-// attempt budget is spent it escalates Unavailable -> EnqueueAbandoned, a
-// terminal status with no outgoing edge, so retries stop instead of looping.
+// reuses the same ValidationRequestID and re-enqueues while the record is
+// still Unavailable — never persisting an intermediate EnqueuePending, so a
+// crash mid-retry cannot strand the record. On success it moves straight to
+// Queued (Unavailable -> Queued); on repeated failure it stays Unavailable
+// (incrementing EnqueueAttempts and setting a backed-off NextAttemptAt via an
+// in-place retry-state update). Once the attempt budget is spent it escalates
+// Unavailable -> EnqueueAbandoned, a terminal status with no outgoing edge, so
+// retries stop instead of looping.
 //
 // PR2-A produced only EnqueuePending, Queued, and Unavailable; the enqueue-
 // retry loop adds EnqueueAbandoned. The Running/Succeeded/Failed/Interrupted

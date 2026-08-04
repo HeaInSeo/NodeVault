@@ -1159,3 +1159,48 @@ func TestListValidationRequestsByStatus_FiltersAndDeepCopiesActions(t *testing.T
 		t.Errorf("stored RequestedActions = %v, want unchanged [smoke_run] (getter must deep-copy)", reread.RequestedActions)
 	}
 }
+
+// TestUpdateValidationRequestRetryState_UnavailableOnly verifies the in-place
+// retry-state update applies to an Unavailable record without changing its
+// status (even if the mutate tries to), and is rejected for any other status —
+// so the enqueue-retry loop can record a failed retry without ever leaving
+// Unavailable, and the method cannot smuggle a record around the state graph.
+func TestUpdateValidationRequestRetryState_UnavailableOnly(t *testing.T) {
+	s := newStore(t)
+	if err := s.CreateValidationRequestRecord(index.ValidationRequestRecord{ValidationRequestID: "vr-1"}); err != nil {
+		t.Fatalf("CreateValidationRequestRecord: %v", err)
+	}
+	if err := s.TransitionValidationRequest("vr-1", index.ValidationUnavailable, nil); err != nil {
+		t.Fatalf("-> Unavailable: %v", err)
+	}
+
+	// Applies on Unavailable; status is pinned even though mutate tries to change it.
+	when := time.Now().UTC().Add(time.Minute)
+	if err := s.UpdateValidationRequestRetryState("vr-1", func(rr *index.ValidationRequestRecord) {
+		rr.EnqueueAttempts = 3
+		rr.NextAttemptAt = when
+		rr.ValidationStatus = index.ValidationQueued // must be ignored (pinned)
+	}); err != nil {
+		t.Fatalf("UpdateValidationRequestRetryState: %v", err)
+	}
+	got, err := s.GetValidationRequestRecord("vr-1")
+	if err != nil {
+		t.Fatalf("GetValidationRequestRecord: %v", err)
+	}
+	if got.ValidationStatus != index.ValidationUnavailable {
+		t.Errorf("status = %q, want Unavailable (must be pinned)", got.ValidationStatus)
+	}
+	if got.EnqueueAttempts != 3 || !got.NextAttemptAt.Equal(when) {
+		t.Errorf("bookkeeping not applied: attempts=%d nextAt=%v", got.EnqueueAttempts, got.NextAttemptAt)
+	}
+
+	// Rejected on a non-Unavailable record.
+	if terr := s.TransitionValidationRequest("vr-1", index.ValidationQueued, nil); terr != nil {
+		t.Fatalf("-> Queued: %v", terr)
+	}
+	if uerr := s.UpdateValidationRequestRetryState("vr-1", func(rr *index.ValidationRequestRecord) {
+		rr.EnqueueAttempts = 9
+	}); !errors.Is(uerr, index.ErrInvalidTransition) {
+		t.Errorf("update on Queued err = %v, want ErrInvalidTransition", uerr)
+	}
+}

@@ -27,6 +27,11 @@ var (
 	SentinelEnqueueRetrySuccessTotal = expvar.NewInt("nodevault_sentinel_enqueue_retry_success_total")
 	SentinelEnqueueRetryFailureTotal = expvar.NewInt("nodevault_sentinel_enqueue_retry_failure_total")
 	SentinelEnqueueAbandonedTotal    = expvar.NewInt("nodevault_sentinel_enqueue_abandoned_total")
+	// SentinelEnqueuePendingRecoveredTotal counts records the loop found stranded
+	// in EnqueuePending past PendingStaleAfter (the build path persisted them then
+	// crashed before its enqueue produced an outcome) and converted to Unavailable
+	// for same-id re-send.
+	SentinelEnqueuePendingRecoveredTotal = expvar.NewInt("nodevault_sentinel_enqueue_pending_recovered_total")
 
 	// ValidationCorrelation* counters classify how a validation result's
 	// validation_request_id resolved on ingest (see pkg/catalogrest).

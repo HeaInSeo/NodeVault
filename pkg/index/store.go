@@ -69,6 +69,14 @@ var ErrRecordConflict = errors.New("index: record content conflict")
 // genuine storage failure (a save() error, an I/O error, etc.).
 var ErrInvalidTransition = errors.New("index: invalid validation status transition")
 
+// ErrInvalidLifecycleTransition is returned by SetLifecyclePhase when the
+// entry's current lifecycle_phase has no allowed edge to the requested one
+// (see validLifecycleTransitions). This is deliberately distinct from
+// ErrInvalidTransition: pkg/build/service.go treats ErrInvalidTransition as an
+// expected, ignorable race on the validation-status axis, so reusing it here
+// would let a genuine lifecycle-transition violation be silently swallowed.
+var ErrInvalidLifecycleTransition = errors.New("index: invalid lifecycle transition")
+
 // New creates a Store backed by the JSON file at dir/vault-index.json.
 // The directory is created if it does not exist.
 // INDEX_DIR env overrides the default directory.
@@ -188,7 +196,31 @@ func (s *Store) ListActive() ([]Entry, error) {
 	return out, nil
 }
 
+// validLifecycleTransitions enumerates the only allowed lifecycle_phase edges,
+// transcribed directly from docs/PLATFORM_MASTER_DESIGN.md §4.4:
+//
+//	Pending   → Active                 (L4 pass + RegisterTool)
+//	Active    → Retracted              (operator Retract)
+//	Retracted → Active | Deleted       (operator Restore | Delete + Harbor GC)
+//	Deleted   → ∅                      (terminal)
+//
+// Active → Deleted is forbidden — Retracted must be traversed first. Any edge
+// not listed here (including self-edges and every Deleted → * edge) is rejected
+// by SetLifecyclePhase. The Retracted → Active (Restore) edge is present because
+// §4.4 defines it, but no caller drives it yet: the store has no RestoreTool
+// path (tracked separately as F-3c).
+var validLifecycleTransitions = map[LifecyclePhase][]LifecyclePhase{
+	PhasePending:   {PhaseActive},
+	PhaseActive:    {PhaseRetracted},
+	PhaseRetracted: {PhaseActive, PhaseDeleted},
+	PhaseDeleted:   {},
+}
+
 // SetLifecyclePhase updates the lifecycle_phase of the entry identified by casHash.
+//
+// The transition must be an allowed edge in validLifecycleTransitions (§4.4);
+// otherwise the entry is left untouched and ErrInvalidLifecycleTransition is
+// returned. On rejection no save() occurs, so the on-disk index is unchanged.
 //
 // IMPORTANT: This method MUST be called only by NodeVault explicit operations
 // (register, retract, delete). The reconcile loop must never call this method.
@@ -199,6 +231,17 @@ func (s *Store) SetLifecyclePhase(casHash string, phase LifecyclePhase) error {
 	idx, err := s.findIndex(casHash)
 	if err != nil {
 		return err
+	}
+	current := s.idx.Entries[idx].LifecyclePhase
+	allowed := false
+	for _, next := range validLifecycleTransitions[current] {
+		if next == phase {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return fmt.Errorf("%w: %s -> %s", ErrInvalidLifecycleTransition, current, phase)
 	}
 	s.idx.Entries[idx].LifecyclePhase = phase
 	s.idx.Entries[idx].LifecycleUpdatedAt = time.Now().UTC()

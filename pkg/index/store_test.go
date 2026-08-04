@@ -211,6 +211,101 @@ func TestSetLifecyclePhase_NotFound(t *testing.T) {
 	}
 }
 
+// appendAtPhase appends a tool entry starting at the given lifecycle_phase.
+func appendAtPhase(t *testing.T, s *index.Store, casHash string, phase index.LifecyclePhase) {
+	t.Helper()
+	e := toolEntry(casHash, stableRefBWA1)
+	e.LifecyclePhase = phase
+	if err := s.Append(e); err != nil {
+		t.Fatalf("Append(%s): %v", phase, err)
+	}
+}
+
+// TestSetLifecyclePhase_AllowedEdges verifies each of the four §4.4 edges
+// succeeds: Pending→Active, Active→Retracted, Retracted→Active, Retracted→Deleted.
+func TestSetLifecyclePhase_AllowedEdges(t *testing.T) {
+	cases := []struct {
+		name string
+		from index.LifecyclePhase
+		to   index.LifecyclePhase
+	}{
+		{"Pending->Active", index.PhasePending, index.PhaseActive},
+		{"Active->Retracted", index.PhaseActive, index.PhaseRetracted},
+		{"Retracted->Active", index.PhaseRetracted, index.PhaseActive},
+		{"Retracted->Deleted", index.PhaseRetracted, index.PhaseDeleted},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStore(t)
+			appendAtPhase(t, s, "hash-edge", tc.from)
+			if err := s.SetLifecyclePhase("hash-edge", tc.to); err != nil {
+				t.Fatalf("SetLifecyclePhase %s: unexpected error %v", tc.name, err)
+			}
+			got, _ := s.GetByCasHash("hash-edge")
+			if got.LifecyclePhase != tc.to {
+				t.Errorf("LifecyclePhase: got %q want %q", got.LifecyclePhase, tc.to)
+			}
+		})
+	}
+}
+
+// TestSetLifecyclePhase_ActiveToDeleted_Rejected is the F-3 regression test:
+// §4.4 forbids Active → Deleted (Retracted must be traversed first). Before the
+// transition table was enforced, SetLifecyclePhase overwrote phase blindly and
+// this transition silently succeeded.
+func TestSetLifecyclePhase_ActiveToDeleted_Rejected(t *testing.T) {
+	s := newStore(t)
+	appendAtPhase(t, s, "hash-ad", index.PhaseActive)
+
+	err := s.SetLifecyclePhase("hash-ad", index.PhaseDeleted)
+	if !errors.Is(err, index.ErrInvalidLifecycleTransition) {
+		t.Fatalf("expected ErrInvalidLifecycleTransition, got %v", err)
+	}
+	got, _ := s.GetByCasHash("hash-ad")
+	if got.LifecyclePhase != index.PhaseActive {
+		t.Errorf("rejected transition must leave phase Active, got %q", got.LifecyclePhase)
+	}
+}
+
+// TestSetLifecyclePhase_ForbiddenEdges_Rejected covers the remaining unlisted
+// edges: Pending→Retracted, every Deleted→* edge (Deleted is terminal), and
+// self-edges (rejected per this change; §4.4 lists no self-edge).
+func TestSetLifecyclePhase_ForbiddenEdges_Rejected(t *testing.T) {
+	cases := []struct {
+		name string
+		from index.LifecyclePhase
+		to   index.LifecyclePhase
+	}{
+		{"Pending->Retracted", index.PhasePending, index.PhaseRetracted},
+		{"Pending->Deleted", index.PhasePending, index.PhaseDeleted},
+		{"Deleted->Active", index.PhaseDeleted, index.PhaseActive},
+		{"Deleted->Retracted", index.PhaseDeleted, index.PhaseRetracted},
+		{"Deleted->Pending", index.PhaseDeleted, index.PhasePending},
+		{"Active->Active", index.PhaseActive, index.PhaseActive},
+		{"Retracted->Retracted", index.PhaseRetracted, index.PhaseRetracted},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStore(t)
+			appendAtPhase(t, s, "hash-fb", tc.from)
+			before, _ := s.GetByCasHash("hash-fb")
+
+			err := s.SetLifecyclePhase("hash-fb", tc.to)
+			if !errors.Is(err, index.ErrInvalidLifecycleTransition) {
+				t.Fatalf("%s: expected ErrInvalidLifecycleTransition, got %v", tc.name, err)
+			}
+			// Rejection must not mutate the entry.
+			got, _ := s.GetByCasHash("hash-fb")
+			if got.LifecyclePhase != tc.from {
+				t.Errorf("%s: rejected transition changed phase to %q, want %q", tc.name, got.LifecyclePhase, tc.from)
+			}
+			if !got.LifecycleUpdatedAt.Equal(before.LifecycleUpdatedAt) {
+				t.Errorf("%s: rejected transition changed LifecycleUpdatedAt %v -> %v", tc.name, before.LifecycleUpdatedAt, got.LifecycleUpdatedAt)
+			}
+		})
+	}
+}
+
 // ── SetIntegrityHealth ────────────────────────────────────────────────────────
 
 func TestSetIntegrityHealth_Transition(t *testing.T) {

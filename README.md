@@ -118,7 +118,7 @@ curl http://localhost:9090/debug/vars
 
 | 도구 | 용도 |
 |------|------|
-| Go 1.25.12 | 빌드 |
+| Go 1.25.13 | 빌드 |
 | CGO 빌드 의존성 | `pkg/build` (podbridge5): gpgme, btrfs-progs-devel 등 |
 | kubectl | L3/L4 K8s 연동 |
 | K8s user namespaces | infra-lab 기준 K8s 1.36.x, Linux 6.8, containerd 2.2, crun 1.28 검증 |

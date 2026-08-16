@@ -45,6 +45,25 @@ func newStore(t *testing.T) *index.Store {
 	return store
 }
 
+// seedActiveIndexEntry appends an index entry in lifecycle_phase Active for
+// casHash. ListCertifiedTools gates on lifecycle_phase == Active (issue #94)
+// and is fail-closed, so a catalog entry whose CasHash has no index entry is
+// invisible — in production pkg/certification only ever writes a catalog entry
+// for an already-registered CasHash.
+func seedActiveIndexEntry(t *testing.T, store *index.Store, casHash string) {
+	t.Helper()
+	if err := store.Append(index.Entry{
+		CasHash:        casHash,
+		ArtifactKind:   index.KindTool,
+		StableRef:      "bwa@1.0",
+		ToolName:       "bwa",
+		Version:        "1.0",
+		LifecyclePhase: index.PhaseActive,
+	}); err != nil {
+		t.Fatalf("Append index entry %s: %v", casHash, err)
+	}
+}
+
 func grpcCode(err error) codes.Code {
 	if s, ok := status.FromError(err); ok {
 		return s.Code()
@@ -293,6 +312,7 @@ func TestListCertifiedTools_EmptyStatus(t *testing.T) {
 	svc := validation.New(store, nil)
 
 	// Seed an active entry.
+	seedActiveIndexEntry(t, store, "cas-1")
 	if err := store.UpsertToolFunctionCatalogEntry(index.ToolFunctionCatalogEntry{
 		CasHash:         "cas-1",
 		ToolName:        "bwa",
@@ -317,6 +337,7 @@ func TestListCertifiedTools_ValidActiveStatus(t *testing.T) {
 	store := newStore(t)
 	svc := validation.New(store, nil)
 
+	seedActiveIndexEntry(t, store, "cas-2")
 	if err := store.UpsertToolFunctionCatalogEntry(index.ToolFunctionCatalogEntry{
 		CasHash:         "cas-2",
 		ToolName:        "samtools",
@@ -361,6 +382,7 @@ func TestListCertifiedTools_SupersededStatus(t *testing.T) {
 	store := newStore(t)
 	svc := validation.New(store, nil)
 
+	seedActiveIndexEntry(t, store, "cas-3")
 	if err := store.UpsertToolFunctionCatalogEntry(index.ToolFunctionCatalogEntry{
 		CasHash:         "cas-3",
 		ToolName:        "hisat2",
@@ -386,6 +408,7 @@ func TestListCertifiedTools_RetractedStatus(t *testing.T) {
 	store := newStore(t)
 	svc := validation.New(store, nil)
 
+	seedActiveIndexEntry(t, store, "cas-4")
 	if err := store.UpsertToolFunctionCatalogEntry(index.ToolFunctionCatalogEntry{
 		CasHash:         "cas-4",
 		ToolName:        "star",
@@ -406,5 +429,45 @@ func TestListCertifiedTools_RetractedStatus(t *testing.T) {
 	}
 	if resp.Tools[0].PromotionStatus != "retracted" {
 		t.Errorf("PromotionStatus: got %q want retracted", resp.Tools[0].PromotionStatus)
+	}
+}
+
+// TestListCertifiedTools_ExcludesLifecycleRetracted is the gRPC twin of the
+// REST regression test for issue #94: ListCertifiedTools filtered on
+// promotion_status only, so a tool retracted on the lifecycle_phase axis — the
+// axis RetractTool actually moves — stayed exposed to gRPC callers.
+func TestListCertifiedTools_ExcludesLifecycleRetracted(t *testing.T) {
+	store := newStore(t)
+	svc := validation.New(store, nil)
+
+	seedActiveIndexEntry(t, store, "cas-grpc-retract")
+	if err := store.UpsertToolFunctionCatalogEntry(index.ToolFunctionCatalogEntry{
+		CasHash:         "cas-grpc-retract",
+		ToolName:        "bwa",
+		Version:         "1.0",
+		StableRef:       "bwa@1.0",
+		PromotionStatus: index.PromotionActive,
+	}); err != nil {
+		t.Fatalf("UpsertToolFunctionCatalogEntry: %v", err)
+	}
+
+	resp, err := svc.ListCertifiedTools(context.Background(), &nfv1.ListCertifiedToolsRequest{})
+	if err != nil {
+		t.Fatalf("ListCertifiedTools: %v", err)
+	}
+	if len(resp.Tools) != 1 {
+		t.Fatalf("precondition: expected 1 Active tool, got %d", len(resp.Tools))
+	}
+
+	if phaseErr := store.SetLifecyclePhase("cas-grpc-retract", index.PhaseRetracted); phaseErr != nil {
+		t.Fatalf("SetLifecyclePhase: %v", phaseErr)
+	}
+
+	resp, err = svc.ListCertifiedTools(context.Background(), &nfv1.ListCertifiedToolsRequest{})
+	if err != nil {
+		t.Fatalf("ListCertifiedTools after retract: %v", err)
+	}
+	if len(resp.Tools) != 0 {
+		t.Errorf("retracted tool must not be listed over gRPC, got %d", len(resp.Tools))
 	}
 }

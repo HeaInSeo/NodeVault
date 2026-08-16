@@ -259,7 +259,7 @@ func (s *Service) ListCertifiedTools(
 		}
 	}
 
-	entries, err := s.store.ListToolFunctionCatalogEntries(filterStatus)
+	entries, err := s.store.ListActiveToolFunctionCatalogEntries(filterStatus)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "list catalog entries: %v", err)
 	}

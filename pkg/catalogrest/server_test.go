@@ -365,6 +365,25 @@ func newServerWithCert(t *testing.T, certSvc *fakeCertSvc) (*httptest.Server, *i
 	return ts, store
 }
 
+// seedIndexEntry appends an index entry for casHash in the given lifecycle
+// phase. The certified-tools surfaces gate on lifecycle_phase == Active
+// (issue #94) and are fail-closed, so a catalog entry whose CasHash has no
+// index entry is invisible — in production pkg/certification only ever writes
+// a catalog entry for an already-registered CasHash.
+func seedIndexEntry(t *testing.T, store *index.Store, casHash string, phase index.LifecyclePhase) {
+	t.Helper()
+	if err := store.Append(index.Entry{
+		CasHash:        casHash,
+		ArtifactKind:   index.KindTool,
+		StableRef:      "bwa@1.0",
+		ToolName:       "bwa",
+		Version:        "1.0",
+		LifecyclePhase: phase,
+	}); err != nil {
+		t.Fatalf("Append index entry %s: %v", casHash, err)
+	}
+}
+
 // doPost issues a POST request and returns the response.
 func doPost(t *testing.T, ts *httptest.Server, url string, body []byte) *http.Response {
 	t.Helper()
@@ -492,6 +511,7 @@ func TestListCertifiedTools_ValidSupersededStatus(t *testing.T) {
 	ts, store := newServerWithCert(t, &fakeCertSvc{})
 
 	// Seed a superseded entry.
+	seedIndexEntry(t, store, "cas-sup-1", index.PhaseActive)
 	if err := store.UpsertToolFunctionCatalogEntry(index.ToolFunctionCatalogEntry{
 		CasHash:         "cas-sup-1",
 		ToolName:        "hisat2",
@@ -520,6 +540,7 @@ func TestListCertifiedTools_ValidSupersededStatus(t *testing.T) {
 func TestGetCertifiedTool_Found(t *testing.T) {
 	ts, store := newServerWithCert(t, &fakeCertSvc{})
 
+	seedIndexEntry(t, store, "cas-get-1", index.PhaseActive)
 	if err := store.UpsertToolFunctionCatalogEntry(index.ToolFunctionCatalogEntry{
 		CasHash:         "cas-get-1",
 		ToolName:        "bwa",
@@ -549,6 +570,131 @@ func TestGetCertifiedTool_Found(t *testing.T) {
 	}
 	if item.PromotionStatus != "active" {
 		t.Errorf("PromotionStatus: got %q want active", item.PromotionStatus)
+	}
+}
+
+// ── issue #94: certified-tools must apply the lifecycle_phase=Active gate ─────
+
+// seedCertifiedEntry writes a certified-tools catalog entry for casHash,
+// optionally preceded by an index entry in the given lifecycle phase. Pass ""
+// for phase to write no index entry at all.
+func seedCertifiedEntry(t *testing.T, store *index.Store, casHash string, phase index.LifecyclePhase) {
+	t.Helper()
+	if phase != "" {
+		seedIndexEntry(t, store, casHash, phase)
+	}
+	if err := store.UpsertToolFunctionCatalogEntry(index.ToolFunctionCatalogEntry{
+		CasHash:         casHash,
+		ToolName:        "bwa",
+		Version:         "1.0",
+		StableRef:       "bwa@1.0",
+		PromotionStatus: index.PromotionActive,
+	}); err != nil {
+		t.Fatalf("UpsertToolFunctionCatalogEntry %s: %v", casHash, err)
+	}
+}
+
+// listCertifiedTools issues GET /v1/catalog/certified-tools and decodes it.
+func listCertifiedTools(t *testing.T, ts *httptest.Server) []catalogrest.CertifiedToolItem {
+	t.Helper()
+	resp := doGet(t, ts, ts.URL+"/v1/catalog/certified-tools")
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: got %d want 200", resp.StatusCode)
+	}
+	var body catalogrest.ListCertifiedToolsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return body.Tools
+}
+
+// TestListCertifiedTools_ActiveLifecycle_Visible pins the unchanged NodePalette
+// path: a certified tool that is still Active must keep being listed.
+func TestListCertifiedTools_ActiveLifecycle_Visible(t *testing.T) {
+	ts, store := newServerWithCert(t, &fakeCertSvc{})
+	seedCertifiedEntry(t, store, "cas-active-1", index.PhaseActive)
+
+	tools := listCertifiedTools(t, ts)
+	if len(tools) != 1 || tools[0].CasHash != "cas-active-1" {
+		t.Fatalf("expected the Active certified tool to be listed, got %+v", tools)
+	}
+}
+
+// TestListCertifiedTools_ExcludesLifecycleRetracted is the regression test for
+// issue #94: GET /v1/catalog/certified-tools filtered on promotion_status only,
+// so a retracted tool — already excluded from /v1/catalog/tools — stayed
+// exposed here, because RetractTool deliberately never touches promotion_status.
+func TestListCertifiedTools_ExcludesLifecycleRetracted(t *testing.T) {
+	ts, store := newServerWithCert(t, &fakeCertSvc{})
+	seedCertifiedEntry(t, store, "cas-retract-1", index.PhaseActive)
+
+	if len(listCertifiedTools(t, ts)) != 1 {
+		t.Fatal("precondition: the Active tool must be listed before retraction")
+	}
+	if err := store.SetLifecyclePhase("cas-retract-1", index.PhaseRetracted); err != nil {
+		t.Fatalf("SetLifecyclePhase: %v", err)
+	}
+
+	if tools := listCertifiedTools(t, ts); len(tools) != 0 {
+		t.Errorf("retracted tool must not be listed, got %+v", tools)
+	}
+}
+
+// TestListCertifiedTools_PendingPhase_Excluded pins that the gate is
+// == PhaseActive, not != PhaseRetracted: a Pending tool is not yet exposable.
+func TestListCertifiedTools_PendingPhase_Excluded(t *testing.T) {
+	ts, store := newServerWithCert(t, &fakeCertSvc{})
+	seedCertifiedEntry(t, store, "cas-pending-1", index.PhasePending)
+
+	if tools := listCertifiedTools(t, ts); len(tools) != 0 {
+		t.Errorf("Pending tool must not be listed, got %+v", tools)
+	}
+}
+
+// TestListCertifiedTools_NoIndexEntry_Excluded pins the fail-closed direction:
+// a catalog entry with no index entry has no lifecycle_phase to gate on, so it
+// must be excluded rather than exposed by default.
+func TestListCertifiedTools_NoIndexEntry_Excluded(t *testing.T) {
+	ts, store := newServerWithCert(t, &fakeCertSvc{})
+	seedCertifiedEntry(t, store, "cas-orphan-1", "")
+
+	if tools := listCertifiedTools(t, ts); len(tools) != 0 {
+		t.Errorf("catalog entry with no index entry must not be listed, got %+v", tools)
+	}
+}
+
+// TestGetCertifiedTool_LifecycleRetracted_NotFound covers the single-tool
+// lookup half of issue #94: knowing the CAS hash must not bypass the gate.
+func TestGetCertifiedTool_LifecycleRetracted_NotFound(t *testing.T) {
+	ts, store := newServerWithCert(t, &fakeCertSvc{})
+	seedCertifiedEntry(t, store, "cas-get-retract", index.PhaseActive)
+	if err := store.SetLifecyclePhase("cas-get-retract", index.PhaseRetracted); err != nil {
+		t.Fatalf("SetLifecyclePhase: %v", err)
+	}
+
+	resp := doGet(t, ts, ts.URL+"/v1/catalog/certified-tools/cas-get-retract")
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status: got %d want 404", resp.StatusCode)
+	}
+}
+
+// TestGetCertifiedTool_DeletedPhase_NotFound covers the terminal phase.
+func TestGetCertifiedTool_DeletedPhase_NotFound(t *testing.T) {
+	ts, store := newServerWithCert(t, &fakeCertSvc{})
+	seedCertifiedEntry(t, store, "cas-get-deleted", index.PhaseActive)
+	if err := store.SetLifecyclePhase("cas-get-deleted", index.PhaseRetracted); err != nil {
+		t.Fatalf("SetLifecyclePhase -> Retracted: %v", err)
+	}
+	if err := store.SetLifecyclePhase("cas-get-deleted", index.PhaseDeleted); err != nil {
+		t.Fatalf("SetLifecyclePhase -> Deleted: %v", err)
+	}
+
+	resp := doGet(t, ts, ts.URL+"/v1/catalog/certified-tools/cas-get-deleted")
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status: got %d want 404", resp.StatusCode)
 	}
 }
 

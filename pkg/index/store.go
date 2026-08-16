@@ -1016,6 +1016,12 @@ func (s *Store) UpsertToolFunctionCatalogEntry(e ToolFunctionCatalogEntry) error
 
 // ListToolFunctionCatalogEntries returns all catalog entries with the given promotion status.
 // Pass "" to return all entries.
+//
+// It filters on the promotion_status axis only and never consults
+// lifecycle_phase, so it is NOT exposure-safe: an entry whose index entry has
+// been Retracted or Deleted is still returned, as is one that has no index
+// entry at all. Any caller serving results to an external client (REST/gRPC
+// certified-tools) must use ListActiveToolFunctionCatalogEntries instead.
 func (s *Store) ListToolFunctionCatalogEntries(status PromotionStatus) ([]ToolFunctionCatalogEntry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1027,6 +1033,83 @@ func (s *Store) ListToolFunctionCatalogEntries(status PromotionStatus) ([]ToolFu
 		}
 	}
 	return out, nil
+}
+
+// ListActiveToolFunctionCatalogEntries returns catalog entries with the given
+// promotion status whose backing index entry is in lifecycle_phase Active —
+// the Catalog-exposure-safe counterpart to ListToolFunctionCatalogEntries.
+//
+// lifecycle_phase and promotion_status are independent axes
+// (docs/PLATFORM_MASTER_DESIGN.md §4.4, §4.5): retracting a tool moves
+// lifecycle_phase to Retracted and deliberately leaves promotion_status alone,
+// so a promotion_status-only filter keeps serving retracted tools. Here
+// lifecycle_phase is the outer gate that decides whether the artifact exists
+// for an external caller at all, and the promotion status predicate is the
+// inner filter applied within the Active set. Pass "" to skip the inner filter.
+//
+// Fail-closed: a catalog entry whose CasHash has no Active index entry is
+// excluded, including one with no index entry whatsoever.
+func (s *Store) ListActiveToolFunctionCatalogEntries(status PromotionStatus) ([]ToolFunctionCatalogEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Join under a single RLock: collect the Active CasHash set once (O(n)),
+	// then filter the catalog entries against it (O(m)). Calling GetByCasHash
+	// per catalog entry would re-acquire s.mu recursively and be O(n*m).
+	active := make(map[string]struct{}, len(s.idx.Entries))
+	for i := range s.idx.Entries {
+		if s.idx.Entries[i].LifecyclePhase == PhaseActive {
+			active[s.idx.Entries[i].CasHash] = struct{}{}
+		}
+	}
+
+	var out []ToolFunctionCatalogEntry
+	for i := range s.idx.ToolFunctionCatalogEntries {
+		e := &s.idx.ToolFunctionCatalogEntries[i]
+		if _, ok := active[e.CasHash]; !ok {
+			continue
+		}
+		if status == "" || e.PromotionStatus == status {
+			out = append(out, *e)
+		}
+	}
+	return out, nil
+}
+
+// GetActiveToolFunctionCatalogEntry returns the catalog entry for casHash,
+// gated on its index entry being in lifecycle_phase Active. Returns ErrNotFound
+// when no catalog entry exists for casHash, when its index entry is missing
+// (fail-closed), or when that index entry is not Active.
+//
+// No promotion_status filter is applied, preserving the existing GET semantics:
+// lifecycle_phase alone decides whether the entry exists for an external
+// caller, and promotion_status is reported back to that caller as data, so a
+// superseded-but-Active tool stays fetchable by hash.
+func (s *Store) GetActiveToolFunctionCatalogEntry(casHash string) (ToolFunctionCatalogEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Single RLock for both halves of the join — a GetByCasHash call here would
+	// re-acquire s.mu on a non-reentrant RWMutex. Matching on phase as well as
+	// CasHash keeps this identical to the any-Active-entry-wins rule
+	// ListActiveToolFunctionCatalogEntries applies.
+	activeIndexEntry := false
+	for i := range s.idx.Entries {
+		if s.idx.Entries[i].CasHash == casHash && s.idx.Entries[i].LifecyclePhase == PhaseActive {
+			activeIndexEntry = true
+			break
+		}
+	}
+	if !activeIndexEntry {
+		return ToolFunctionCatalogEntry{}, fmt.Errorf("%w: cas_hash=%q", ErrNotFound, casHash)
+	}
+
+	for i := range s.idx.ToolFunctionCatalogEntries {
+		if s.idx.ToolFunctionCatalogEntries[i].CasHash == casHash {
+			return s.idx.ToolFunctionCatalogEntries[i], nil
+		}
+	}
+	return ToolFunctionCatalogEntry{}, fmt.Errorf("%w: cas_hash=%q", ErrNotFound, casHash)
 }
 
 // ── ValidationRequestRecord ───────────────────────────────────────────────────

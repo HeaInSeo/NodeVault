@@ -6,6 +6,9 @@
 //	GET /v1/catalog/tools/{cas_hash}          — get single tool by CAS hash
 //	GET /v1/catalog/data                      — list active data artifacts (query: stable_ref)
 //	GET /v1/catalog/data/{cas_hash}           — get single data artifact by CAS hash
+//	GET /v1/catalog/certified-tools           — list certified tools
+//	                                             (query: promotion_status, default "active")
+//	GET /v1/catalog/certified-tools/{cas_hash} — get single certified tool by CAS hash
 //	GET /v1/palette/tools                     — alias for /v1/catalog/tools
 //	GET /v1/palette/data                      — alias for /v1/catalog/data
 //	GET /v1/gc/toolprofile-candidates         — list toolprofile referrers marked GC_CANDIDATE
@@ -358,7 +361,7 @@ func (s *Server) handleListCertifiedTools(w http.ResponseWriter, r *http.Request
 		http.Error(w, "promotion_status must be one of: active, superseded, retracted", http.StatusBadRequest)
 		return
 	}
-	entries, err := s.store.ListToolFunctionCatalogEntries(index.PromotionStatus(ps))
+	entries, err := s.store.ListActiveToolFunctionCatalogEntries(index.PromotionStatus(ps))
 	if err != nil {
 		http.Error(w, "index error", http.StatusInternalServerError)
 		return
@@ -377,18 +380,16 @@ func (s *Server) handleGetCertifiedTool(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "cas_hash required", http.StatusBadRequest)
 		return
 	}
-	entries, err := s.store.ListToolFunctionCatalogEntries("")
+	entry, err := s.store.GetActiveToolFunctionCatalogEntry(casHash)
 	if err != nil {
+		if errors.Is(err, index.ErrNotFound) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, "index error", http.StatusInternalServerError)
 		return
 	}
-	for i := range entries {
-		if entries[i].CasHash == casHash {
-			writeJSON(w, toCertifiedToolItem(entries[i]))
-			return
-		}
-	}
-	http.Error(w, "not found", http.StatusNotFound)
+	writeJSON(w, toCertifiedToolItem(entry))
 }
 
 //nolint:gocritic // hugeParam: ToolFunctionCatalogEntry by value is intentional — callers own their copy.

@@ -255,8 +255,11 @@ func TestRegisterTool_V02RoundTrip(t *testing.T) {
 	if got.RegisteredAt == 0 {
 		t.Error("RegisteredAt should be non-zero")
 	}
-	if got.Validation == nil || got.Validation.Phase != "Passed" {
-		t.Errorf("Validation.Phase: got %v want Passed", got.Validation)
+	// Build-time RegisterTool performs no L5 validation, so per constitution
+	// §1.10 it records no ValidationStatus (unobserved = nil), not a fabricated
+	// {Phase:"Passed"}. The validation path populates this later.
+	if got.Validation != nil {
+		t.Errorf("Validation: got %+v want nil (build-time records no unobserved validation)", got.Validation)
 	}
 	if got.Command != "" || len(got.Inputs) != 0 || len(got.Outputs) != 0 || got.Display != nil {
 		t.Fatalf("ToolFunctionSpec metadata should not be populated by build-time RegisterTool: %+v", got)

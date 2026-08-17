@@ -88,17 +88,26 @@ above passes, and by the repo's detailed operating rules in `CLAUDE.md` /
 
 ## §1.10 — "do not record what you did not observe"
 
-**Authority: CURRENT platform invariant under `AR-2026-08-17.1`.** NodeVault's
-local enforcement is a separate axis. This repo may record IMPLEMENTED only for
-checks that are actually backed by required status checks; otherwise record the
-observed state (for example `PROPOSED (runs, not merge-enforced)`) rather than
-inventing enforcement.
+**Status: CURRENT PLATFORM INVARIANT; repo-local deterministic enforcement may
+still be absent.** The invariant is owned by the current platform constitution,
+not by this repo constitution. `docs/PLATFORM_MASTER_DESIGN.md §4.10` is the
+matching repository-mirror pointer for authority revision `AR-2026-08-17.1` and
+is covered only while the verification record remains VERIFIED for the recorded
+mirror blob. Whether a specific NodeVault behavior is IMPLEMENTED must still be
+supported by current code/tests/gates rather than inferred from this prose.
 
 ## Governance
 
-Cross-repo semantics cannot be amended by editing this constitution, the
-repository mirror, or the verification record alone. They follow the task's
-current Authority Snapshot. A new platform authority revision must be accepted
-before the repository mirror is synchronized and independently re-verified.
+Versioned and amendable. Amendment procedure: (1) rationale; (2) when a local
+rule's status changes, update the enforcing gate in the same change; (3) bump
+the version below — major = a principle/rule removed or redefined or the source
+of authority changed, minor = rule added, patch = clarification. A rule is
+IMPLEMENTED only if a deterministic (here: required-check) gate enforces it;
+otherwise PROPOSED.
 
-**Version**: 2.1.0 | **Ratified**: 2026-08-02 | **Last Amended**: 2026-08-17
+Cross-repo semantics are not amended by editing this file, the repository mirror,
+or the verification record alone. Such a change must first be accepted by the
+current platform authority and issued under a new Authority Revision; repository
+mirrors may then be synchronized and independently re-verified.
+
+**Version**: 2.1.0 | **Ratified**: 2026-08-03 | **Last Amended**: 2026-08-17

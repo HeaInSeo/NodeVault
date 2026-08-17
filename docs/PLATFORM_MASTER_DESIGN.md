@@ -2,18 +2,23 @@
 
 버전: 1.1
 작성일: 2026-05-04
-갱신일: 2026-08-04
-상태: **정본 (Canon)** — 흩어진 문서를 단일 진실 원천으로 통합
-갱신 책임: 이 문서가 변경되면 연결된 상세 문서도 함께 갱신한다
+갱신일: 2026-08-17
+상태: **Repository Authority Mirror · NOT an independent canonical**
+Authority revision: **`AR-2026-08-17.1`**
+권위 소유: `00. Current Authority Router`가 scope를 선택하며, platform invariants는 `Platform Spec Wiki — CURRENT / 1. constitution`, 구조·책임·호출 방향은 `2. architecture`가 소유한다.
+갱신 책임: 상위 authority revision이 바뀌면 이 mirror와 연결된 repo pointer를 함께 갱신한다.
+
+> **FAIL-CLOSED:** 이 문서는 cross-repo 의미의 독립 정본이 아니다. task의 `Authority Snapshot`이 `AR-2026-08-17.1`과 일치하고 `docs/AUTHORITY_MIRROR_VERIFICATION.md`의 consumption gate 5조건을 모두 만족할 때만 repository-portable mirror로 사용한다. verification record가 없거나 `SYNC STATUS != VERIFIED`, recorded blob 불일치, 필요한 scoped authority 누락, semantic conflict가 있으면 `AUTHORITY_CONFLICT`로 중단하고 더 최신 timestamp·파일명·검색순위로 임의 선택하지 않는다.
 
 ---
 
 ## 0. 이 문서의 목적과 사용법
 
 플랫폼을 구성하는 여러 저장소에 설계 문서가 분산되어 있어 일관성 유지가 어렵다.
-이 문서는 **플랫폼 전체의 단일 정본**이다.
+이 문서는 **플랫폼 authority의 repository-portable mirror**다. 플랫폼 의미를 새로 정의하거나 상위 authority를 대체하지 않는다.
 
-- **개발 세션 시작 시** 이 문서 하나로 전체 맥락을 파악한다.
+- **개발 세션 시작 시** 먼저 task의 `Authority Snapshot`과 revision을 확인한다.
+- snapshot revision이 `AR-2026-08-17.1`과 일치하고 `docs/AUTHORITY_MIRROR_VERIFICATION.md`의 `SYNC STATUS: VERIFIED`, exact recorded mirror blob match, task-required scoped/domain/component authority, no semantic conflict 조건까지 모두 만족할 때만 이 문서를 repository mirror로 사용한다.
 - **상세 규칙은 §10 문서 인덱스**의 개별 문서를 참조한다.
 - **코드를 작성하기 전** §3 불변 아키텍처 결정과 CLAUDE.md를 확인한다.
 - **새 기능을 시작하기 전** §7 스프린트 계획의 선행 조건을 확인한다.
@@ -136,7 +141,7 @@ ip route add 10.113.24.96/32 via 10.113.24.254
 
 ## 4. 불변 아키텍처 결정
 
-이 섹션의 결정은 명시적 아키텍처 논의 없이 변경할 수 없다.
+이 섹션은 authority revision `AR-2026-08-17.1`의 repository mirror다. 이 저장소가 cross-repo meaning을 독립적으로 소유한다는 뜻이 아니며, 상위 authority와 충돌하면 task를 중단하고 mirror revision을 갱신한다.
 
 ### 4.1 재현성 (Non-Negotiable)
 
@@ -464,7 +469,7 @@ expected: /out/result.txt exists=true, count=1, totalBytes>0
 
 ### 7.5 병렬 트랙 A — Security Scan Integration (미착수)
 
-| 파일/위치 | 내용 |
+| 파일/위치 | 내용 | 상태 |
 |-----------|------|
 | `pkg/oras/referrer.go` | `PushSecurityReferrer` NodeVault wrapper |
 | `pkg/reconcile/` | trivy-operator VulnerabilityReport CR 조회 + summary 추출 |

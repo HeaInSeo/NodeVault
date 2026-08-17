@@ -1,29 +1,58 @@
 # NodeVault Constitution
 
 <!--
-  ②-form (D-12), CANONICAL-HOST variant. NodeVault is special: it HOSTS the
-  platform canonical constitution. The cross-repo invariants are DEFINED here,
-  in docs/PLATFORM_MASTER_DESIGN.md §4 — not referenced from elsewhere. This
-  spec-kit constitution therefore does NOT restate §4; it points to it as the
-  source it owns, and adds only NodeVault's repo-local process discipline and
-  gate index. SoT for the local gates is the gates themselves (Makefile / CI),
-  and SoT for the cross-repo invariants is §4 in this repo.
+  ②-form (D-12), REPOSITORY-MIRROR variant. NodeVault does NOT independently
+  own platform-wide canonical meaning. The platform authority is selected by the
+  external Authority Router; this repository carries a revision-pinned mirror so
+  repo-local agents can work fail-closed without inventing a second authority.
+
+  Authority revision: AR-2026-08-17.1
+  Repository mirror: docs/PLATFORM_MASTER_DESIGN.md §4.1–§4.10 only
+  Verification record: docs/AUTHORITY_MIRROR_VERIFICATION.md
 -->
 
-## This repo HOSTS the platform canonical (docs/PLATFORM_MASTER_DESIGN.md §4)
+## Repository Authority Mirror — AR-2026-08-17.1
 
-The platform's cross-repo invariants live in **this repository** at
-**`docs/PLATFORM_MASTER_DESIGN.md` §4** ("이 섹션의 결정은 명시적 아키텍처 논의
-없이 변경할 수 없다"): §4.1 reproducibility · §4.2 casHash · §4.3 stableRef ·
-§4.4 artifact dual-axis (`lifecycle_phase` / `integrity_health`) · §4.5 write
-authority · §4.6 OCI referrer split · §4.7 sori boundary · §4.8 image build ·
-§4.9 ResolveRecipe. Every other repo's constitution *references* §4; NodeVault
-is the **source of truth**.
+Cross-repo platform meaning is selected outside this repository by the current
+Authority Router and its scoped platform authority chain. For this revision:
 
-This spec-kit constitution does not restate or fork §4 — §4 is authoritative.
-NodeVault code that touches those concerns is bound by §4 directly (and by the
-repo's detailed operating rules in `CLAUDE.md` / `AGENTS.md`, which this file
-does not duplicate). On any conflict, §4 wins.
+- platform invariants: `Platform Spec Wiki — CURRENT / 1. constitution`
+- platform structure / responsibility / call direction:
+  `Platform Spec Wiki — CURRENT / 2. architecture`
+- repository-portable invariant mirror: `docs/PLATFORM_MASTER_DESIGN.md §4.1–§4.10`
+- mirror verification record: `docs/AUTHORITY_MIRROR_VERIFICATION.md`
+
+`docs/PLATFORM_MASTER_DESIGN.md` is a **repository mirror**, not an independent
+platform canonical. Its VERIFIED authority scope is limited to the exact scope
+and blob recorded in `docs/AUTHORITY_MIRROR_VERIFICATION.md`; content elsewhere
+in the same file is context/evidence unless separately routed by the task
+`Authority Snapshot`.
+
+A task may consume the repository mirror for cross-repo invariant meaning only
+when **all** of the following are true:
+
+1. the task `Authority Snapshot` declares `AR-2026-08-17.1`;
+2. `docs/AUTHORITY_MIRROR_VERIFICATION.md` says `SYNC STATUS: VERIFIED`;
+3. the mirror blob SHA matches the blob SHA recorded by that verification record;
+4. every additional scoped/domain/component authority required by the task is
+   explicitly present in the task `Authority Snapshot`;
+5. no semantic conflict with the current Authority Router/upstream authority has
+   been detected.
+
+If any condition is missing, stale, unknown, mismatched, or conflicting, stop
+with `AUTHORITY_CONFLICT`. Do not choose whichever document is newer or more
+conveniently available. **Revision equality alone is not sufficient.**
+
+The current repository verification record does **not** mirror platform
+architecture/ownership/call-direction. Work that needs those semantics must
+carry `Platform Spec Wiki — CURRENT / 2. architecture` (and any required
+component/capability contract) directly in the task `Authority Snapshot`.
+
+This spec-kit constitution does not restate or fork the platform-wide meaning.
+NodeVault code that touches those concerns is bound by the task's current
+Authority Snapshot, using the verified repository mirror only when the gate
+above passes, and by the repo's detailed operating rules in `CLAUDE.md` /
+`AGENTS.md`, which this file does not duplicate.
 
 ## Process discipline (repo-operational — owned by this repo)
 
@@ -59,11 +88,13 @@ does not duplicate). On any conflict, §4 wins.
 
 ## §1.10 — "do not record what you did not observe"
 
-**Status: PROPOSED.** §1.10 is a platform-level rule that is **not yet part of
-§4** (a `docs/PLATFORM_MASTER_DESIGN.md` **§4.10** addition is pending — and
-because NodeVault hosts §4, adding it is a NodeVault docs task). NodeVault has
-no deterministic rule enforcing it today; marked PROPOSED, not IMPLEMENTED,
-until such a rule exists.
+**Status: CURRENT PLATFORM INVARIANT; repo-local deterministic enforcement may
+still be absent.** The invariant is owned by the current platform constitution,
+not by this repo constitution. `docs/PLATFORM_MASTER_DESIGN.md §4.10` is the
+matching repository-mirror pointer for authority revision `AR-2026-08-17.1` and
+is covered only while the verification record remains VERIFIED for the recorded
+mirror blob. Whether a specific NodeVault behavior is IMPLEMENTED must still be
+supported by current code/tests/gates rather than inferred from this prose.
 
 ## Governance
 
@@ -72,7 +103,11 @@ rule's status changes, update the enforcing gate in the same change; (3) bump
 the version below — major = a principle/rule removed or redefined or the source
 of authority changed, minor = rule added, patch = clarification. A rule is
 IMPLEMENTED only if a deterministic (here: required-check) gate enforces it;
-otherwise PROPOSED. **Cross-repo invariants are governed by §4 in this repo, via
-its own "명시적 아키텍처 논의" amendment rule — not by this spec-kit file.**
+otherwise PROPOSED.
 
-**Version**: 1.0.0 | **Ratified**: 2026-08-03 | **Last Amended**: 2026-08-03
+Cross-repo semantics are not amended by editing this file, the repository mirror,
+or the verification record alone. Such a change must first be accepted by the
+current platform authority and issued under a new Authority Revision; repository
+mirrors may then be synchronized and independently re-verified.
+
+**Version**: 2.1.0 | **Ratified**: 2026-08-03 | **Last Amended**: 2026-08-17

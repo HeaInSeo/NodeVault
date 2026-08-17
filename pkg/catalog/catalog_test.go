@@ -954,3 +954,70 @@ func TestDeleteTool_ConcurrentIdempotent(t *testing.T) {
 		t.Errorf("final LifecyclePhase: got %q want Deleted", entry.LifecyclePhase)
 	}
 }
+
+// TestRetractTool_DoesNotMutatePromotionStatus pins the axis decoupling that
+// issue #94's fix depends on: RetractTool moves lifecycle_phase only and must
+// never touch the certification/promotion axis
+// (docs/PLATFORM_MASTER_DESIGN.md §4.4, §4.5). Because promotion_status stays
+// "active" after a retraction, a promotion_status-only certified-tools filter
+// keeps serving the tool — which is exactly why the exposure surfaces need the
+// separate lifecycle_phase == Active outer gate rather than a coupled write here.
+func TestRetractTool_DoesNotMutatePromotionStatus(t *testing.T) {
+	cat := newTestCatalog(t)
+	store, err := index.NewAt(t.TempDir())
+	if err != nil {
+		t.Fatalf("index.NewAt: %v", err)
+	}
+	svc := catalog.NewToolRegistryService(cat, store)
+
+	reg, err := svc.RegisterTool(t.Context(), &nfv1.RegisterToolRequest{
+		ToolName: "salmon",
+		Version:  "1.10.0",
+		Digest:   "sha256:5a1",
+		ImageUri: "registry.example.com/test:latest",
+	})
+	if err != nil {
+		t.Fatalf("RegisterTool: %v", err)
+	}
+	if upErr := store.UpsertToolFunctionCatalogEntry(index.ToolFunctionCatalogEntry{
+		CasHash:         reg.CasHash,
+		ToolName:        "salmon",
+		Version:         "1.10.0",
+		StableRef:       "salmon@1.10.0",
+		PromotionStatus: index.PromotionActive,
+	}); upErr != nil {
+		t.Fatalf("UpsertToolFunctionCatalogEntry: %v", upErr)
+	}
+
+	if _, retErr := svc.RetractTool(t.Context(), &nfv1.RetractToolRequest{
+		CasHash: reg.CasHash,
+		Reason:  "security issue",
+	}); retErr != nil {
+		t.Fatalf("RetractTool: %v", retErr)
+	}
+
+	// The raw, lifecycle-blind listing must still report the tool as
+	// promotion-active — retraction is not a promotion-axis write.
+	raw, err := store.ListToolFunctionCatalogEntries(index.PromotionActive)
+	if err != nil {
+		t.Fatalf("ListToolFunctionCatalogEntries: %v", err)
+	}
+	found := false
+	for i := range raw {
+		if raw[i].CasHash == reg.CasHash {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("RetractTool must not mutate promotion_status; the entry is no longer promotion-active")
+	}
+
+	// The exposure-safe listing must exclude it via the lifecycle outer gate.
+	gated, err := store.ListActiveToolFunctionCatalogEntries(index.PromotionActive)
+	if err != nil {
+		t.Fatalf("ListActiveToolFunctionCatalogEntries: %v", err)
+	}
+	if len(gated) != 0 {
+		t.Errorf("retracted tool must be excluded by the Active outer gate, got %+v", gated)
+	}
+}

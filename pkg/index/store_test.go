@@ -1338,3 +1338,165 @@ func TestUpdateValidationRequestRetryState_UnavailableOnly(t *testing.T) {
 		t.Errorf("update on Queued err = %v, want ErrInvalidTransition", uerr)
 	}
 }
+
+// ── ListActiveToolFunctionCatalogEntries / GetActiveToolFunctionCatalogEntry ──
+
+// seedCertified appends an index entry in the given lifecycle phase (pass ""
+// to append no index entry at all) plus a matching catalog entry, and returns
+// the CasHash. It mirrors the production shape: pkg/certification writes the
+// catalog entry keyed by the CasHash of an already-registered index entry.
+func seedCertified(t *testing.T, s *index.Store, casHash string,
+	phase index.LifecyclePhase, promotion index.PromotionStatus,
+) string {
+	t.Helper()
+	if phase != "" {
+		e := toolEntry(casHash, "bwa-mem2@2.2.1")
+		e.LifecyclePhase = phase
+		if err := s.Append(e); err != nil {
+			t.Fatalf("Append %s: %v", casHash, err)
+		}
+	}
+	if err := s.UpsertToolFunctionCatalogEntry(index.ToolFunctionCatalogEntry{
+		CasHash:         casHash,
+		ToolName:        "bwa-mem2",
+		Version:         "2.2.1",
+		StableRef:       "bwa-mem2@2.2.1",
+		PromotionStatus: promotion,
+	}); err != nil {
+		t.Fatalf("UpsertToolFunctionCatalogEntry %s: %v", casHash, err)
+	}
+	return casHash
+}
+
+// TestListActiveToolFunctionCatalogEntries_LifecycleGate is the regression test
+// for #94: the certified-tools listing filtered on promotion_status only, so a
+// tool whose lifecycle_phase had moved off Active (Retracted/Deleted/Pending),
+// or that had no index entry at all, stayed exposed. The outer gate is
+// lifecycle_phase == Active; the promotion filter applies within that set.
+func TestListActiveToolFunctionCatalogEntries_LifecycleGate(t *testing.T) {
+	tests := []struct {
+		name    string
+		phase   index.LifecyclePhase // "" means: no index entry at all
+		visible bool
+	}{
+		{"active is exposed", index.PhaseActive, true},
+		{"pending is excluded", index.PhasePending, false},
+		{"retracted is excluded", index.PhaseRetracted, false},
+		{"deleted is excluded", index.PhaseDeleted, false},
+		{"no index entry is excluded (fail-closed)", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newStore(t)
+			hash := seedCertified(t, s, "cas-"+string(tt.phase)+"-x", tt.phase, index.PromotionActive)
+
+			got, err := s.ListActiveToolFunctionCatalogEntries(index.PromotionActive)
+			if err != nil {
+				t.Fatalf("ListActiveToolFunctionCatalogEntries: %v", err)
+			}
+			if tt.visible && (len(got) != 1 || got[0].CasHash != hash) {
+				t.Fatalf("expected the Active entry to be exposed, got %+v", got)
+			}
+			if !tt.visible && len(got) != 0 {
+				t.Fatalf("expected exclusion for phase %q, got %+v", tt.phase, got)
+			}
+
+			// The raw, exposure-unsafe listing must be unchanged either way —
+			// it pins that the Active gate lives in the new method only.
+			raw, err := s.ListToolFunctionCatalogEntries(index.PromotionActive)
+			if err != nil {
+				t.Fatalf("ListToolFunctionCatalogEntries: %v", err)
+			}
+			if len(raw) != 1 {
+				t.Errorf("raw listing must still return the entry, got %d", len(raw))
+			}
+		})
+	}
+}
+
+// TestListActiveToolFunctionCatalogEntries_PromotionFilterWithinActive verifies
+// the inner promotion_status predicate keeps its exact current meaning: it
+// still selects among the entries the Active outer gate admitted.
+func TestListActiveToolFunctionCatalogEntries_PromotionFilterWithinActive(t *testing.T) {
+	s := newStore(t)
+	seedCertified(t, s, "cas-active-active", index.PhaseActive, index.PromotionActive)
+	seedCertified(t, s, "cas-active-superseded", index.PhaseActive, index.PromotionSuperseded)
+	seedCertified(t, s, "cas-retracted-superseded", index.PhaseRetracted, index.PromotionSuperseded)
+
+	sup, err := s.ListActiveToolFunctionCatalogEntries(index.PromotionSuperseded)
+	if err != nil {
+		t.Fatalf("ListActiveToolFunctionCatalogEntries(superseded): %v", err)
+	}
+	if len(sup) != 1 || sup[0].CasHash != "cas-active-superseded" {
+		t.Fatalf("superseded filter within Active: got %+v", sup)
+	}
+
+	all, err := s.ListActiveToolFunctionCatalogEntries("")
+	if err != nil {
+		t.Fatalf("ListActiveToolFunctionCatalogEntries(all): %v", err)
+	}
+	if len(all) != 2 {
+		t.Errorf("empty status must return every Active entry, got %d", len(all))
+	}
+}
+
+func TestGetActiveToolFunctionCatalogEntry(t *testing.T) {
+	tests := []struct {
+		name         string
+		phase        index.LifecyclePhase // "" means: no index entry at all
+		catalogEntry bool
+		wantNotFound bool
+	}{
+		{name: "active entry is found", phase: index.PhaseActive, catalogEntry: true},
+		{name: "pending index entry is not found", phase: index.PhasePending, catalogEntry: true, wantNotFound: true},
+		{name: "retracted index entry is not found", phase: index.PhaseRetracted, catalogEntry: true, wantNotFound: true},
+		{name: "deleted index entry is not found", phase: index.PhaseDeleted, catalogEntry: true, wantNotFound: true},
+		{name: "no index entry is not found", phase: "", catalogEntry: true, wantNotFound: true},
+		{name: "no catalog entry is not found", phase: index.PhaseActive, catalogEntry: false, wantNotFound: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newStore(t)
+			const hash = "cas-get-active"
+			if tt.catalogEntry {
+				seedCertified(t, s, hash, tt.phase, index.PromotionActive)
+			} else if tt.phase != "" {
+				e := toolEntry(hash, "bwa-mem2@2.2.1")
+				e.LifecyclePhase = tt.phase
+				if err := s.Append(e); err != nil {
+					t.Fatalf("Append: %v", err)
+				}
+			}
+
+			got, err := s.GetActiveToolFunctionCatalogEntry(hash)
+			if tt.wantNotFound {
+				if !errors.Is(err, index.ErrNotFound) {
+					t.Fatalf("err = %v, want ErrNotFound", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("GetActiveToolFunctionCatalogEntry: %v", err)
+			}
+			if got.CasHash != hash {
+				t.Errorf("CasHash: got %q want %q", got.CasHash, hash)
+			}
+		})
+	}
+}
+
+// TestGetActiveToolFunctionCatalogEntry_PromotionUnfiltered pins the preserved
+// GET semantics: lifecycle_phase decides existence, promotion_status is
+// reported as data — a superseded-but-Active tool stays fetchable by hash.
+func TestGetActiveToolFunctionCatalogEntry_PromotionUnfiltered(t *testing.T) {
+	s := newStore(t)
+	hash := seedCertified(t, s, "cas-superseded-active", index.PhaseActive, index.PromotionSuperseded)
+
+	got, err := s.GetActiveToolFunctionCatalogEntry(hash)
+	if err != nil {
+		t.Fatalf("GetActiveToolFunctionCatalogEntry: %v", err)
+	}
+	if got.PromotionStatus != index.PromotionSuperseded {
+		t.Errorf("PromotionStatus: got %q want superseded", got.PromotionStatus)
+	}
+}

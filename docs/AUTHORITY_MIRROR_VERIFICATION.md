@@ -5,6 +5,7 @@ AUTHORITY REVISION: `AR-2026-08-17.1`
 SYNC STATUS: **VERIFIED**  
 VERIFIED AT: `2026-08-17T18:15+09:00`  
 REVIEWER: internal design-authority re-verification after external findings EXT-01 / EXT-02
+EXTERNAL REVIEW: **PENDING RE-REVIEW OF CURRENT HEAD**
 
 ## Verified mirror
 

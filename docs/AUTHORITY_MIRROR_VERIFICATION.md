@@ -15,6 +15,8 @@ REVIEWER: internal design-authority review before external agent review
 
 The rest of `PLATFORM_MASTER_DESIGN.md` is useful repository context/evidence but is **not covered by this VERIFIED mirror record** and must not be treated as platform authority merely because it is in the same file.
 
+**Consumption precedence:** the inline wording inside `PLATFORM_MASTER_DESIGN.md` is descriptive only. Whether that file may be consumed as authority is decided by the current Authority Router, the task `Authority Snapshot`, this verification record, and the exact recorded blob/scope. Therefore a matching revision string inside the mirror file is never sufficient by itself.
+
 ## Upstream authority snapshot
 
 Meta-governance / routing:

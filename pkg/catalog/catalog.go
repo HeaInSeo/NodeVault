@@ -76,10 +76,14 @@ func (c *Catalog) Save(tool *nfv1.RegisteredToolDefinition) (string, error) {
 // {hash}.tooldefinition file. Returns the stable CAS hash.
 // This is the correct method to use from RegisterTool.
 func (c *Catalog) SaveWithCasHash(tool *nfv1.RegisteredToolDefinition) (string, error) {
-	// 1. Marshal without CasHash to get the stable content hash.
+	// 1. Marshal over content only to get the stable content hash. CasHash and
+	//    the registration-time / state fields (see cas_preimage.go) are excluded
+	//    from the preimage per constitution §1.2.
 	prev := tool.CasHash
 	tool.CasHash = ""
+	restore := casExcludedToolFields(tool)
 	contentData, err := json.Marshal(tool)
+	restore()
 	tool.CasHash = prev // restore so caller is not surprised
 	if err != nil {
 		return "", fmt.Errorf("marshal for hash: %w", err)
@@ -87,7 +91,8 @@ func (c *Catalog) SaveWithCasHash(tool *nfv1.RegisteredToolDefinition) (string, 
 	sum := sha256.Sum256(contentData)
 	hash := hex.EncodeToString(sum[:])
 
-	// 2. Set CasHash and write once under that hash.
+	// 2. Set CasHash and write once under that hash. The stored file carries the
+	//    full record, including the fields excluded from the hash preimage.
 	tool.CasHash = hash
 	fullData, err := json.Marshal(tool)
 	if err != nil {
@@ -225,10 +230,12 @@ func (s *ToolRegistryService) RegisterTool(
 		BuildKind:        req.BuildKind,
 		LifecyclePhase:   string(index.PhaseActive),
 		IntegrityHealth:  string(index.HealthPartial), // Partial until spec referrer is pushed (pkg/oras)
-		Validation: &nfv1.ValidationStatus{
-			Phase:           "Passed",
-			LastValidatedAt: time.Now().Unix(),
-		},
+		// Validation is intentionally left nil: build-time RegisterTool performs
+		// no L5 functional validation, so per constitution §1.10 ("do not record
+		// what you did not observe") it records no ValidationStatus rather than a
+		// fabricated {Phase:"Passed"}. A nil submessage (absent, not an empty
+		// {Phase:""}) is the schema's "not observed". The validation path
+		// populates a real ValidationStatus later.
 	}
 	// Build-time RegisterTool intentionally stores ToolSpec image/environment
 	// metadata only. ToolFunctionSpec metadata (command, inputs, outputs,
@@ -239,8 +246,8 @@ func (s *ToolRegistryService) RegisterTool(
 		return nil, status.Errorf(codes.Internal, "catalog save: %v", err)
 	}
 
-	// Dual-write: append lightweight entry to the index.
-	// index.ErrNotFound means the entry didn't exist yet (expected); duplicate is silently OK.
+	// Dual-write: append a lightweight entry to the index. A duplicate casHash
+	// (byte-identical re-registration) is handled idempotently below.
 	entry := index.Entry{
 		CasHash:         hash,
 		ArtifactKind:    index.KindTool,
@@ -253,8 +260,28 @@ func (s *ToolRegistryService) RegisterTool(
 		IntegrityHealth: index.HealthPartial, // Partial until spec referrer is pushed (pkg/oras)
 	}
 	if appendErr := s.store.Append(entry); appendErr != nil {
-		// Duplicate is not a fatal error — the CAS file is the source of truth until
-		// the full index transition (TODO-09b). Log and continue.
+		if errors.Is(appendErr, index.ErrEntryExists) {
+			// Idempotent re-registration: byte-identical content is already
+			// registered under this casHash (constitution §1.2 makes casHash a
+			// pure content identity, so identical content always maps here).
+			// Return the existing entry's authoritative lifecycle/integrity from
+			// the index (the SoT for state), never the freshly-fabricated Active
+			// above — a Retracted tool must surface as Retracted. Re-registration
+			// is not a lifecycle transition (§1.4).
+			existing, getErr := s.store.GetByCasHash(hash)
+			if getErr != nil {
+				// Append reported the entry exists but its authoritative state
+				// cannot be read back — an index inconsistency. Do not return the
+				// fabricated Active; surface the inconsistency instead (§1.10).
+				return nil, status.Errorf(codes.Internal,
+					"index inconsistency: entry %s exists but state unreadable: %v", hash, getErr)
+			}
+			tool.LifecyclePhase = string(existing.LifecyclePhase)
+			tool.IntegrityHealth = string(existing.IntegrityHealth)
+			return &nfv1.RegisterToolResponse{CasHash: hash, Tool: tool}, nil
+		}
+		// A non-duplicate append error is not fatal — the CAS file is the source
+		// of truth until the full index transition (TODO-09b). Log and continue.
 		fmt.Fprintf(os.Stderr, "catalog: index append %s: %v\n", hash, appendErr)
 	}
 

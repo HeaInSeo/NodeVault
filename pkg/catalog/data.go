@@ -55,9 +55,13 @@ func NewDataCatalogAt(dir string) *DataCatalog {
 // SaveWithCasHash computes the CAS hash from the data spec content (excluding cas_hash),
 // sets d.CasHash, and writes exactly one {hash}.datadefinition file.
 func (c *DataCatalog) SaveWithCasHash(d *nfv1.RegisteredDataDefinition) (string, error) {
+	// Hash over content only; CasHash and the registration-time / state fields
+	// (see cas_preimage.go) are excluded from the preimage per §1.2.
 	prev := d.CasHash
 	d.CasHash = ""
+	restore := casExcludedDataFields(d)
 	contentData, err := json.Marshal(d)
+	restore()
 	d.CasHash = prev
 	if err != nil {
 		return "", fmt.Errorf("marshal for hash: %w", err)
@@ -65,6 +69,7 @@ func (c *DataCatalog) SaveWithCasHash(d *nfv1.RegisteredDataDefinition) (string,
 	sum := sha256.Sum256(contentData)
 	hash := hex.EncodeToString(sum[:])
 
+	// The stored file carries the full record, including the excluded fields.
 	d.CasHash = hash
 	fullData, err := json.Marshal(d)
 	if err != nil {
@@ -190,6 +195,21 @@ func (s *DataRegistryService) RegisterData(
 		IntegrityHealth: index.HealthHealthy,
 	}
 	if appendErr := s.store.Append(entry); appendErr != nil {
+		if errors.Is(appendErr, index.ErrEntryExists) {
+			// Idempotent re-registration (see ToolRegistryService.RegisterTool):
+			// reflect the index's authoritative lifecycle/integrity, never the
+			// freshly-fabricated Active above.
+			existing, getErr := s.store.GetByCasHash(hash)
+			if getErr != nil {
+				// Entry exists but its authoritative state is unreadable — an
+				// index inconsistency. Do not return the fabricated Active (§1.10).
+				return nil, status.Errorf(codes.Internal,
+					"index inconsistency: entry %s exists but state unreadable: %v", hash, getErr)
+			}
+			d.LifecyclePhase = string(existing.LifecyclePhase)
+			d.IntegrityHealth = string(existing.IntegrityHealth)
+			return &nfv1.DataRegisterResponse{CasHash: hash, Data: d}, nil
+		}
 		fmt.Fprintf(os.Stderr, "datacatalog: index append %s: %v\n", hash, appendErr)
 	}
 

@@ -39,6 +39,14 @@ type Store struct {
 // ErrNotFound is returned when a requested entry does not exist.
 var ErrNotFound = errors.New("index: entry not found")
 
+// ErrEntryExists is returned by Append when an entry with the same CasHash
+// already exists. Because casHash is a pure content identity (constitution
+// §1.2), a byte-identical re-registration produces the same casHash and reaches
+// this path. Callers should treat it as an idempotent no-op and return the
+// existing entry's authoritative lifecycle/integrity state rather than a freshly
+// fabricated one (see catalog.RegisterTool / RegisterData).
+var ErrEntryExists = errors.New("index: entry already exists")
+
 // ErrDuplicateRecord is returned by AppendToolCheckRecord(Correlated) and
 // AppendToolScanRecord(Correlated) when a record with the same CheckID/
 // ScanID already exists. NodeSentinel's CheckID/ScanID are deterministic
@@ -121,7 +129,7 @@ func (s *Store) Append(e Entry) error {
 	}
 	for i := range s.idx.Entries {
 		if s.idx.Entries[i].CasHash == e.CasHash {
-			return fmt.Errorf("index: entry %q already exists", e.CasHash)
+			return fmt.Errorf("%w: cas_hash=%q", ErrEntryExists, e.CasHash)
 		}
 	}
 	now := time.Now().UTC()

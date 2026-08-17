@@ -7,7 +7,8 @@
   repo-local agents can work fail-closed without inventing a second authority.
 
   Authority revision: AR-2026-08-17.1
-  Repository mirror: docs/PLATFORM_MASTER_DESIGN.md
+  Repository mirror: docs/PLATFORM_MASTER_DESIGN.md §4.1–§4.10 only
+  Verification record: docs/AUTHORITY_MIRROR_VERIFICATION.md
 -->
 
 ## Repository Authority Mirror — AR-2026-08-17.1
@@ -18,20 +19,40 @@ Authority Router and its scoped platform authority chain. For this revision:
 - platform invariants: `Platform Spec Wiki — CURRENT / 1. constitution`
 - platform structure / responsibility / call direction:
   `Platform Spec Wiki — CURRENT / 2. architecture`
-- repository-portable mirror: `docs/PLATFORM_MASTER_DESIGN.md`
+- repository-portable invariant mirror: `docs/PLATFORM_MASTER_DESIGN.md §4.1–§4.10`
+- mirror verification record: `docs/AUTHORITY_MIRROR_VERIFICATION.md`
 
 `docs/PLATFORM_MASTER_DESIGN.md` is a **repository mirror**, not an independent
-platform canonical. A task may use the mirror for cross-repo semantics only when
-its `Authority Snapshot` declares the matching revision `AR-2026-08-17.1`.
-If the task snapshot is missing, names another revision, or conflicts with the
-mirror, stop with `AUTHORITY_CONFLICT`; do not choose whichever document is newer
-or more conveniently available.
+platform canonical. Its VERIFIED authority scope is limited to the exact scope
+and blob recorded in `docs/AUTHORITY_MIRROR_VERIFICATION.md`; content elsewhere
+in the same file is context/evidence unless separately routed by the task
+`Authority Snapshot`.
+
+A task may consume the repository mirror for cross-repo invariant meaning only
+when **all** of the following are true:
+
+1. the task `Authority Snapshot` declares `AR-2026-08-17.1`;
+2. `docs/AUTHORITY_MIRROR_VERIFICATION.md` says `SYNC STATUS: VERIFIED`;
+3. the mirror blob SHA matches the blob SHA recorded by that verification record;
+4. every additional scoped/domain/component authority required by the task is
+   explicitly present in the task `Authority Snapshot`;
+5. no semantic conflict with the current Authority Router/upstream authority has
+   been detected.
+
+If any condition is missing, stale, unknown, mismatched, or conflicting, stop
+with `AUTHORITY_CONFLICT`. Do not choose whichever document is newer or more
+conveniently available. **Revision equality alone is not sufficient.**
+
+The current repository verification record does **not** mirror platform
+architecture/ownership/call-direction. Work that needs those semantics must
+carry `Platform Spec Wiki — CURRENT / 2. architecture` (and any required
+component/capability contract) directly in the task `Authority Snapshot`.
 
 This spec-kit constitution does not restate or fork the platform-wide meaning.
 NodeVault code that touches those concerns is bound by the task's current
-Authority Snapshot, using the matching repository mirror when applicable, and by
-the repo's detailed operating rules in `CLAUDE.md` / `AGENTS.md`, which this file
-does not duplicate.
+Authority Snapshot, using the verified repository mirror only when the gate
+above passes, and by the repo's detailed operating rules in `CLAUDE.md` /
+`AGENTS.md`, which this file does not duplicate.
 
 ## Process discipline (repo-operational — owned by this repo)
 
@@ -70,9 +91,10 @@ does not duplicate.
 **Status: CURRENT PLATFORM INVARIANT; repo-local deterministic enforcement may
 still be absent.** The invariant is owned by the current platform constitution,
 not by this repo constitution. `docs/PLATFORM_MASTER_DESIGN.md §4.10` is the
-matching repository-mirror pointer for authority revision `AR-2026-08-17.1`.
-Whether a specific NodeVault behavior is IMPLEMENTED must still be supported by
-current code/tests/gates rather than inferred from this prose.
+matching repository-mirror pointer for authority revision `AR-2026-08-17.1` and
+is covered only while the verification record remains VERIFIED for the recorded
+mirror blob. Whether a specific NodeVault behavior is IMPLEMENTED must still be
+supported by current code/tests/gates rather than inferred from this prose.
 
 ## Governance
 
@@ -83,9 +105,9 @@ of authority changed, minor = rule added, patch = clarification. A rule is
 IMPLEMENTED only if a deterministic (here: required-check) gate enforces it;
 otherwise PROPOSED.
 
-Cross-repo semantics are not amended by editing this file or the repository
-mirror alone. Such a change must first be accepted by the current platform
-authority and issued under a new Authority Revision; repository mirrors may then
-be synchronized to that revision.
+Cross-repo semantics are not amended by editing this file, the repository mirror,
+or the verification record alone. Such a change must first be accepted by the
+current platform authority and issued under a new Authority Revision; repository
+mirrors may then be synchronized and independently re-verified.
 
-**Version**: 2.0.0 | **Ratified**: 2026-08-03 | **Last Amended**: 2026-08-17
+**Version**: 2.1.0 | **Ratified**: 2026-08-03 | **Last Amended**: 2026-08-17

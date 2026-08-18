@@ -585,6 +585,41 @@ message ResourceContract {
 
 // ── 등록 RPC ─────────────────────────────────────────────────────────────────
 
+// ToolFunctionArtifactSpec is the casHash preimage of a registered runnable
+// ToolFunction artifact (issue #19, W1-Q1 RESPONSE BOUNDARY FINAL · 2026-08-18).
+// The durable runnable-artifact identity / pipeline pin (헌법 §1.2) is:
+//   cas_hash = SHA256(canonical_json(ToolFunctionArtifactSpec{tool_function_digest, function_image_digest})).
+// N1~N3 normalization applies to this preimage: 미지정 필드는 canonical JSON에서
+// 생략(N1), 정규형은 하나(N2), canonicalization/identity 소유자는 NodeVault(N3) —
+// 소비자는 재계산하지 않는다.
+//
+// ⚠ 멤버는 이 둘로 FREEZE한다(그 외 없음). 다른 immutable typed ref를 W1-b에서
+// 발명하지 않는다 — 실제 필요 시나리오가 관측될 때만 additive로 확장한다.
+//
+// Field mapping: function_image_digest := RegisterToolFunctionRequest.image_digest.
+// 두 이름은 서로 다른 digest를 뜻하지 않는다.
+//
+// Lineage: base_tool_spec_digest는 이미 tool_function_digest preimage가 그
+// dependency를 소유하므로 여기(final artifact spec)에 중복 삽입하지 않는다 —
+// identity source는 하나만 둔다.
+//
+// Multiplicity invariant: 동일 tool_function_digest 아래 서로 다른 exact
+// function_image_digest가 공존할 수 있으며 각각 다른 cas_hash를 가진다.
+// tool_function_digest를 runnable-record unique key로 사용하거나 기존 runnable
+// record를 덮어쓰지 않는다.
+//
+// Preimage provenance (W2 durable storage): 파생값 cas_hash만 남기지 않고,
+// cas_hash와 그 원재료인 ToolFunctionArtifactSpec(tool_function_digest·
+// function_image_digest)를 함께 보존한다. 목적은 기존 casHash를 미래 규칙으로
+// 암묵 재계산·교체하는 것이 아니라, 생성 당시 preimage provenance를 보존하여
+// 감사·migration·명시적 재파생을 가능하게 하는 것이다. 기존 casHash는 생성 당시
+// identity 계약 아래 불변이다. 어느 registered record가 이를 담을지(저장 컨테이너)는
+// W2 storage model의 결정이며 W1-b는 스키마만 정의한다.
+message ToolFunctionArtifactSpec {
+  string tool_function_digest = 1;
+  string function_image_digest = 2;
+}
+
 message RegisterToolFunctionRequest {
   string request_id = 1; // 멱등 키 (SubmitToolBuild 와 같은 패턴)
   // base_tool_spec_digest — 1차 base ToolSpec 이미지의 digest. digest 입력에
@@ -602,12 +637,17 @@ message RegisterToolFunctionRequest {
 message RegisterToolFunctionResponse {
   // tool_function_digest — NodeVault가 canonical JSON 위에서 계산한다(W2):
   //   tool_function_digest = SHA256(canonical_json({ base_tool_spec_digest, spec })).
-  // §4.3: 최종 runnable-artifact casHash 는 ToolFunctionArtifactSpec
-  //   = { tool_function_digest, function_image_digest, ...immutable typed refs }
-  // 의 SHA256이다. tool_function_digest 또는 function_image_digest 변경은 casHash
-  // 변경, presentation/validation/lifecycle/integrity/timestamp 변경은 비변경이다.
   string tool_function_digest = 1;
   string presentation_revision_id = 2; // presentation 은 별도 revision (D-19-4)
+  // cas_hash — 최종 runnable-artifact identity / pipeline pin(헌법 §1.2, §4.3).
+  // NodeVault가 계산해 여기서 반환한다: RegisterToolFunction은 image_digest(요청)와
+  // 계산된 tool_function_digest를 모두 보유하므로 그 자리에서
+  //   cas_hash = SHA256(canonical_json(ToolFunctionArtifactSpec{
+  //     tool_function_digest, function_image_digest: image_digest }))
+  // 를 계산한다. 소비자는 이 값을 그대로 pin으로 쓰고 identity를 재계산하지 않는다(N3).
+  // tool_function_digest 또는 function_image_digest 변경은 cas_hash 변경, presentation/
+  // validation/lifecycle/integrity/timestamp 변경은 cas_hash 비변경이다.
+  string cas_hash = 3;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

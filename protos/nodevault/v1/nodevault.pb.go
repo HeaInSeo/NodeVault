@@ -3937,6 +3937,90 @@ func (x *ResourceContract) GetParallelism() int32 {
 	return 0
 }
 
+// ToolFunctionArtifactSpec is the casHash preimage of a registered runnable
+// ToolFunction artifact (issue #19, W1-Q1 RESPONSE BOUNDARY FINAL · 2026-08-18).
+// The durable runnable-artifact identity / pipeline pin (헌법 §1.2) is:
+//
+//	cas_hash = SHA256(canonical_json(ToolFunctionArtifactSpec{tool_function_digest, function_image_digest})).
+//
+// N1~N3 normalization applies to this preimage: 미지정 필드는 canonical JSON에서
+// 생략(N1), 정규형은 하나(N2), canonicalization/identity 소유자는 NodeVault(N3) —
+// 소비자는 재계산하지 않는다.
+//
+// ⚠ 멤버는 이 둘로 FREEZE한다(그 외 없음). 다른 immutable typed ref를 W1-b에서
+// 발명하지 않는다 — 실제 필요 시나리오가 관측될 때만 additive로 확장한다.
+//
+// Field mapping: function_image_digest := RegisterToolFunctionRequest.image_digest.
+// 두 이름은 서로 다른 digest를 뜻하지 않는다.
+//
+// Lineage: base_tool_spec_digest는 이미 tool_function_digest preimage가 그
+// dependency를 소유하므로 여기(final artifact spec)에 중복 삽입하지 않는다 —
+// identity source는 하나만 둔다.
+//
+// Multiplicity invariant: 동일 tool_function_digest 아래 서로 다른 exact
+// function_image_digest가 공존할 수 있으며 각각 다른 cas_hash를 가진다.
+// tool_function_digest를 runnable-record unique key로 사용하거나 기존 runnable
+// record를 덮어쓰지 않는다.
+//
+// Preimage provenance (W2 durable storage): 파생값 cas_hash만 남기지 않고,
+// cas_hash와 그 원재료인 ToolFunctionArtifactSpec(tool_function_digest·
+// function_image_digest)를 함께 보존한다. 목적은 기존 casHash를 미래 규칙으로
+// 암묵 재계산·교체하는 것이 아니라, 생성 당시 preimage provenance를 보존하여
+// 감사·migration·명시적 재파생을 가능하게 하는 것이다. 기존 casHash는 생성 당시
+// identity 계약 아래 불변이다. 어느 registered record가 이를 담을지(저장 컨테이너)는
+// W2 storage model의 결정이며 W1-b는 스키마만 정의한다.
+type ToolFunctionArtifactSpec struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	ToolFunctionDigest  string                 `protobuf:"bytes,1,opt,name=tool_function_digest,json=toolFunctionDigest,proto3" json:"tool_function_digest,omitempty"`
+	FunctionImageDigest string                 `protobuf:"bytes,2,opt,name=function_image_digest,json=functionImageDigest,proto3" json:"function_image_digest,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *ToolFunctionArtifactSpec) Reset() {
+	*x = ToolFunctionArtifactSpec{}
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[52]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ToolFunctionArtifactSpec) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ToolFunctionArtifactSpec) ProtoMessage() {}
+
+func (x *ToolFunctionArtifactSpec) ProtoReflect() protoreflect.Message {
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[52]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ToolFunctionArtifactSpec.ProtoReflect.Descriptor instead.
+func (*ToolFunctionArtifactSpec) Descriptor() ([]byte, []int) {
+	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{52}
+}
+
+func (x *ToolFunctionArtifactSpec) GetToolFunctionDigest() string {
+	if x != nil {
+		return x.ToolFunctionDigest
+	}
+	return ""
+}
+
+func (x *ToolFunctionArtifactSpec) GetFunctionImageDigest() string {
+	if x != nil {
+		return x.FunctionImageDigest
+	}
+	return ""
+}
+
 type RegisterToolFunctionRequest struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	RequestId string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"` // 멱등 키 (SubmitToolBuild 와 같은 패턴)
@@ -3956,7 +4040,7 @@ type RegisterToolFunctionRequest struct {
 
 func (x *RegisterToolFunctionRequest) Reset() {
 	*x = RegisterToolFunctionRequest{}
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[52]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3968,7 +4052,7 @@ func (x *RegisterToolFunctionRequest) String() string {
 func (*RegisterToolFunctionRequest) ProtoMessage() {}
 
 func (x *RegisterToolFunctionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[52]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3981,7 +4065,7 @@ func (x *RegisterToolFunctionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterToolFunctionRequest.ProtoReflect.Descriptor instead.
 func (*RegisterToolFunctionRequest) Descriptor() ([]byte, []int) {
-	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{52}
+	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *RegisterToolFunctionRequest) GetRequestId() string {
@@ -4038,22 +4122,26 @@ type RegisterToolFunctionResponse struct {
 	// tool_function_digest — NodeVault가 canonical JSON 위에서 계산한다(W2):
 	//
 	//	tool_function_digest = SHA256(canonical_json({ base_tool_spec_digest, spec })).
-	//
-	// §4.3: 최종 runnable-artifact casHash 는 ToolFunctionArtifactSpec
-	//
-	//	= { tool_function_digest, function_image_digest, ...immutable typed refs }
-	//
-	// 의 SHA256이다. tool_function_digest 또는 function_image_digest 변경은 casHash
-	// 변경, presentation/validation/lifecycle/integrity/timestamp 변경은 비변경이다.
 	ToolFunctionDigest     string `protobuf:"bytes,1,opt,name=tool_function_digest,json=toolFunctionDigest,proto3" json:"tool_function_digest,omitempty"`
 	PresentationRevisionId string `protobuf:"bytes,2,opt,name=presentation_revision_id,json=presentationRevisionId,proto3" json:"presentation_revision_id,omitempty"` // presentation 은 별도 revision (D-19-4)
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// cas_hash — 최종 runnable-artifact identity / pipeline pin(헌법 §1.2, §4.3).
+	// NodeVault가 계산해 여기서 반환한다: RegisterToolFunction은 image_digest(요청)와
+	// 계산된 tool_function_digest를 모두 보유하므로 그 자리에서
+	//
+	//	cas_hash = SHA256(canonical_json(ToolFunctionArtifactSpec{
+	//	  tool_function_digest, function_image_digest: image_digest }))
+	//
+	// 를 계산한다. 소비자는 이 값을 그대로 pin으로 쓰고 identity를 재계산하지 않는다(N3).
+	// tool_function_digest 또는 function_image_digest 변경은 cas_hash 변경, presentation/
+	// validation/lifecycle/integrity/timestamp 변경은 cas_hash 비변경이다.
+	CasHash       string `protobuf:"bytes,3,opt,name=cas_hash,json=casHash,proto3" json:"cas_hash,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RegisterToolFunctionResponse) Reset() {
 	*x = RegisterToolFunctionResponse{}
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[53]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4065,7 +4153,7 @@ func (x *RegisterToolFunctionResponse) String() string {
 func (*RegisterToolFunctionResponse) ProtoMessage() {}
 
 func (x *RegisterToolFunctionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[53]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4078,7 +4166,7 @@ func (x *RegisterToolFunctionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterToolFunctionResponse.ProtoReflect.Descriptor instead.
 func (*RegisterToolFunctionResponse) Descriptor() ([]byte, []int) {
-	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{53}
+	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *RegisterToolFunctionResponse) GetToolFunctionDigest() string {
@@ -4091,6 +4179,13 @@ func (x *RegisterToolFunctionResponse) GetToolFunctionDigest() string {
 func (x *RegisterToolFunctionResponse) GetPresentationRevisionId() string {
 	if x != nil {
 		return x.PresentationRevisionId
+	}
+	return ""
+}
+
+func (x *RegisterToolFunctionResponse) GetCasHash() string {
+	if x != nil {
+		return x.CasHash
 	}
 	return ""
 }
@@ -4113,7 +4208,7 @@ type DataRegisterRequest struct {
 
 func (x *DataRegisterRequest) Reset() {
 	*x = DataRegisterRequest{}
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[54]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4125,7 +4220,7 @@ func (x *DataRegisterRequest) String() string {
 func (*DataRegisterRequest) ProtoMessage() {}
 
 func (x *DataRegisterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[54]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4138,7 +4233,7 @@ func (x *DataRegisterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DataRegisterRequest.ProtoReflect.Descriptor instead.
 func (*DataRegisterRequest) Descriptor() ([]byte, []int) {
-	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{54}
+	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *DataRegisterRequest) GetRequestId() string {
@@ -4221,7 +4316,7 @@ type DataRegisterResponse struct {
 
 func (x *DataRegisterResponse) Reset() {
 	*x = DataRegisterResponse{}
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[55]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4233,7 +4328,7 @@ func (x *DataRegisterResponse) String() string {
 func (*DataRegisterResponse) ProtoMessage() {}
 
 func (x *DataRegisterResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[55]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4246,7 +4341,7 @@ func (x *DataRegisterResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DataRegisterResponse.ProtoReflect.Descriptor instead.
 func (*DataRegisterResponse) Descriptor() ([]byte, []int) {
-	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{55}
+	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *DataRegisterResponse) GetCasHash() string {
@@ -4272,7 +4367,7 @@ type GetDataRequest struct {
 
 func (x *GetDataRequest) Reset() {
 	*x = GetDataRequest{}
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[56]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4284,7 +4379,7 @@ func (x *GetDataRequest) String() string {
 func (*GetDataRequest) ProtoMessage() {}
 
 func (x *GetDataRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[56]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4297,7 +4392,7 @@ func (x *GetDataRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDataRequest.ProtoReflect.Descriptor instead.
 func (*GetDataRequest) Descriptor() ([]byte, []int) {
-	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{56}
+	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *GetDataRequest) GetCasHash() string {
@@ -4316,7 +4411,7 @@ type ListDataRequest struct {
 
 func (x *ListDataRequest) Reset() {
 	*x = ListDataRequest{}
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[57]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4328,7 +4423,7 @@ func (x *ListDataRequest) String() string {
 func (*ListDataRequest) ProtoMessage() {}
 
 func (x *ListDataRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[57]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4341,7 +4436,7 @@ func (x *ListDataRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDataRequest.ProtoReflect.Descriptor instead.
 func (*ListDataRequest) Descriptor() ([]byte, []int) {
-	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{57}
+	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *ListDataRequest) GetStableRef() string {
@@ -4360,7 +4455,7 @@ type ListDataResponse struct {
 
 func (x *ListDataResponse) Reset() {
 	*x = ListDataResponse{}
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[58]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4372,7 +4467,7 @@ func (x *ListDataResponse) String() string {
 func (*ListDataResponse) ProtoMessage() {}
 
 func (x *ListDataResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[58]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4385,7 +4480,7 @@ func (x *ListDataResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDataResponse.ProtoReflect.Descriptor instead.
 func (*ListDataResponse) Descriptor() ([]byte, []int) {
-	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{58}
+	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *ListDataResponse) GetData() []*RegisteredDataDefinition {
@@ -4416,7 +4511,7 @@ type RegisteredDataDefinition struct {
 
 func (x *RegisteredDataDefinition) Reset() {
 	*x = RegisteredDataDefinition{}
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[59]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4428,7 +4523,7 @@ func (x *RegisteredDataDefinition) String() string {
 func (*RegisteredDataDefinition) ProtoMessage() {}
 
 func (x *RegisteredDataDefinition) ProtoReflect() protoreflect.Message {
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[59]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4441,7 +4536,7 @@ func (x *RegisteredDataDefinition) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisteredDataDefinition.ProtoReflect.Descriptor instead.
 func (*RegisteredDataDefinition) Descriptor() ([]byte, []int) {
-	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{59}
+	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *RegisteredDataDefinition) GetCasHash() string {
@@ -4546,7 +4641,7 @@ type PortObservation struct {
 
 func (x *PortObservation) Reset() {
 	*x = PortObservation{}
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[60]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4558,7 +4653,7 @@ func (x *PortObservation) String() string {
 func (*PortObservation) ProtoMessage() {}
 
 func (x *PortObservation) ProtoReflect() protoreflect.Message {
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[60]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4571,7 +4666,7 @@ func (x *PortObservation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PortObservation.ProtoReflect.Descriptor instead.
 func (*PortObservation) Descriptor() ([]byte, []int) {
-	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{60}
+	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *PortObservation) GetPort() string {
@@ -4605,7 +4700,7 @@ type ObservedIoProfile struct {
 
 func (x *ObservedIoProfile) Reset() {
 	*x = ObservedIoProfile{}
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[61]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4617,7 +4712,7 @@ func (x *ObservedIoProfile) String() string {
 func (*ObservedIoProfile) ProtoMessage() {}
 
 func (x *ObservedIoProfile) ProtoReflect() protoreflect.Message {
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[61]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4630,7 +4725,7 @@ func (x *ObservedIoProfile) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObservedIoProfile.ProtoReflect.Descriptor instead.
 func (*ObservedIoProfile) Descriptor() ([]byte, []int) {
-	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{61}
+	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *ObservedIoProfile) GetInputs() []*PortObservation {
@@ -4662,7 +4757,7 @@ type ObservedResourceProfile struct {
 
 func (x *ObservedResourceProfile) Reset() {
 	*x = ObservedResourceProfile{}
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[62]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4674,7 +4769,7 @@ func (x *ObservedResourceProfile) String() string {
 func (*ObservedResourceProfile) ProtoMessage() {}
 
 func (x *ObservedResourceProfile) ProtoReflect() protoreflect.Message {
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[62]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4687,7 +4782,7 @@ func (x *ObservedResourceProfile) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObservedResourceProfile.ProtoReflect.Descriptor instead.
 func (*ObservedResourceProfile) Descriptor() ([]byte, []int) {
-	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{62}
+	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *ObservedResourceProfile) GetPeakCpuMillicores() int64 {
@@ -4749,7 +4844,7 @@ type ContractCheck struct {
 
 func (x *ContractCheck) Reset() {
 	*x = ContractCheck{}
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[63]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4761,7 +4856,7 @@ func (x *ContractCheck) String() string {
 func (*ContractCheck) ProtoMessage() {}
 
 func (x *ContractCheck) ProtoReflect() protoreflect.Message {
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[63]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4774,7 +4869,7 @@ func (x *ContractCheck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ContractCheck.ProtoReflect.Descriptor instead.
 func (*ContractCheck) Descriptor() ([]byte, []int) {
-	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{63}
+	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *ContractCheck) GetAllOutputsPresent() bool {
@@ -4815,7 +4910,7 @@ type ToolCheckRecordRequest struct {
 
 func (x *ToolCheckRecordRequest) Reset() {
 	*x = ToolCheckRecordRequest{}
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[64]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4827,7 +4922,7 @@ func (x *ToolCheckRecordRequest) String() string {
 func (*ToolCheckRecordRequest) ProtoMessage() {}
 
 func (x *ToolCheckRecordRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[64]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4840,7 +4935,7 @@ func (x *ToolCheckRecordRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolCheckRecordRequest.ProtoReflect.Descriptor instead.
 func (*ToolCheckRecordRequest) Descriptor() ([]byte, []int) {
-	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{64}
+	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *ToolCheckRecordRequest) GetCheckId() string {
@@ -4971,7 +5066,7 @@ type ToolScanRecordRequest struct {
 
 func (x *ToolScanRecordRequest) Reset() {
 	*x = ToolScanRecordRequest{}
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[65]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4983,7 +5078,7 @@ func (x *ToolScanRecordRequest) String() string {
 func (*ToolScanRecordRequest) ProtoMessage() {}
 
 func (x *ToolScanRecordRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[65]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4996,7 +5091,7 @@ func (x *ToolScanRecordRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolScanRecordRequest.ProtoReflect.Descriptor instead.
 func (*ToolScanRecordRequest) Descriptor() ([]byte, []int) {
-	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{65}
+	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *ToolScanRecordRequest) GetScanId() string {
@@ -5114,7 +5209,7 @@ type SubmitRecordResponse struct {
 
 func (x *SubmitRecordResponse) Reset() {
 	*x = SubmitRecordResponse{}
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[66]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5126,7 +5221,7 @@ func (x *SubmitRecordResponse) String() string {
 func (*SubmitRecordResponse) ProtoMessage() {}
 
 func (x *SubmitRecordResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[66]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5139,7 +5234,7 @@ func (x *SubmitRecordResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubmitRecordResponse.ProtoReflect.Descriptor instead.
 func (*SubmitRecordResponse) Descriptor() ([]byte, []int) {
-	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{66}
+	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *SubmitRecordResponse) GetRecordId() string {
@@ -5165,7 +5260,7 @@ type ListCertifiedToolsRequest struct {
 
 func (x *ListCertifiedToolsRequest) Reset() {
 	*x = ListCertifiedToolsRequest{}
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[67]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5177,7 +5272,7 @@ func (x *ListCertifiedToolsRequest) String() string {
 func (*ListCertifiedToolsRequest) ProtoMessage() {}
 
 func (x *ListCertifiedToolsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[67]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5190,7 +5285,7 @@ func (x *ListCertifiedToolsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListCertifiedToolsRequest.ProtoReflect.Descriptor instead.
 func (*ListCertifiedToolsRequest) Descriptor() ([]byte, []int) {
-	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{67}
+	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *ListCertifiedToolsRequest) GetPromotionStatus() string {
@@ -5219,7 +5314,7 @@ type CertifiedToolEntry struct {
 
 func (x *CertifiedToolEntry) Reset() {
 	*x = CertifiedToolEntry{}
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[68]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5231,7 +5326,7 @@ func (x *CertifiedToolEntry) String() string {
 func (*CertifiedToolEntry) ProtoMessage() {}
 
 func (x *CertifiedToolEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[68]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5244,7 +5339,7 @@ func (x *CertifiedToolEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CertifiedToolEntry.ProtoReflect.Descriptor instead.
 func (*CertifiedToolEntry) Descriptor() ([]byte, []int) {
-	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{68}
+	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *CertifiedToolEntry) GetCasHash() string {
@@ -5333,7 +5428,7 @@ type ListCertifiedToolsResponse struct {
 
 func (x *ListCertifiedToolsResponse) Reset() {
 	*x = ListCertifiedToolsResponse{}
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[69]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5345,7 +5440,7 @@ func (x *ListCertifiedToolsResponse) String() string {
 func (*ListCertifiedToolsResponse) ProtoMessage() {}
 
 func (x *ListCertifiedToolsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[69]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5358,7 +5453,7 @@ func (x *ListCertifiedToolsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListCertifiedToolsResponse.ProtoReflect.Descriptor instead.
 func (*ListCertifiedToolsResponse) Descriptor() ([]byte, []int) {
-	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{69}
+	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *ListCertifiedToolsResponse) GetTools() []*CertifiedToolEntry {
@@ -5377,7 +5472,7 @@ type PingRequest struct {
 
 func (x *PingRequest) Reset() {
 	*x = PingRequest{}
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[70]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5389,7 +5484,7 @@ func (x *PingRequest) String() string {
 func (*PingRequest) ProtoMessage() {}
 
 func (x *PingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[70]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5402,7 +5497,7 @@ func (x *PingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PingRequest.ProtoReflect.Descriptor instead.
 func (*PingRequest) Descriptor() ([]byte, []int) {
-	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{70}
+	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *PingRequest) GetMessage() string {
@@ -5422,7 +5517,7 @@ type PingResponse struct {
 
 func (x *PingResponse) Reset() {
 	*x = PingResponse{}
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[71]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5434,7 +5529,7 @@ func (x *PingResponse) String() string {
 func (*PingResponse) ProtoMessage() {}
 
 func (x *PingResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nodevault_v1_nodevault_proto_msgTypes[71]
+	mi := &file_nodevault_v1_nodevault_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5447,7 +5542,7 @@ func (x *PingResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PingResponse.ProtoReflect.Descriptor instead.
 func (*PingResponse) Descriptor() ([]byte, []int) {
-	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{71}
+	return file_nodevault_v1_nodevault_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *PingResponse) GetMessage() string {
@@ -5756,7 +5851,10 @@ const file_nodevault_v1_nodevault_proto_rawDesc = "" +
 	"\x0fstorage_request\x18\x05 \x01(\tR\x0estorageRequest\x12#\n" +
 	"\rstorage_limit\x18\x06 \x01(\tR\fstorageLimit\x12;\n" +
 	"\x1amax_execution_time_seconds\x18\a \x01(\x05R\x17maxExecutionTimeSeconds\x12 \n" +
-	"\vparallelism\x18\b \x01(\x05R\vparallelism\"\xc4\x03\n" +
+	"\vparallelism\x18\b \x01(\x05R\vparallelism\"\x80\x01\n" +
+	"\x18ToolFunctionArtifactSpec\x120\n" +
+	"\x14tool_function_digest\x18\x01 \x01(\tR\x12toolFunctionDigest\x122\n" +
+	"\x15function_image_digest\x18\x02 \x01(\tR\x13functionImageDigest\"\xc4\x03\n" +
 	"\x1bRegisterToolFunctionRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x121\n" +
@@ -5765,10 +5863,11 @@ const file_nodevault_v1_nodevault_proto_rawDesc = "" +
 	"\x04spec\x18\x04 \x01(\v2\x1e.nodevault.v1.ToolFunctionSpecR\x04spec\x12J\n" +
 	"\fpresentation\x18\x05 \x01(\v2&.nodevault.v1.ToolFunctionPresentationR\fpresentation\x12W\n" +
 	"\x11validation_policy\x18\x06 \x01(\v2*.nodevault.v1.ToolFunctionValidationPolicyR\x10validationPolicy\x12W\n" +
-	"\x11environment_hints\x18\a \x01(\v2*.nodevault.v1.ToolFunctionEnvironmentHintsR\x10environmentHints\"\x8a\x01\n" +
+	"\x11environment_hints\x18\a \x01(\v2*.nodevault.v1.ToolFunctionEnvironmentHintsR\x10environmentHints\"\xa5\x01\n" +
 	"\x1cRegisterToolFunctionResponse\x120\n" +
 	"\x14tool_function_digest\x18\x01 \x01(\tR\x12toolFunctionDigest\x128\n" +
-	"\x18presentation_revision_id\x18\x02 \x01(\tR\x16presentationRevisionId\"\xd5\x02\n" +
+	"\x18presentation_revision_id\x18\x02 \x01(\tR\x16presentationRevisionId\x12\x19\n" +
+	"\bcas_hash\x18\x03 \x01(\tR\acasHash\"\xd5\x02\n" +
 	"\x13DataRegisterRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1b\n" +
@@ -5983,7 +6082,7 @@ func file_nodevault_v1_nodevault_proto_rawDescGZIP() []byte {
 }
 
 var file_nodevault_v1_nodevault_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
-var file_nodevault_v1_nodevault_proto_msgTypes = make([]protoimpl.MessageInfo, 74)
+var file_nodevault_v1_nodevault_proto_msgTypes = make([]protoimpl.MessageInfo, 75)
 var file_nodevault_v1_nodevault_proto_goTypes = []any{
 	(BuildKind)(0),                       // 0: nodevault.v1.BuildKind
 	(RecipeKind)(0),                      // 1: nodevault.v1.RecipeKind
@@ -6044,31 +6143,32 @@ var file_nodevault_v1_nodevault_proto_goTypes = []any{
 	(*ValidationRequirements)(nil),       // 56: nodevault.v1.ValidationRequirements
 	(*ToolFunctionEnvironmentHints)(nil), // 57: nodevault.v1.ToolFunctionEnvironmentHints
 	(*ResourceContract)(nil),             // 58: nodevault.v1.ResourceContract
-	(*RegisterToolFunctionRequest)(nil),  // 59: nodevault.v1.RegisterToolFunctionRequest
-	(*RegisterToolFunctionResponse)(nil), // 60: nodevault.v1.RegisterToolFunctionResponse
-	(*DataRegisterRequest)(nil),          // 61: nodevault.v1.DataRegisterRequest
-	(*DataRegisterResponse)(nil),         // 62: nodevault.v1.DataRegisterResponse
-	(*GetDataRequest)(nil),               // 63: nodevault.v1.GetDataRequest
-	(*ListDataRequest)(nil),              // 64: nodevault.v1.ListDataRequest
-	(*ListDataResponse)(nil),             // 65: nodevault.v1.ListDataResponse
-	(*RegisteredDataDefinition)(nil),     // 66: nodevault.v1.RegisteredDataDefinition
-	(*PortObservation)(nil),              // 67: nodevault.v1.PortObservation
-	(*ObservedIoProfile)(nil),            // 68: nodevault.v1.ObservedIoProfile
-	(*ObservedResourceProfile)(nil),      // 69: nodevault.v1.ObservedResourceProfile
-	(*ContractCheck)(nil),                // 70: nodevault.v1.ContractCheck
-	(*ToolCheckRecordRequest)(nil),       // 71: nodevault.v1.ToolCheckRecordRequest
-	(*ToolScanRecordRequest)(nil),        // 72: nodevault.v1.ToolScanRecordRequest
-	(*SubmitRecordResponse)(nil),         // 73: nodevault.v1.SubmitRecordResponse
-	(*ListCertifiedToolsRequest)(nil),    // 74: nodevault.v1.ListCertifiedToolsRequest
-	(*CertifiedToolEntry)(nil),           // 75: nodevault.v1.CertifiedToolEntry
-	(*ListCertifiedToolsResponse)(nil),   // 76: nodevault.v1.ListCertifiedToolsResponse
-	(*PingRequest)(nil),                  // 77: nodevault.v1.PingRequest
-	(*PingResponse)(nil),                 // 78: nodevault.v1.PingResponse
-	nil,                                  // 79: nodevault.v1.PortSpec.ConstraintsEntry
-	nil,                                  // 80: nodevault.v1.ValidationRequirements.RequiredCoverageEntry
+	(*ToolFunctionArtifactSpec)(nil),     // 59: nodevault.v1.ToolFunctionArtifactSpec
+	(*RegisterToolFunctionRequest)(nil),  // 60: nodevault.v1.RegisterToolFunctionRequest
+	(*RegisterToolFunctionResponse)(nil), // 61: nodevault.v1.RegisterToolFunctionResponse
+	(*DataRegisterRequest)(nil),          // 62: nodevault.v1.DataRegisterRequest
+	(*DataRegisterResponse)(nil),         // 63: nodevault.v1.DataRegisterResponse
+	(*GetDataRequest)(nil),               // 64: nodevault.v1.GetDataRequest
+	(*ListDataRequest)(nil),              // 65: nodevault.v1.ListDataRequest
+	(*ListDataResponse)(nil),             // 66: nodevault.v1.ListDataResponse
+	(*RegisteredDataDefinition)(nil),     // 67: nodevault.v1.RegisteredDataDefinition
+	(*PortObservation)(nil),              // 68: nodevault.v1.PortObservation
+	(*ObservedIoProfile)(nil),            // 69: nodevault.v1.ObservedIoProfile
+	(*ObservedResourceProfile)(nil),      // 70: nodevault.v1.ObservedResourceProfile
+	(*ContractCheck)(nil),                // 71: nodevault.v1.ContractCheck
+	(*ToolCheckRecordRequest)(nil),       // 72: nodevault.v1.ToolCheckRecordRequest
+	(*ToolScanRecordRequest)(nil),        // 73: nodevault.v1.ToolScanRecordRequest
+	(*SubmitRecordResponse)(nil),         // 74: nodevault.v1.SubmitRecordResponse
+	(*ListCertifiedToolsRequest)(nil),    // 75: nodevault.v1.ListCertifiedToolsRequest
+	(*CertifiedToolEntry)(nil),           // 76: nodevault.v1.CertifiedToolEntry
+	(*ListCertifiedToolsResponse)(nil),   // 77: nodevault.v1.ListCertifiedToolsResponse
+	(*PingRequest)(nil),                  // 78: nodevault.v1.PingRequest
+	(*PingResponse)(nil),                 // 79: nodevault.v1.PingResponse
+	nil,                                  // 80: nodevault.v1.PortSpec.ConstraintsEntry
+	nil,                                  // 81: nodevault.v1.ValidationRequirements.RequiredCoverageEntry
 }
 var file_nodevault_v1_nodevault_proto_depIdxs = []int32{
-	79, // 0: nodevault.v1.PortSpec.constraints:type_name -> nodevault.v1.PortSpec.ConstraintsEntry
+	80, // 0: nodevault.v1.PortSpec.constraints:type_name -> nodevault.v1.PortSpec.ConstraintsEntry
 	13, // 1: nodevault.v1.ListPoliciesResponse.policies:type_name -> nodevault.v1.PolicyInfo
 	23, // 2: nodevault.v1.PackageResolution.candidates:type_name -> nodevault.v1.BuildStringCandidate
 	1,  // 3: nodevault.v1.ResolveRecipeRequest.recipe_kind:type_name -> nodevault.v1.RecipeKind
@@ -6100,22 +6200,22 @@ var file_nodevault_v1_nodevault_proto_depIdxs = []int32{
 	55, // 29: nodevault.v1.ToolFunctionValidationPolicy.expected_results:type_name -> nodevault.v1.ExpectedResult
 	56, // 30: nodevault.v1.ToolFunctionValidationPolicy.validation_requirements:type_name -> nodevault.v1.ValidationRequirements
 	6,  // 31: nodevault.v1.ValidationRequirements.minimum_observation_level:type_name -> nodevault.v1.ObservationLevel
-	80, // 32: nodevault.v1.ValidationRequirements.required_coverage:type_name -> nodevault.v1.ValidationRequirements.RequiredCoverageEntry
+	81, // 32: nodevault.v1.ValidationRequirements.required_coverage:type_name -> nodevault.v1.ValidationRequirements.RequiredCoverageEntry
 	58, // 33: nodevault.v1.ToolFunctionEnvironmentHints.enforced_resources:type_name -> nodevault.v1.ResourceContract
 	43, // 34: nodevault.v1.RegisterToolFunctionRequest.spec:type_name -> nodevault.v1.ToolFunctionSpec
 	52, // 35: nodevault.v1.RegisterToolFunctionRequest.presentation:type_name -> nodevault.v1.ToolFunctionPresentation
 	53, // 36: nodevault.v1.RegisterToolFunctionRequest.validation_policy:type_name -> nodevault.v1.ToolFunctionValidationPolicy
 	57, // 37: nodevault.v1.RegisterToolFunctionRequest.environment_hints:type_name -> nodevault.v1.ToolFunctionEnvironmentHints
 	8,  // 38: nodevault.v1.DataRegisterRequest.display:type_name -> nodevault.v1.DisplaySpec
-	66, // 39: nodevault.v1.DataRegisterResponse.data:type_name -> nodevault.v1.RegisteredDataDefinition
-	66, // 40: nodevault.v1.ListDataResponse.data:type_name -> nodevault.v1.RegisteredDataDefinition
+	67, // 39: nodevault.v1.DataRegisterResponse.data:type_name -> nodevault.v1.RegisteredDataDefinition
+	67, // 40: nodevault.v1.ListDataResponse.data:type_name -> nodevault.v1.RegisteredDataDefinition
 	8,  // 41: nodevault.v1.RegisteredDataDefinition.display:type_name -> nodevault.v1.DisplaySpec
-	67, // 42: nodevault.v1.ObservedIoProfile.inputs:type_name -> nodevault.v1.PortObservation
-	67, // 43: nodevault.v1.ObservedIoProfile.outputs:type_name -> nodevault.v1.PortObservation
-	68, // 44: nodevault.v1.ToolCheckRecordRequest.observed_io_profile:type_name -> nodevault.v1.ObservedIoProfile
-	69, // 45: nodevault.v1.ToolCheckRecordRequest.observed_resource_profile:type_name -> nodevault.v1.ObservedResourceProfile
-	70, // 46: nodevault.v1.ToolCheckRecordRequest.contract_check:type_name -> nodevault.v1.ContractCheck
-	75, // 47: nodevault.v1.ListCertifiedToolsResponse.tools:type_name -> nodevault.v1.CertifiedToolEntry
+	68, // 42: nodevault.v1.ObservedIoProfile.inputs:type_name -> nodevault.v1.PortObservation
+	68, // 43: nodevault.v1.ObservedIoProfile.outputs:type_name -> nodevault.v1.PortObservation
+	69, // 44: nodevault.v1.ToolCheckRecordRequest.observed_io_profile:type_name -> nodevault.v1.ObservedIoProfile
+	70, // 45: nodevault.v1.ToolCheckRecordRequest.observed_resource_profile:type_name -> nodevault.v1.ObservedResourceProfile
+	71, // 46: nodevault.v1.ToolCheckRecordRequest.contract_check:type_name -> nodevault.v1.ContractCheck
+	76, // 47: nodevault.v1.ListCertifiedToolsResponse.tools:type_name -> nodevault.v1.CertifiedToolEntry
 	10, // 48: nodevault.v1.PolicyService.GetPolicyBundle:input_type -> nodevault.v1.GetPolicyBundleRequest
 	12, // 49: nodevault.v1.PolicyService.ListPolicies:input_type -> nodevault.v1.ListPoliciesRequest
 	15, // 50: nodevault.v1.BuildService.ResolveToolSpec:input_type -> nodevault.v1.ToolSpecRequest
@@ -6130,14 +6230,14 @@ var file_nodevault_v1_nodevault_proto_depIdxs = []int32{
 	36, // 59: nodevault.v1.ToolRegistryService.ListTools:input_type -> nodevault.v1.ListToolsRequest
 	39, // 60: nodevault.v1.ToolRegistryService.RetractTool:input_type -> nodevault.v1.RetractToolRequest
 	41, // 61: nodevault.v1.ToolRegistryService.DeleteTool:input_type -> nodevault.v1.DeleteToolRequest
-	59, // 62: nodevault.v1.ToolRegistryService.RegisterToolFunction:input_type -> nodevault.v1.RegisterToolFunctionRequest
-	61, // 63: nodevault.v1.DataRegistryService.RegisterData:input_type -> nodevault.v1.DataRegisterRequest
-	63, // 64: nodevault.v1.DataRegistryService.GetData:input_type -> nodevault.v1.GetDataRequest
-	64, // 65: nodevault.v1.DataRegistryService.ListData:input_type -> nodevault.v1.ListDataRequest
-	71, // 66: nodevault.v1.ValidationResultService.SubmitToolCheckRecord:input_type -> nodevault.v1.ToolCheckRecordRequest
-	72, // 67: nodevault.v1.ValidationResultService.SubmitToolScanRecord:input_type -> nodevault.v1.ToolScanRecordRequest
-	74, // 68: nodevault.v1.ValidationResultService.ListCertifiedTools:input_type -> nodevault.v1.ListCertifiedToolsRequest
-	77, // 69: nodevault.v1.PingService.Ping:input_type -> nodevault.v1.PingRequest
+	60, // 62: nodevault.v1.ToolRegistryService.RegisterToolFunction:input_type -> nodevault.v1.RegisterToolFunctionRequest
+	62, // 63: nodevault.v1.DataRegistryService.RegisterData:input_type -> nodevault.v1.DataRegisterRequest
+	64, // 64: nodevault.v1.DataRegistryService.GetData:input_type -> nodevault.v1.GetDataRequest
+	65, // 65: nodevault.v1.DataRegistryService.ListData:input_type -> nodevault.v1.ListDataRequest
+	72, // 66: nodevault.v1.ValidationResultService.SubmitToolCheckRecord:input_type -> nodevault.v1.ToolCheckRecordRequest
+	73, // 67: nodevault.v1.ValidationResultService.SubmitToolScanRecord:input_type -> nodevault.v1.ToolScanRecordRequest
+	75, // 68: nodevault.v1.ValidationResultService.ListCertifiedTools:input_type -> nodevault.v1.ListCertifiedToolsRequest
+	78, // 69: nodevault.v1.PingService.Ping:input_type -> nodevault.v1.PingRequest
 	11, // 70: nodevault.v1.PolicyService.GetPolicyBundle:output_type -> nodevault.v1.PolicyBundle
 	14, // 71: nodevault.v1.PolicyService.ListPolicies:output_type -> nodevault.v1.ListPoliciesResponse
 	16, // 72: nodevault.v1.BuildService.ResolveToolSpec:output_type -> nodevault.v1.ResolvedToolSpecResponse
@@ -6152,14 +6252,14 @@ var file_nodevault_v1_nodevault_proto_depIdxs = []int32{
 	37, // 81: nodevault.v1.ToolRegistryService.ListTools:output_type -> nodevault.v1.ListToolsResponse
 	40, // 82: nodevault.v1.ToolRegistryService.RetractTool:output_type -> nodevault.v1.RetractToolResponse
 	42, // 83: nodevault.v1.ToolRegistryService.DeleteTool:output_type -> nodevault.v1.DeleteToolResponse
-	60, // 84: nodevault.v1.ToolRegistryService.RegisterToolFunction:output_type -> nodevault.v1.RegisterToolFunctionResponse
-	62, // 85: nodevault.v1.DataRegistryService.RegisterData:output_type -> nodevault.v1.DataRegisterResponse
-	66, // 86: nodevault.v1.DataRegistryService.GetData:output_type -> nodevault.v1.RegisteredDataDefinition
-	65, // 87: nodevault.v1.DataRegistryService.ListData:output_type -> nodevault.v1.ListDataResponse
-	73, // 88: nodevault.v1.ValidationResultService.SubmitToolCheckRecord:output_type -> nodevault.v1.SubmitRecordResponse
-	73, // 89: nodevault.v1.ValidationResultService.SubmitToolScanRecord:output_type -> nodevault.v1.SubmitRecordResponse
-	76, // 90: nodevault.v1.ValidationResultService.ListCertifiedTools:output_type -> nodevault.v1.ListCertifiedToolsResponse
-	78, // 91: nodevault.v1.PingService.Ping:output_type -> nodevault.v1.PingResponse
+	61, // 84: nodevault.v1.ToolRegistryService.RegisterToolFunction:output_type -> nodevault.v1.RegisterToolFunctionResponse
+	63, // 85: nodevault.v1.DataRegistryService.RegisterData:output_type -> nodevault.v1.DataRegisterResponse
+	67, // 86: nodevault.v1.DataRegistryService.GetData:output_type -> nodevault.v1.RegisteredDataDefinition
+	66, // 87: nodevault.v1.DataRegistryService.ListData:output_type -> nodevault.v1.ListDataResponse
+	74, // 88: nodevault.v1.ValidationResultService.SubmitToolCheckRecord:output_type -> nodevault.v1.SubmitRecordResponse
+	74, // 89: nodevault.v1.ValidationResultService.SubmitToolScanRecord:output_type -> nodevault.v1.SubmitRecordResponse
+	77, // 90: nodevault.v1.ValidationResultService.ListCertifiedTools:output_type -> nodevault.v1.ListCertifiedToolsResponse
+	79, // 91: nodevault.v1.PingService.Ping:output_type -> nodevault.v1.PingResponse
 	70, // [70:92] is the sub-list for method output_type
 	48, // [48:70] is the sub-list for method input_type
 	48, // [48:48] is the sub-list for extension type_name
@@ -6178,7 +6278,7 @@ func file_nodevault_v1_nodevault_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_nodevault_v1_nodevault_proto_rawDesc), len(file_nodevault_v1_nodevault_proto_rawDesc)),
 			NumEnums:      7,
-			NumMessages:   74,
+			NumMessages:   75,
 			NumExtensions: 0,
 			NumServices:   7,
 		},

@@ -261,6 +261,7 @@ func TestRegisterTool_V02RoundTrip(t *testing.T) {
 	if got.Validation != nil {
 		t.Errorf("Validation: got %+v want nil (build-time records no unobserved validation)", got.Validation)
 	}
+	//nolint:staticcheck // deprecated legacy fields; build-time path leaves them unpopulated (issue #19)
 	if got.Command != "" || len(got.Inputs) != 0 || len(got.Outputs) != 0 || got.Display != nil {
 		t.Fatalf("ToolFunctionSpec metadata should not be populated by build-time RegisterTool: %+v", got)
 	}

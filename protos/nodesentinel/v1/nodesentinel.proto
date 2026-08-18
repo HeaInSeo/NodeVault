@@ -2,6 +2,11 @@ syntax = "proto3";
 
 package nodesentinel.v1;
 
+// ToolFunctionSpec declaration downstream (issue #19 W5). W1 defines the fields
+// only; NodeVault populates them in W5 (values only), and observation stays off
+// until OBS-7.
+import "nodevault/v1/nodevault.proto";
+
 option go_package = "github.com/HeaInSeo/NodeVault/protos/nodesentinel/v1;nodesentinelv1";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -33,6 +38,16 @@ message EnqueueValidationWorkRequest {
   // request is rejected (FAILED_PRECONDITION) rather than silently
   // returning the wrong job. Required — requests without it are rejected.
   string validation_request_id = 10;
+
+  // ToolFunction declaration downstream (issue #19 W5 — DEFINITION ONLY here).
+  // W1 defines these fields so the proto change lands once and the receiver
+  // (DisallowUnknownFields) never rejects a later value-carrying request. W5
+  // fills the values; observation (profile/security_scan actions) stays off
+  // until OBS-7. ⚠ Do NOT add profile/security_scan to requested_actions (O4):
+  // enabling observation before the observers are complete would start
+  // recording `/bin/sh -c true` as validationHash + allOutputsPresent:true.
+  nodevault.v1.ToolFunctionSpec tool_function_spec = 11;
+  string tool_function_digest = 12;
 }
 
 message EnqueueValidationWorkResponse {

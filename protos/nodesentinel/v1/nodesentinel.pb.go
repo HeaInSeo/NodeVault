@@ -7,6 +7,7 @@
 package nodesentinelv1
 
 import (
+	v1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -42,8 +43,17 @@ type EnqueueValidationWorkRequest struct {
 	// request is rejected (FAILED_PRECONDITION) rather than silently
 	// returning the wrong job. Required — requests without it are rejected.
 	ValidationRequestId string `protobuf:"bytes,10,opt,name=validation_request_id,json=validationRequestId,proto3" json:"validation_request_id,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// ToolFunction declaration downstream (issue #19 W5 — DEFINITION ONLY here).
+	// W1 defines these fields so the proto change lands once and the receiver
+	// (DisallowUnknownFields) never rejects a later value-carrying request. W5
+	// fills the values; observation (profile/security_scan actions) stays off
+	// until OBS-7. ⚠ Do NOT add profile/security_scan to requested_actions (O4):
+	// enabling observation before the observers are complete would start
+	// recording `/bin/sh -c true` as validationHash + allOutputsPresent:true.
+	ToolFunctionSpec   *v1.ToolFunctionSpec `protobuf:"bytes,11,opt,name=tool_function_spec,json=toolFunctionSpec,proto3" json:"tool_function_spec,omitempty"`
+	ToolFunctionDigest string               `protobuf:"bytes,12,opt,name=tool_function_digest,json=toolFunctionDigest,proto3" json:"tool_function_digest,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *EnqueueValidationWorkRequest) Reset() {
@@ -146,6 +156,20 @@ func (x *EnqueueValidationWorkRequest) GetValidationRequestId() string {
 	return ""
 }
 
+func (x *EnqueueValidationWorkRequest) GetToolFunctionSpec() *v1.ToolFunctionSpec {
+	if x != nil {
+		return x.ToolFunctionSpec
+	}
+	return nil
+}
+
+func (x *EnqueueValidationWorkRequest) GetToolFunctionDigest() string {
+	if x != nil {
+		return x.ToolFunctionDigest
+	}
+	return ""
+}
+
 type EnqueueValidationWorkResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	JobId         string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
@@ -202,7 +226,7 @@ var File_nodesentinel_v1_nodesentinel_proto protoreflect.FileDescriptor
 
 const file_nodesentinel_v1_nodesentinel_proto_rawDesc = "" +
 	"\n" +
-	"\"nodesentinel/v1/nodesentinel.proto\x12\x0fnodesentinel.v1\"\x97\x03\n" +
+	"\"nodesentinel/v1/nodesentinel.proto\x12\x0fnodesentinel.v1\x1a\x1cnodevault/v1/nodevault.proto\"\x97\x04\n" +
 	"\x1cEnqueueValidationWorkRequest\x12#\n" +
 	"\rartifact_kind\x18\x01 \x01(\tR\fartifactKind\x12)\n" +
 	"\x10image_repository\x18\x02 \x01(\tR\x0fimageRepository\x12!\n" +
@@ -215,7 +239,9 @@ const file_nodesentinel_v1_nodesentinel_proto_rawDesc = "" +
 	"\x11requested_actions\x18\b \x03(\tR\x10requestedActions\x122\n" +
 	"\x15requested_fixture_set\x18\t \x01(\tR\x13requestedFixtureSet\x122\n" +
 	"\x15validation_request_id\x18\n" +
-	" \x01(\tR\x13validationRequestId\"N\n" +
+	" \x01(\tR\x13validationRequestId\x12L\n" +
+	"\x12tool_function_spec\x18\v \x01(\v2\x1e.nodevault.v1.ToolFunctionSpecR\x10toolFunctionSpec\x120\n" +
+	"\x14tool_function_digest\x18\f \x01(\tR\x12toolFunctionDigest\"N\n" +
 	"\x1dEnqueueValidationWorkResponse\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status2\x88\x01\n" +
@@ -238,15 +264,17 @@ var file_nodesentinel_v1_nodesentinel_proto_msgTypes = make([]protoimpl.MessageI
 var file_nodesentinel_v1_nodesentinel_proto_goTypes = []any{
 	(*EnqueueValidationWorkRequest)(nil),  // 0: nodesentinel.v1.EnqueueValidationWorkRequest
 	(*EnqueueValidationWorkResponse)(nil), // 1: nodesentinel.v1.EnqueueValidationWorkResponse
+	(*v1.ToolFunctionSpec)(nil),           // 2: nodevault.v1.ToolFunctionSpec
 }
 var file_nodesentinel_v1_nodesentinel_proto_depIdxs = []int32{
-	0, // 0: nodesentinel.v1.IngressService.EnqueueValidationWork:input_type -> nodesentinel.v1.EnqueueValidationWorkRequest
-	1, // 1: nodesentinel.v1.IngressService.EnqueueValidationWork:output_type -> nodesentinel.v1.EnqueueValidationWorkResponse
-	1, // [1:2] is the sub-list for method output_type
-	0, // [0:1] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	2, // 0: nodesentinel.v1.EnqueueValidationWorkRequest.tool_function_spec:type_name -> nodevault.v1.ToolFunctionSpec
+	0, // 1: nodesentinel.v1.IngressService.EnqueueValidationWork:input_type -> nodesentinel.v1.EnqueueValidationWorkRequest
+	1, // 2: nodesentinel.v1.IngressService.EnqueueValidationWork:output_type -> nodesentinel.v1.EnqueueValidationWorkResponse
+	2, // [2:3] is the sub-list for method output_type
+	1, // [1:2] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_nodesentinel_v1_nodesentinel_proto_init() }

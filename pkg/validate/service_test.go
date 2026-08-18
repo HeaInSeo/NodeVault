@@ -19,6 +19,16 @@ import (
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
+// setVar temporarily overrides a package-level timing knob for a test and
+// returns a restore func. Tests use tiny values so timing-dependent paths run
+// fast; assertions remain driven by fake-client behavior (call counts), not
+// wall-clock sleeps.
+func setVar[T any](p *T, v T) func() {
+	old := *p
+	*p = v
+	return func() { *p = old }
+}
+
 // ─── parseJobManifest ─────────────────────────────────────────────────────────
 
 func TestParseJobManifest_ValidYAML(t *testing.T) {
@@ -275,7 +285,12 @@ func TestEnsureNamespace_ExistingNamespace(t *testing.T) {
 // false-negative failure, and that it succeeds once the second watch delivers
 // the Job's actual completion event.
 func TestWaitForJob_ReconnectsAfterWatchChannelCloses(t *testing.T) {
-	kube := fake.NewSimpleClientset()
+	defer setVar(&watchReconnectBackoff, time.Millisecond)()
+
+	// Seed a still-running Job so the relist performed on each (re)connect finds
+	// it non-terminal and proceeds to watch, rather than short-circuiting.
+	running := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "smoke-recon", Namespace: smokeNamespace}}
+	kube := fake.NewSimpleClientset(running)
 	svc := &Service{kube: kube}
 
 	var watchCalls int
@@ -293,7 +308,7 @@ func TestWaitForJob_ReconnectsAfterWatchChannelCloses(t *testing.T) {
 		w := watch.NewFake()
 		go func() {
 			job := &batchv1.Job{
-				ObjectMeta: metav1.ObjectMeta{Name: "smoke-recon"},
+				ObjectMeta: metav1.ObjectMeta{Name: "smoke-recon", Namespace: smokeNamespace},
 				Status: batchv1.JobStatus{
 					Conditions: []batchv1.JobCondition{
 						{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
@@ -324,6 +339,12 @@ func TestWaitForJob_ReconnectFailureRespectsDeadline(t *testing.T) {
 	kube := fake.NewSimpleClientset()
 	svc := &Service{kube: kube}
 
+	// The relist performed on each (re)connect also fails when the API server is
+	// genuinely unreachable, so make GET fail too — otherwise the fake tracker
+	// would report the Job absent and short-circuit before the watch is tried.
+	kube.PrependReactor("get", "jobs", func(_ k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("connection refused")
+	})
 	kube.PrependWatchReactor("jobs", func(_ k8stesting.Action) (bool, watch.Interface, error) {
 		return true, nil, errors.New("connection refused")
 	})
@@ -383,5 +404,135 @@ func TestNewServiceFromClient_Reachable(t *testing.T) {
 	}
 	if svc == nil {
 		t.Fatal("expected a non-nil Service")
+	}
+}
+
+// ─── P1a: relist catches a terminal transition during a watch gap ─────────────
+
+// TestWaitForJob_RelistCatchesTerminalDuringWatchGap reproduces the missed
+// terminal transition: the first watch closes and the Job reaches Complete
+// before the replacement watch is established, and the second watch emits NO
+// event. Without a relist-on-reconnect, waitForJob never observes the completion
+// and only gives up at the deadline. With the relist, the reconnect's GET
+// observes Complete and returns success.
+func TestWaitForJob_RelistCatchesTerminalDuringWatchGap(t *testing.T) {
+	defer setVar(&watchReconnectBackoff, time.Millisecond)()
+
+	running := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "smoke-gap", Namespace: smokeNamespace}}
+	kube := fake.NewSimpleClientset(running)
+	svc := &Service{kube: kube}
+	gvr := batchv1.SchemeGroupVersion.WithResource("jobs")
+
+	var watchCalls int
+	kube.PrependWatchReactor("jobs", func(_ k8stesting.Action) (bool, watch.Interface, error) {
+		watchCalls++
+		if watchCalls == 1 {
+			// The Job reaches Complete during the gap, before the replacement
+			// watch is established.
+			complete := running.DeepCopy()
+			complete.Status.Conditions = []batchv1.JobCondition{
+				{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+			}
+			if err := kube.Tracker().Update(gvr, complete, smokeNamespace); err != nil {
+				t.Errorf("tracker update: %v", err)
+			}
+			w := watch.NewFake()
+			w.Stop()
+			return true, w, nil
+		}
+		// Second watch: never delivers any event.
+		return true, watch.NewFake(), nil
+	})
+
+	// Bounded so the pre-fix code (which never observes completion) fails fast
+	// instead of waiting the full smoke timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	result := svc.waitForJob(ctx, "smoke-gap")
+	if !result.Success {
+		t.Fatalf("expected relist to observe Complete during the watch gap, got: %+v", result)
+	}
+}
+
+// ─── P2b: timeout after a watch gap is an unknown outcome ──────────────────────
+
+// TestWaitForJob_TimeoutAfterGapReportsUnknown reproduces the ambiguous-timeout
+// case: a watch is interrupted, a later watch stays open with no events until
+// the deadline, and the confirming GET at the deadline cannot reach the API
+// server. Because the terminal event may have occurred during the gap, the
+// outcome must be reported as UNKNOWN rather than a definite timeout.
+func TestWaitForJob_TimeoutAfterGapReportsUnknown(t *testing.T) {
+	defer setVar(&watchReconnectBackoff, time.Millisecond)()
+
+	running := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "smoke-unknown", Namespace: smokeNamespace}}
+	kube := fake.NewSimpleClientset(running)
+	svc := &Service{kube: kube}
+
+	var getCalls int
+	kube.PrependReactor("get", "jobs", func(_ k8stesting.Action) (bool, runtime.Object, error) {
+		getCalls++
+		if getCalls >= 3 {
+			// The confirming GET at the deadline cannot reach the API server.
+			return true, nil, errors.New("connection refused")
+		}
+		return false, nil, nil // earlier relists succeed (tracker: running)
+	})
+	var watchCalls int
+	kube.PrependWatchReactor("jobs", func(_ k8stesting.Action) (bool, watch.Interface, error) {
+		watchCalls++
+		if watchCalls == 1 {
+			w := watch.NewFake()
+			w.Stop() // interruption
+			return true, w, nil
+		}
+		return true, watch.NewFake(), nil // stays open, no events, until deadline
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	result := svc.waitForJob(ctx, "smoke-unknown")
+	if result.Success {
+		t.Fatal("expected non-success")
+	}
+	if !strings.Contains(result.ErrorMessage, "unknown") {
+		t.Fatalf("expected an UNKNOWN outcome after a watch gap, got: %q", result.ErrorMessage)
+	}
+}
+
+// ─── P2c: back off after clean watch closures ─────────────────────────────────
+
+// TestWaitForJob_BacksOffOnCleanWatchClosure reproduces the busy-spin: a watch
+// that establishes then immediately EOFs on every attempt. Without a backoff on
+// clean closure, waitForJob reconnects with no delay and hammers the API server
+// thousands of times until the deadline. With the backoff, reconnects are
+// bounded.
+func TestWaitForJob_BacksOffOnCleanWatchClosure(t *testing.T) {
+	defer setVar(&watchReconnectBackoff, 20*time.Millisecond)()
+
+	running := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "smoke-spin", Namespace: smokeNamespace}}
+	kube := fake.NewSimpleClientset(running)
+	svc := &Service{kube: kube}
+
+	var watchCalls int
+	kube.PrependWatchReactor("jobs", func(_ k8stesting.Action) (bool, watch.Interface, error) {
+		watchCalls++
+		w := watch.NewFake()
+		w.Stop() // always immediately closed
+		return true, w, nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	result := svc.waitForJob(ctx, "smoke-spin")
+	if result.Success {
+		t.Fatal("expected non-success (job never completes)")
+	}
+	// ~200ms / 20ms ≈ 10 reconnects; without the backoff this spins into the
+	// thousands.
+	if watchCalls > 40 {
+		t.Fatalf("expected the clean-closure backoff to bound reconnects, got %d watch calls", watchCalls)
 	}
 }

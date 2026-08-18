@@ -3,8 +3,10 @@ package registryconfig
 import (
 	"encoding/base64"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -166,4 +168,26 @@ func writeAuthJSON(t *testing.T, host, user, pass string) string {
 		t.Fatalf("write auth file: %v", err)
 	}
 	return f
+}
+
+// TestConfig_HTTPClient_PreservesProxyFromEnvironment is the regression test for
+// the P2 finding on #66: the custom transport built by HTTPClient() dropped
+// http.ProxyFromEnvironment, so in environments where public-registry egress
+// requires HTTP_PROXY/HTTPS_PROXY every request (including the bearer-token
+// request) bypassed the proxy and failed. The transport must keep proxy support.
+func TestConfig_HTTPClient_PreservesProxyFromEnvironment(t *testing.T) {
+	client, err := Config{}.HTTPClient()
+	if err != nil {
+		t.Fatalf("HTTPClient: %v", err)
+	}
+	tr, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport type: got %T", client.Transport)
+	}
+	if tr.Proxy == nil {
+		t.Fatal("HTTPClient transport has a nil Proxy — HTTP_PROXY/HTTPS_PROXY would be ignored")
+	}
+	if reflect.ValueOf(tr.Proxy).Pointer() != reflect.ValueOf(http.ProxyFromEnvironment).Pointer() {
+		t.Error("HTTPClient transport Proxy is not http.ProxyFromEnvironment")
+	}
 }

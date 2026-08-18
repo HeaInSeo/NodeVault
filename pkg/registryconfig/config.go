@@ -117,7 +117,13 @@ func (c Config) HTTPClient() (*http.Client, error) {
 		}
 		tlsConfig.RootCAs = pool
 	}
-	return &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConfig}}, nil
+	// Proxy: http.ProxyFromEnvironment keeps HTTP_PROXY/HTTPS_PROXY support that
+	// the default transport provides — a custom transport with a nil Proxy would
+	// silently bypass a configured egress proxy for every request.
+	return &http.Client{Transport: &http.Transport{
+		Proxy:           http.ProxyFromEnvironment,
+		TLSClientConfig: tlsConfig,
+	}}, nil
 }
 
 // Credentials reads the username and password for host from the

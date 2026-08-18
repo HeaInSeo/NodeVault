@@ -3,51 +3,76 @@ package registry
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
+
+	"github.com/HeaInSeo/NodeVault/pkg/registryconfig"
 )
+
+// digestPattern matches the general OCI content digest shape:
+// "<algorithm>:<encoded>", per the OCI Image Spec digest grammar
+// (https://github.com/opencontainers/image-spec/blob/main/descriptor.md#digests).
+var digestPattern = regexp.MustCompile(`^[a-z0-9]+(?:[.+_-][a-z0-9]+)*:[a-zA-Z0-9=_-]+$`)
+
+// sha256DigestPattern additionally constrains the common sha256 case to
+// exactly 64 lowercase hex characters — the only algorithm NodeVault's own
+// build/push path produces or trusts.
+var sha256DigestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+
+// validateDigestFormat rejects a value that does not have the shape of an
+// OCI content digest. Without this check, a misbehaving/compromised
+// registry or on-path proxy could hand back an arbitrary string in the
+// Docker-Content-Digest header or manifest body that would flow through
+// unchecked as "the resolved digest."
+func validateDigestFormat(d string) error {
+	if !digestPattern.MatchString(d) {
+		return fmt.Errorf("malformed digest %q: does not match \"algorithm:encoded\" format", d)
+	}
+	if strings.HasPrefix(d, "sha256:") && !sha256DigestPattern.MatchString(d) {
+		return fmt.Errorf("malformed digest %q: sha256 digest must be exactly 64 lowercase hex characters", d)
+	}
+	return nil
+}
 
 // ResolveTagDigest resolves a "host/name:tag" image reference to its manifest
 // digest via the OCI Distribution Spec API.
 //
-// It is built to reach both an internal Harbor and public registries
-// (docker.io, ghcr.io, quay.io) through one code path: it tries HTTPS first,
-// transparently performs the standard WWW-Authenticate: Bearer 401 challenge
-// -> anonymous token -> retry flow when challenged, and falls back to plain
-// HTTP only when the HTTPS connection itself cannot be established. The same
-// challenge/retry flow is reused by HarborChecker in checker.go.
-func (c *Client) ResolveTagDigest(ctx context.Context, ref string) (string, error) {
+// Scheme and TLS/CA trust come from registryconfig.Config
+// (registryconfig.FromEnv()) — the same shared settings HarborChecker
+// (checker.go) and pkg/oras's newRemoteRepository already use, so this
+// resolve path no longer trusts a different CA or scheme than the rest of
+// NodeVault. It transparently performs the standard WWW-Authenticate:
+// Bearer 401 challenge -> anonymous token -> retry flow when challenged
+// (the same flow reused by HarborChecker), but it is otherwise a single,
+// deterministic attempt: there is no probe-HTTPS-then-silently-retry-over-
+// HTTP fallback. Retrying in plaintext on any HTTPS failure — including a
+// TLS certificate verification failure — would let an on-path attacker
+// force the downgrade (by breaking the TLS handshake) and then hand back
+// an arbitrary digest over an unauthenticated connection with no further
+// check. Operators who need to reach a plain-HTTP registry (e.g. a kind
+// test registry) opt in explicitly via NODEVAULT_REGISTRY_SCHEME=http.
+func (*Client) ResolveTagDigest(ctx context.Context, ref string) (string, error) {
 	host, name, tag, err := parseDestination(ref)
 	if err != nil {
 		return "", err
 	}
 
-	digest, err := c.resolveTagDigestScheme(ctx, "https", host, name, tag)
-	if err == nil {
-		return digest, nil
+	cfg := registryconfig.FromEnv()
+	scheme, httpClient, err := clientForHost(cfg, host)
+	if err != nil {
+		return "", fmt.Errorf("registry: build HTTP client: %w", err)
 	}
-	var urlErr *url.Error
-	if !errors.As(err, &urlErr) {
-		return "", err
-	}
-	return c.resolveTagDigestScheme(ctx, "http", host, name, tag)
-}
+	rc := newClientWithHTTP(httpClient)
 
-func (c *Client) resolveTagDigestScheme(ctx context.Context, scheme, host, name, tag string) (string, error) {
 	manifestURL := fmt.Sprintf("%s://%s/v2/%s/manifests/%s", scheme, host, name, tag)
-
 	var lastErr error
 	for _, accept := range acceptHeaders {
-		digest, err := c.fetchManifestDigest(ctx, manifestURL, accept)
+		digest, err := rc.fetchManifestDigest(ctx, manifestURL, accept)
 		if err == nil {
 			return digest, nil
-		}
-		var urlErr *url.Error
-		if errors.As(err, &urlErr) {
-			return "", err // transport failure: let the caller try the other scheme
 		}
 		lastErr = err
 	}
@@ -56,6 +81,32 @@ func (c *Client) resolveTagDigestScheme(ctx context.Context, scheme, host, name,
 	}
 	return "", fmt.Errorf("digest not found in registry response for %s", manifestURL)
 }
+
+// clientForHost selects the URL scheme and HTTP client to use when resolving a
+// reference whose registry host is host.
+//
+// The operator's configured scheme, CA trust, and NODEVAULT_ORAS_INSECURE_TLS
+// opt-in apply ONLY to the configured registry host (cfg.Addr). Every other,
+// caller-controlled host — e.g. a submitted docker.io base-image reference — is
+// resolved over verified HTTPS with the default proxy-aware transport. Without
+// this scoping, an install that opted its internal Harbor into
+// NODEVAULT_REGISTRY_SCHEME=http or NODEVAULT_ORAS_INSECURE_TLS=true would also
+// resolve arbitrary external references over plaintext / unverifiable TLS and
+// accept an attacker-supplied digest.
+func clientForHost(cfg registryconfig.Config, host string) (string, *http.Client, error) {
+	if host == cfg.Addr {
+		c, err := cfg.HTTPClient()
+		if err != nil {
+			return "", nil, err
+		}
+		return cfg.Scheme, c, nil
+	}
+	return defaultScheme, http.DefaultClient, nil
+}
+
+// defaultScheme is the scheme used for any host other than the configured
+// registry: verified HTTPS, never a caller-inherited downgrade.
+const defaultScheme = "https"
 
 // fetchManifestDigest performs one GET, transparently handling a single
 // WWW-Authenticate: Bearer challenge if the registry requires anonymous
@@ -87,6 +138,9 @@ func (c *Client) fetchManifestDigest(ctx context.Context, manifestURL, accept st
 		return "", fmt.Errorf("registry GET %s: status %d", manifestURL, resp.StatusCode)
 	}
 	if d := resp.Header.Get("Docker-Content-Digest"); d != "" {
+		if verr := validateDigestFormat(d); verr != nil {
+			return "", fmt.Errorf("registry GET %s: Docker-Content-Digest header: %w", manifestURL, verr)
+		}
 		return d, nil
 	}
 	var m struct {
@@ -95,6 +149,9 @@ func (c *Client) fetchManifestDigest(ctx context.Context, manifestURL, accept st
 		} `json:"config"`
 	}
 	if jerr := json.NewDecoder(resp.Body).Decode(&m); jerr == nil && m.Config.Digest != "" {
+		if verr := validateDigestFormat(m.Config.Digest); verr != nil {
+			return "", fmt.Errorf("registry GET %s: manifest config.digest: %w", manifestURL, verr)
+		}
 		return m.Config.Digest, nil
 	}
 	return "", fmt.Errorf("digest not found in registry response for %s", manifestURL)

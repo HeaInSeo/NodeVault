@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/HeaInSeo/NodeVault/pkg/registryconfig"
 )
 
 // setRegistryEnv points registryconfig.FromEnv() (consumed internally by
@@ -60,6 +62,10 @@ func TestResolveTagDigest_DirectHTTPS(t *testing.T) {
 
 	c := NewClient()
 	host := strings.TrimPrefix(ts.URL, "https://")
+	// The reference host IS the configured registry for this test, so the
+	// operator scheme/CA/InsecureTLS settings apply (clientForHost scopes
+	// those to cfg.Addr only).
+	t.Setenv("NODEVAULT_REGISTRY_ADDR", host)
 
 	digest, err := c.ResolveTagDigest(context.Background(), host+"/img:latest")
 	if err != nil {
@@ -100,6 +106,10 @@ func TestResolveTagDigest_BearerChallenge(t *testing.T) {
 
 	c := NewClient()
 	host := strings.TrimPrefix(registryTS.URL, "https://")
+	// The reference host IS the configured registry for this test, so the
+	// operator scheme/CA/InsecureTLS settings apply (clientForHost scopes
+	// those to cfg.Addr only).
+	t.Setenv("NODEVAULT_REGISTRY_ADDR", host)
 
 	digest, err := c.ResolveTagDigest(context.Background(), host+"/lib/img:pull")
 	if err != nil {
@@ -121,6 +131,10 @@ func TestResolveTagDigest_BearerChallengeWithoutAuthHeader_Errors(t *testing.T) 
 
 	c := NewClient()
 	host := strings.TrimPrefix(ts.URL, "https://")
+	// The reference host IS the configured registry for this test, so the
+	// operator scheme/CA/InsecureTLS settings apply (clientForHost scopes
+	// those to cfg.Addr only).
+	t.Setenv("NODEVAULT_REGISTRY_ADDR", host)
 
 	_, err := c.ResolveTagDigest(context.Background(), host+"/img:latest")
 	if err == nil {
@@ -155,6 +169,10 @@ func TestResolveTagDigest_TLSVerificationFailure_DoesNotFallBackToHTTP(t *testin
 
 	c := NewClient()
 	host := strings.TrimPrefix(ts.URL, "https://")
+	// The reference host IS the configured registry for this test, so the
+	// operator scheme/CA/InsecureTLS settings apply (clientForHost scopes
+	// those to cfg.Addr only).
+	t.Setenv("NODEVAULT_REGISTRY_ADDR", host)
 
 	digest, err := c.ResolveTagDigest(context.Background(), host+"/img:latest")
 	if err == nil {
@@ -186,6 +204,10 @@ func TestResolveTagDigest_InsecureTLSOptIn_StillWorks(t *testing.T) {
 
 	c := NewClient()
 	host := strings.TrimPrefix(ts.URL, "https://")
+	// The reference host IS the configured registry for this test, so the
+	// operator scheme/CA/InsecureTLS settings apply (clientForHost scopes
+	// those to cfg.Addr only).
+	t.Setenv("NODEVAULT_REGISTRY_ADDR", host)
 
 	digest, err := c.ResolveTagDigest(context.Background(), host+"/img:latest")
 	if err != nil {
@@ -210,6 +232,10 @@ func TestResolveTagDigest_PlainHTTP_ExplicitSchemeOptIn(t *testing.T) {
 
 	c := NewClient()
 	host := strings.TrimPrefix(ts.URL, "http://")
+	// The reference host IS the configured registry for this test, so the
+	// operator scheme/CA/InsecureTLS settings apply (clientForHost scopes
+	// those to cfg.Addr only).
+	t.Setenv("NODEVAULT_REGISTRY_ADDR", host)
 
 	digest, err := c.ResolveTagDigest(context.Background(), host+"/img:latest")
 	if err != nil {
@@ -235,6 +261,10 @@ func TestResolveTagDigest_HTTPSDefault_DoesNotReachPlainHTTPServer(t *testing.T)
 
 	c := NewClient()
 	host := strings.TrimPrefix(ts.URL, "http://")
+	// The reference host IS the configured registry for this test, so the
+	// operator scheme/CA/InsecureTLS settings apply (clientForHost scopes
+	// those to cfg.Addr only).
+	t.Setenv("NODEVAULT_REGISTRY_ADDR", host)
 
 	_, err := c.ResolveTagDigest(context.Background(), host+"/img:latest")
 	if err == nil {
@@ -255,6 +285,10 @@ func TestResolveTagDigest_MalformedDigestHeader_Rejected(t *testing.T) {
 
 	c := NewClient()
 	host := strings.TrimPrefix(ts.URL, "http://")
+	// The reference host IS the configured registry for this test, so the
+	// operator scheme/CA/InsecureTLS settings apply (clientForHost scopes
+	// those to cfg.Addr only).
+	t.Setenv("NODEVAULT_REGISTRY_ADDR", host)
 
 	digest, err := c.ResolveTagDigest(context.Background(), host+"/img:latest")
 	if err == nil {
@@ -278,6 +312,10 @@ func TestResolveTagDigest_MalformedDigestInBody_Rejected(t *testing.T) {
 
 	c := NewClient()
 	host := strings.TrimPrefix(ts.URL, "http://")
+	// The reference host IS the configured registry for this test, so the
+	// operator scheme/CA/InsecureTLS settings apply (clientForHost scopes
+	// those to cfg.Addr only).
+	t.Setenv("NODEVAULT_REGISTRY_ADDR", host)
 
 	digest, err := c.ResolveTagDigest(context.Background(), host+"/img:latest")
 	if err == nil {
@@ -300,6 +338,10 @@ func TestResolveTagDigest_ShortHexDigest_Rejected(t *testing.T) {
 
 	c := NewClient()
 	host := strings.TrimPrefix(ts.URL, "http://")
+	// The reference host IS the configured registry for this test, so the
+	// operator scheme/CA/InsecureTLS settings apply (clientForHost scopes
+	// those to cfg.Addr only).
+	t.Setenv("NODEVAULT_REGISTRY_ADDR", host)
 
 	_, err := c.ResolveTagDigest(context.Background(), host+"/img:latest")
 	if err == nil {
@@ -366,5 +408,51 @@ func TestParseBearerChallenge_MissingRealm(t *testing.T) {
 	_, ok := parseBearerChallenge(`Bearer service="registry.example.com"`)
 	if ok {
 		t.Fatal("expected ok=false when realm is missing")
+	}
+}
+
+// transportInsecure reports whether c's transport skips TLS verification.
+func transportInsecure(t *testing.T, c *http.Client) bool {
+	t.Helper()
+	tr, ok := c.Transport.(*http.Transport)
+	if !ok || tr.TLSClientConfig == nil {
+		return false
+	}
+	return tr.TLSClientConfig.InsecureSkipVerify
+}
+
+// TestClientForHost_ExternalHostIgnoresRegistryOverrides is the regression test
+// for the P1 finding on #66: the operator's configured scheme / CA / InsecureTLS
+// overrides (meant for the internal Harbor at cfg.Addr) must NOT be applied to a
+// caller-controlled external host. Otherwise an install that opted its Harbor
+// into http / NODEVAULT_ORAS_INSECURE_TLS=true would also resolve a submitted
+// docker.io base-image reference over plaintext / unverifiable TLS and accept an
+// attacker-supplied digest.
+func TestClientForHost_ExternalHostIgnoresRegistryOverrides(t *testing.T) {
+	// Operator opted the internal Harbor into http + insecure TLS.
+	cfg := registryconfig.Config{Addr: "harbor.lab.local", Scheme: "http", InsecureTLS: true}
+
+	// Configured host: the operator's opt-in applies.
+	scheme, client, err := clientForHost(cfg, "harbor.lab.local")
+	if err != nil {
+		t.Fatalf("clientForHost(configured host): %v", err)
+	}
+	if scheme != "http" {
+		t.Errorf("configured host scheme: got %q want http (operator opt-in must apply to cfg.Addr)", scheme)
+	}
+	if !transportInsecure(t, client) {
+		t.Error("configured host: expected InsecureTLS opt-in to apply to cfg.Addr")
+	}
+
+	// External, caller-controlled host: overrides MUST NOT leak here.
+	scheme, client, err = clientForHost(cfg, "docker.io")
+	if err != nil {
+		t.Fatalf("clientForHost(external host): %v", err)
+	}
+	if scheme != "https" {
+		t.Errorf("external host scheme: got %q want https (internal Harbor's http opt-in leaked to external host)", scheme)
+	}
+	if transportInsecure(t, client) {
+		t.Error("external host: TLS verification was skipped (internal Harbor's InsecureTLS opt-in leaked to external host)")
 	}
 }

@@ -61,13 +61,13 @@ func (*Client) ResolveTagDigest(ctx context.Context, ref string) (string, error)
 	}
 
 	cfg := registryconfig.FromEnv()
-	httpClient, err := cfg.HTTPClient()
+	scheme, httpClient, err := clientForHost(cfg, host)
 	if err != nil {
 		return "", fmt.Errorf("registry: build HTTP client: %w", err)
 	}
 	rc := newClientWithHTTP(httpClient)
 
-	manifestURL := fmt.Sprintf("%s://%s/v2/%s/manifests/%s", cfg.Scheme, host, name, tag)
+	manifestURL := fmt.Sprintf("%s://%s/v2/%s/manifests/%s", scheme, host, name, tag)
 	var lastErr error
 	for _, accept := range acceptHeaders {
 		digest, err := rc.fetchManifestDigest(ctx, manifestURL, accept)
@@ -81,6 +81,32 @@ func (*Client) ResolveTagDigest(ctx context.Context, ref string) (string, error)
 	}
 	return "", fmt.Errorf("digest not found in registry response for %s", manifestURL)
 }
+
+// clientForHost selects the URL scheme and HTTP client to use when resolving a
+// reference whose registry host is host.
+//
+// The operator's configured scheme, CA trust, and NODEVAULT_ORAS_INSECURE_TLS
+// opt-in apply ONLY to the configured registry host (cfg.Addr). Every other,
+// caller-controlled host — e.g. a submitted docker.io base-image reference — is
+// resolved over verified HTTPS with the default proxy-aware transport. Without
+// this scoping, an install that opted its internal Harbor into
+// NODEVAULT_REGISTRY_SCHEME=http or NODEVAULT_ORAS_INSECURE_TLS=true would also
+// resolve arbitrary external references over plaintext / unverifiable TLS and
+// accept an attacker-supplied digest.
+func clientForHost(cfg registryconfig.Config, host string) (string, *http.Client, error) {
+	if host == cfg.Addr {
+		c, err := cfg.HTTPClient()
+		if err != nil {
+			return "", nil, err
+		}
+		return cfg.Scheme, c, nil
+	}
+	return defaultScheme, http.DefaultClient, nil
+}
+
+// defaultScheme is the scheme used for any host other than the configured
+// registry: verified HTTPS, never a caller-inherited downgrade.
+const defaultScheme = "https"
 
 // fetchManifestDigest performs one GET, transparently handling a single
 // WWW-Authenticate: Bearer challenge if the registry requires anonymous

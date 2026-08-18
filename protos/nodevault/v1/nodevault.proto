@@ -586,13 +586,13 @@ message ResourceContract {
 // ── 등록 RPC ─────────────────────────────────────────────────────────────────
 
 message RegisterToolFunctionRequest {
-  string request_id = 1;               // 멱등 키 (SubmitToolBuild 와 같은 패턴)
+  string request_id = 1; // 멱등 키 (SubmitToolBuild 와 같은 패턴)
   // base_tool_spec_digest — 1차 base ToolSpec 이미지의 digest. digest 입력에
   // 포함되며, 이 필드가 lineage(계보) 의미를 소유한다. 최종 casHash 자체는
   // lineage pointer가 아니다 — dependency 의미는 이 typed digest 참조가 소유하며
   // stable_ref/cas_hash 로 계보를 추론하지 않는다(W1-Q1 CASHASH RELATION FINAL).
   string base_tool_spec_digest = 2;
-  string image_digest = 3;             // 2차(function) 이미지 digest
+  string image_digest = 3; // 2차(function) 이미지 digest
   ToolFunctionSpec spec = 4;
   ToolFunctionPresentation presentation = 5;
   ToolFunctionValidationPolicy validation_policy = 6;
@@ -607,7 +607,7 @@ message RegisterToolFunctionResponse {
   // 의 SHA256이다. tool_function_digest 또는 function_image_digest 변경은 casHash
   // 변경, presentation/validation/lifecycle/integrity/timestamp 변경은 비변경이다.
   string tool_function_digest = 1;
-  string presentation_revision_id = 2;   // presentation 은 별도 revision (D-19-4)
+  string presentation_revision_id = 2; // presentation 은 별도 revision (D-19-4)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

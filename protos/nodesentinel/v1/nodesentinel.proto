@@ -2,12 +2,12 @@ syntax = "proto3";
 
 package nodesentinel.v1;
 
-option go_package = "github.com/HeaInSeo/NodeVault/protos/nodesentinel/v1;nodesentinelv1";
-
 // ToolFunctionSpec declaration downstream (issue #19 W5). W1 defines the fields
 // only; NodeVault populates them in W5 (values only), and observation stays off
 // until OBS-7.
 import "nodevault/v1/nodevault.proto";
+
+option go_package = "github.com/HeaInSeo/NodeVault/protos/nodesentinel/v1;nodesentinelv1";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // IngressService — NodeKit/NodeVault가 검증 작업을 큐에 등록하는 ingress API

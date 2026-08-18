@@ -224,11 +224,13 @@ func toToolItem(t *nfv1.RegisteredToolDefinition, health index.IntegrityHealth) 
 		LifecyclePhase:  t.LifecyclePhase,
 		IntegrityHealth: string(health),
 		RegisteredAt:    t.RegisteredAt,
-		Command:         t.Command,
+		//nolint:staticcheck // deprecated legacy field kept readable (issue #19 W1-LEGACY-PORT)
+		Command: t.Command,
 	}
-	if t.Display != nil {
-		item.DisplayLabel = t.Display.Label
-		item.DisplayCategory = t.Display.Category
+	//nolint:staticcheck // deprecated legacy field kept readable (issue #19 W1-LEGACY-PORT)
+	if display := t.Display; display != nil {
+		item.DisplayLabel = display.Label
+		item.DisplayCategory = display.Category
 	}
 	return item
 }

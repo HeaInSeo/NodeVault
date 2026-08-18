@@ -573,11 +573,12 @@ var ValidateService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	ToolRegistryService_RegisterTool_FullMethodName = "/nodevault.v1.ToolRegistryService/RegisterTool"
-	ToolRegistryService_GetTool_FullMethodName      = "/nodevault.v1.ToolRegistryService/GetTool"
-	ToolRegistryService_ListTools_FullMethodName    = "/nodevault.v1.ToolRegistryService/ListTools"
-	ToolRegistryService_RetractTool_FullMethodName  = "/nodevault.v1.ToolRegistryService/RetractTool"
-	ToolRegistryService_DeleteTool_FullMethodName   = "/nodevault.v1.ToolRegistryService/DeleteTool"
+	ToolRegistryService_RegisterTool_FullMethodName         = "/nodevault.v1.ToolRegistryService/RegisterTool"
+	ToolRegistryService_GetTool_FullMethodName              = "/nodevault.v1.ToolRegistryService/GetTool"
+	ToolRegistryService_ListTools_FullMethodName            = "/nodevault.v1.ToolRegistryService/ListTools"
+	ToolRegistryService_RetractTool_FullMethodName          = "/nodevault.v1.ToolRegistryService/RetractTool"
+	ToolRegistryService_DeleteTool_FullMethodName           = "/nodevault.v1.ToolRegistryService/DeleteTool"
+	ToolRegistryService_RegisterToolFunction_FullMethodName = "/nodevault.v1.ToolRegistryService/RegisterToolFunction"
 )
 
 // ToolRegistryServiceClient is the client API for ToolRegistryService service.
@@ -589,6 +590,11 @@ type ToolRegistryServiceClient interface {
 	ListTools(ctx context.Context, in *ListToolsRequest, opts ...grpc.CallOption) (*ListToolsResponse, error)
 	RetractTool(ctx context.Context, in *RetractToolRequest, opts ...grpc.CallOption) (*RetractToolResponse, error)
 	DeleteTool(ctx context.Context, in *DeleteToolRequest, opts ...grpc.CallOption) (*DeleteToolResponse, error)
+	// RegisterToolFunction receives a typed ToolFunctionSpec declaration (issue
+	// #19 W1/W2). Unlike the first-image build path (raw_spec string), the second
+	// image is authored in NodeKit as typed contracts, so NodeVault receives them
+	// typed and computes tool_function_digest over its own canonical JSON (N3).
+	RegisterToolFunction(ctx context.Context, in *RegisterToolFunctionRequest, opts ...grpc.CallOption) (*RegisterToolFunctionResponse, error)
 }
 
 type toolRegistryServiceClient struct {
@@ -649,6 +655,16 @@ func (c *toolRegistryServiceClient) DeleteTool(ctx context.Context, in *DeleteTo
 	return out, nil
 }
 
+func (c *toolRegistryServiceClient) RegisterToolFunction(ctx context.Context, in *RegisterToolFunctionRequest, opts ...grpc.CallOption) (*RegisterToolFunctionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RegisterToolFunctionResponse)
+	err := c.cc.Invoke(ctx, ToolRegistryService_RegisterToolFunction_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ToolRegistryServiceServer is the server API for ToolRegistryService service.
 // All implementations must embed UnimplementedToolRegistryServiceServer
 // for forward compatibility.
@@ -658,6 +674,11 @@ type ToolRegistryServiceServer interface {
 	ListTools(context.Context, *ListToolsRequest) (*ListToolsResponse, error)
 	RetractTool(context.Context, *RetractToolRequest) (*RetractToolResponse, error)
 	DeleteTool(context.Context, *DeleteToolRequest) (*DeleteToolResponse, error)
+	// RegisterToolFunction receives a typed ToolFunctionSpec declaration (issue
+	// #19 W1/W2). Unlike the first-image build path (raw_spec string), the second
+	// image is authored in NodeKit as typed contracts, so NodeVault receives them
+	// typed and computes tool_function_digest over its own canonical JSON (N3).
+	RegisterToolFunction(context.Context, *RegisterToolFunctionRequest) (*RegisterToolFunctionResponse, error)
 	mustEmbedUnimplementedToolRegistryServiceServer()
 }
 
@@ -682,6 +703,9 @@ func (UnimplementedToolRegistryServiceServer) RetractTool(context.Context, *Retr
 }
 func (UnimplementedToolRegistryServiceServer) DeleteTool(context.Context, *DeleteToolRequest) (*DeleteToolResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteTool not implemented")
+}
+func (UnimplementedToolRegistryServiceServer) RegisterToolFunction(context.Context, *RegisterToolFunctionRequest) (*RegisterToolFunctionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RegisterToolFunction not implemented")
 }
 func (UnimplementedToolRegistryServiceServer) mustEmbedUnimplementedToolRegistryServiceServer() {}
 func (UnimplementedToolRegistryServiceServer) testEmbeddedByValue()                             {}
@@ -794,6 +818,24 @@ func _ToolRegistryService_DeleteTool_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ToolRegistryService_RegisterToolFunction_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RegisterToolFunctionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ToolRegistryServiceServer).RegisterToolFunction(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ToolRegistryService_RegisterToolFunction_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ToolRegistryServiceServer).RegisterToolFunction(ctx, req.(*RegisterToolFunctionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ToolRegistryService_ServiceDesc is the grpc.ServiceDesc for ToolRegistryService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -820,6 +862,10 @@ var ToolRegistryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteTool",
 			Handler:    _ToolRegistryService_DeleteTool_Handler,
+		},
+		{
+			MethodName: "RegisterToolFunction",
+			Handler:    _ToolRegistryService_RegisterToolFunction_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

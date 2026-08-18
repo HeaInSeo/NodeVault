@@ -6,15 +6,20 @@
 package policy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
 
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
+
+// wasmMagic is the 4-byte header ("\0asm") every valid wasm module starts with.
+var wasmMagic = []byte{0x00, 0x61, 0x73, 0x6d}
 
 const defaultWasmPath = "assets/policy/dockguard.wasm"
 
@@ -43,20 +48,33 @@ type policyEntry struct {
 
 // GetPolicyBundle reads the .wasm bundle from disk and returns it.
 func (s *Service) GetPolicyBundle(_ context.Context, _ *nfv1.GetPolicyBundleRequest) (*nfv1.PolicyBundle, error) {
-	data, err := os.ReadFile(s.wasmPath)
+	//nolint:gosec // G304: wasmPath is derived from operator-configured DOCKGUARD_WASM_PATH.
+	f, err := os.Open(s.wasmPath)
 	if err != nil {
-		return nil, fmt.Errorf("read wasm bundle %q: %w", s.wasmPath, err)
+		return nil, fmt.Errorf("open wasm bundle %q: %w", s.wasmPath, err)
 	}
+	defer func() { _ = f.Close() }()
 
-	info, err := os.Stat(s.wasmPath)
+	// Stat the open file descriptor (not the path) so the metadata below describes
+	// exactly the bytes we are about to read, even if the path is replaced on disk
+	// concurrently (e.g. by a hot-swap deploy).
+	info, err := f.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("stat wasm bundle: %w", err)
 	}
 
-	version := filepath.Base(filepath.Dir(s.wasmPath))
-	if version == "." || version == "/" {
-		version = "local"
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return nil, fmt.Errorf("read wasm bundle %q: %w", s.wasmPath, err)
 	}
+
+	if len(data) == 0 || !bytes.HasPrefix(data, wasmMagic) {
+		return nil, fmt.Errorf("wasm bundle at %q is empty or not a valid wasm module (got %d bytes)", s.wasmPath, len(data))
+	}
+
+	// Version is mtime-based (RFC3339), matching ListPolicies's BundleVersion so both
+	// RPCs report a version that changes across rebuilds and can be correlated.
+	version := info.ModTime().Format(time.RFC3339)
 
 	return &nfv1.PolicyBundle{
 		WasmBytes: data,

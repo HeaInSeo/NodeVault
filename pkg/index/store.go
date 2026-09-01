@@ -18,6 +18,13 @@ const (
 	// CertifiedToolImageRecords, and ToolFunctionCatalogEntries.
 	// schemaVersion 4 adds ValidationRequestRecords.
 	// Older files omit these fields; load() treats absent fields as empty slices.
+	//
+	// Every bump so far has been purely additive (new optional fields/sections
+	// only), so load() accepts any f.SchemaVersion <= schemaVersion without a
+	// migration step — see the guard in load(). If a future bump ever
+	// removes/renames/reinterprets a field instead of only adding one, this
+	// assumption breaks and load() must gain real per-version migration
+	// logic, not just a version check.
 	schemaVersion   = 4
 	defaultIndexDir = "assets/index"
 	indexFileName   = "vault-index.json"
@@ -1441,18 +1448,83 @@ func (s *Store) load() error {
 	if err := json.Unmarshal(data, &f); err != nil {
 		return fmt.Errorf("index: parse %s: %w", s.path, err)
 	}
+	// A file stamped with a newer schema than this binary understands may
+	// carry fields this code has never heard of. Silently unmarshaling it
+	// would drop or misinterpret that data on the next save() — so reject it
+	// outright rather than risk corrupting a newer writer's state. Older
+	// files (SchemaVersion < schemaVersion) are fine: every bump so far has
+	// only added optional fields/sections (see the schemaVersion doc
+	// comment), so absent fields simply load as zero values/empty slices.
+	if f.SchemaVersion > schemaVersion {
+		return fmt.Errorf(
+			"index: %s has schema_version %d, newer than this binary's supported version %d (refusing to load)",
+			s.path, f.SchemaVersion, schemaVersion)
+	}
 	s.idx = &f
 	return nil
 }
 
+// save persists the in-memory index to disk via a temp-file-then-rename
+// sequence so a mid-write process kill (OOM-kill, pod eviction) can never
+// leave s.path truncated or half-written: os.WriteFile truncates the
+// existing file in place before writing, so a kill mid-write would
+// permanently corrupt the only copy with no way to recover on restart. The
+// temp file is created in the same directory as s.path so the final rename
+// is same-filesystem and atomic, fsync'd before the rename so its content is
+// durable on disk first, and cleaned up on any error path before the rename
+// happens. The parent directory is fsync'd after the rename so the rename
+// itself survives a crash.
 func (s *Store) save() error {
 	data, err := json.MarshalIndent(s.idx, "", "  ")
 	if err != nil {
 		return fmt.Errorf("index: marshal: %w", err)
 	}
-	//nolint:gosec // path is operator-configured and not from user input
-	if err := os.WriteFile(s.path, data, 0o640); err != nil {
-		return fmt.Errorf("index: write %s: %w", s.path, err)
+
+	dir := filepath.Dir(s.path)
+	//nolint:gosec // dir is operator-configured and not from user input
+	tmp, err := os.CreateTemp(dir, filepath.Base(s.path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("index: create temp file in %s: %w", dir, err)
+	}
+	tmpPath := tmp.Name()
+	// Always attempt to remove the temp file; once the rename below
+	// succeeds this is a no-op (nothing left at tmpPath to remove).
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("index: write temp file %s: %w", tmpPath, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("index: sync temp file %s: %w", tmpPath, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("index: close temp file %s: %w", tmpPath, err)
+	}
+	//nolint:gosec // 0o640 matches the previous os.WriteFile mode; path is operator-configured
+	if err := os.Chmod(tmpPath, 0o640); err != nil {
+		return fmt.Errorf("index: chmod temp file %s: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, s.path); err != nil {
+		return fmt.Errorf("index: rename %s to %s: %w", tmpPath, s.path, err)
+	}
+	// fsync the parent directory so the rename itself is durable. The temp
+	// file's contents are fsync'd above, but the directory entry created by
+	// rename() is a separate metadata write: without this a crash right after
+	// rename() could leave s.path still pointing at the old inode (or absent)
+	// on restart, defeating the atomic-replace guarantee.
+	//nolint:gosec // dir is operator-configured and not from user input
+	dirFile, dirErr := os.Open(dir)
+	if dirErr != nil {
+		return fmt.Errorf("index: open dir %s for fsync: %w", dir, dirErr)
+	}
+	if dirErr = dirFile.Sync(); dirErr != nil {
+		_ = dirFile.Close()
+		return fmt.Errorf("index: sync dir %s: %w", dir, dirErr)
+	}
+	if dirErr = dirFile.Close(); dirErr != nil {
+		return fmt.Errorf("index: close dir %s: %w", dir, dirErr)
 	}
 	return nil
 }

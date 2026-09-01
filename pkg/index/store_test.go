@@ -404,6 +404,63 @@ func TestSetIntegrityHealth_NotFound(t *testing.T) {
 	}
 }
 
+// ── CompareAndSetIntegrityHealth ────────────────────────────────────────────────
+
+func TestCompareAndSetIntegrityHealth_MatchSwaps(t *testing.T) {
+	s := newStore(t)
+	e := toolEntry("hash-cas-1", stableRefBWA1)
+	e.IntegrityHealth = index.HealthHealthy
+	if err := s.Append(e); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	swapped, err := s.CompareAndSetIntegrityHealth("hash-cas-1", index.HealthHealthy, index.HealthUnreachable)
+	if err != nil {
+		t.Fatalf("CompareAndSetIntegrityHealth: %v", err)
+	}
+	if !swapped {
+		t.Fatal("expected swapped=true when expectedCurrent matches")
+	}
+	got, _ := s.GetByCasHash("hash-cas-1")
+	if got.IntegrityHealth != index.HealthUnreachable {
+		t.Errorf("IntegrityHealth: got %q want Unreachable", got.IntegrityHealth)
+	}
+	if got.HealthCheckedAt.IsZero() {
+		t.Error("HealthCheckedAt should be set on a successful swap")
+	}
+}
+
+func TestCompareAndSetIntegrityHealth_MismatchSkipsWrite(t *testing.T) {
+	s := newStore(t)
+	e := toolEntry("hash-cas-2", stableRefBWA1)
+	e.IntegrityHealth = index.HealthPartial // already moved on from Healthy
+	if err := s.Append(e); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	// Expect the caller believed the entry was still Healthy (stale snapshot);
+	// the actual current value is Partial, so the write must be skipped.
+	swapped, err := s.CompareAndSetIntegrityHealth("hash-cas-2", index.HealthHealthy, index.HealthUnreachable)
+	if err != nil {
+		t.Fatalf("CompareAndSetIntegrityHealth: %v", err)
+	}
+	if swapped {
+		t.Fatal("expected swapped=false when expectedCurrent does not match")
+	}
+	got, _ := s.GetByCasHash("hash-cas-2")
+	if got.IntegrityHealth != index.HealthPartial {
+		t.Errorf("IntegrityHealth must remain untouched: got %q want Partial", got.IntegrityHealth)
+	}
+}
+
+func TestCompareAndSetIntegrityHealth_NotFound(t *testing.T) {
+	s := newStore(t)
+	_, err := s.CompareAndSetIntegrityHealth("nonexistent", index.HealthHealthy, index.HealthUnreachable)
+	if !errors.Is(err, index.ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
 // ── Two-axis independence ─────────────────────────────────────────────────────
 
 // TestTwoAxesAreIndependent verifies that SetLifecyclePhase and

@@ -135,6 +135,14 @@ func (r *Reconciler) SlowRun(ctx context.Context) error {
 
 // reconcileReachability attempts a pull and updates integrity_health if unreachable.
 //
+// e is a snapshot taken by SlowRun before this (slow, network-bound) check ran. A
+// concurrent FastRun pass may have already moved the entry away from Healthy in the
+// meantime (e.g. to Partial or Missing) — that fresher verdict must win. The write
+// below is therefore a compare-and-swap keyed on e.IntegrityHealth (expected to be
+// Healthy, since SlowRun only calls this for entries it filtered to Healthy at
+// snapshot time): if the entry has since moved on, the stale Unreachable write is
+// silently skipped instead of clobbering the fresher state.
+//
 //nolint:gocritic // hugeParam: Entry is passed by value intentionally (snapshot semantics).
 func (r *Reconciler) reconcileReachability(ctx context.Context, e index.Entry) error {
 	ok, err := r.checker.PullReachable(ctx, e.ImageRef, e.ImageDigest)
@@ -142,7 +150,9 @@ func (r *Reconciler) reconcileReachability(ctx context.Context, e index.Entry) e
 		return fmt.Errorf("pull reachable check: %w", err)
 	}
 	if !ok {
-		return r.store.SetIntegrityHealth(e.CasHash, index.HealthUnreachable)
+		if _, err := r.store.CompareAndSetIntegrityHealth(e.CasHash, e.IntegrityHealth, index.HealthUnreachable); err != nil {
+			return fmt.Errorf("compare-and-set integrity health: %w", err)
+		}
 	}
 	return nil
 }

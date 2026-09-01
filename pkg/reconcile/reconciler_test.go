@@ -151,6 +151,56 @@ func TestSlowRun_PullOK_HealthUnchanged(t *testing.T) {
 	}
 }
 
+// raceChecker simulates a FastRun pass landing a fresher integrity_health write
+// while SlowRun's slow PullReachable check for the same entry is still in flight —
+// reproducing the stale-snapshot race deterministically (no timing dependency).
+type raceChecker struct {
+	store            *index.Store
+	casHash          string
+	concurrentHealth index.IntegrityHealth // health FastRun "lands" mid-pull
+	pullReachable    bool
+}
+
+func (*raceChecker) ImageExists(_ context.Context, _, _ string) (bool, error) {
+	return true, nil
+}
+func (*raceChecker) ReferrerExists(_ context.Context, _, _ string) (bool, error) {
+	return true, nil
+}
+func (c *raceChecker) PullReachable(_ context.Context, _, _ string) (bool, error) {
+	// Simulate a concurrent FastRun tick completing while this slow pull check is
+	// still in flight, transitioning the entry away from the Healthy snapshot
+	// SlowRun read before starting this call.
+	if err := c.store.SetIntegrityHealth(c.casHash, c.concurrentHealth); err != nil {
+		return false, err
+	}
+	return c.pullReachable, nil
+}
+
+func TestSlowRun_ConcurrentFastRunChange_NotClobbered(t *testing.T) {
+	store := newTestStore(t)
+	appendEntry(t, store, "h1", "bwa@0.7.17", "sha256:aaa")
+	// Entry starts Healthy (appendEntry sets it) — SlowRun will snapshot this value.
+
+	r := reconcile.New(store, &raceChecker{
+		store:            store,
+		casHash:          "h1",
+		concurrentHealth: index.HealthPartial, // fresher verdict landed by "FastRun"
+		pullReachable:    false,               // slow pull check fails
+	})
+	if err := r.SlowRun(t.Context()); err != nil {
+		t.Fatalf("SlowRun: %v", err)
+	}
+
+	// The fresher Partial verdict (landed mid-flight) must win — SlowRun's stale
+	// Unreachable write, based on the pre-interleaving Healthy snapshot, must be
+	// discarded rather than clobbering it.
+	e, _ := store.GetByCasHash("h1")
+	if e.IntegrityHealth != index.HealthPartial {
+		t.Errorf("want Partial (fresher FastRun verdict preserved), got %q", e.IntegrityHealth)
+	}
+}
+
 func TestSlowRun_SkipsNonHealthy(t *testing.T) {
 	store := newTestStore(t)
 	appendEntry(t, store, "h1", "bwa@0.7.17", "sha256:aaa")

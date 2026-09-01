@@ -1,9 +1,13 @@
 package index_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -1555,5 +1559,145 @@ func TestGetActiveToolFunctionCatalogEntry_PromotionUnfiltered(t *testing.T) {
 	}
 	if got.PromotionStatus != index.PromotionSuperseded {
 		t.Errorf("PromotionStatus: got %q want superseded", got.PromotionStatus)
+	}
+}
+
+// ── save() atomicity ──────────────────────────────────────────────────────────
+
+// TestSave_NoLeftoverTempFiles verifies save()'s temp-file-then-rename
+// sequence cleans up after itself: after a series of successful saves, the
+// index directory contains only vault-index.json (no stray *.tmp-* files
+// left behind), and the final file is fully valid, complete JSON.
+func TestSave_NoLeftoverTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	s, err := index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("NewAt: %v", err)
+	}
+
+	for i := 0; i < 5; i++ {
+		e := toolEntry("hash-atomic-"+string(rune('a'+i)), stableRefBWA1)
+		if appendErr := s.Append(e); appendErr != nil {
+			t.Fatalf("Append %d: %v", i, appendErr)
+		}
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	for _, ent := range entries {
+		if ent.Name() != "vault-index.json" {
+			t.Errorf("unexpected leftover file in index dir: %q (expected only vault-index.json)", ent.Name())
+		}
+		if strings.Contains(ent.Name(), ".tmp-") {
+			t.Errorf("leftover temp file not cleaned up: %q", ent.Name())
+		}
+	}
+
+	//nolint:gosec // dir is a t.TempDir(), not user input
+	data, err := os.ReadFile(filepath.Join(dir, "vault-index.json"))
+	if err != nil {
+		t.Fatalf("read final file: %v", err)
+	}
+	var f struct {
+		Entries []index.Entry `json:"entries"`
+	}
+	if err := json.Unmarshal(data, &f); err != nil {
+		t.Fatalf("final vault-index.json is not valid JSON: %v", err)
+	}
+	if len(f.Entries) != 5 {
+		t.Errorf("entries in final file: got %d, want 5", len(f.Entries))
+	}
+}
+
+// TestSave_TempFileCreateFailure_LeavesOriginalFileIntact simulates a save()
+// that fails before the rename step (here: by removing write permission on
+// the index directory so os.CreateTemp cannot create the temp file at all —
+// standing in for any failure that happens before the atomic rename, such as
+// a process kill mid-write). It asserts the original vault-index.json is
+// byte-for-byte unchanged: because save() writes to a temp file and only
+// replaces the real path via os.Rename after a full, fsync'd write, a
+// failure anywhere before that rename can never truncate or corrupt the
+// existing file — the old copy is always still there to boot from.
+func TestSave_TempFileCreateFailure_LeavesOriginalFileIntact(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory write-permission semantics differ on windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("running as root bypasses directory permission checks")
+	}
+
+	dir := t.TempDir()
+	s, err := index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("NewAt: %v", err)
+	}
+	if appendErr := s.Append(toolEntry("hash-before-failure", stableRefBWA1)); appendErr != nil {
+		t.Fatalf("initial Append: %v", appendErr)
+	}
+
+	path := filepath.Join(dir, "vault-index.json")
+	//nolint:gosec // path is derived from a t.TempDir(), not user input
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read initial file: %v", err)
+	}
+
+	// Remove write permission on the directory so os.CreateTemp (used by
+	// save() to stage the new content) fails before ever touching path.
+	//nolint:gosec // 0o500 restricts, not widens, permissions on a t.TempDir()
+	if chmodErr := os.Chmod(dir, 0o500); chmodErr != nil {
+		t.Fatalf("chmod dir read-only: %v", chmodErr)
+	}
+	//nolint:gosec // restoring the original t.TempDir() mode for cleanup
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o750) })
+
+	err = s.Append(toolEntry("hash-during-failure", stableRefBWA1))
+	if err == nil {
+		t.Fatal("expected Append to fail while the index directory is read-only")
+	}
+
+	//nolint:gosec // restoring the original t.TempDir() mode, not user input
+	if chmodErr := os.Chmod(dir, 0o750); chmodErr != nil {
+		t.Fatalf("restore dir permissions: %v", chmodErr)
+	}
+
+	//nolint:gosec // path is derived from a t.TempDir(), not user input
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file after failed save: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Errorf("original file was modified by a failed save():\nbefore: %s\nafter:  %s", before, after)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	for _, ent := range entries {
+		if strings.Contains(ent.Name(), ".tmp-") {
+			t.Errorf("leftover temp file after failed save: %q", ent.Name())
+		}
+	}
+}
+
+// ── schema version guard ──────────────────────────────────────────────────────
+
+// TestLoad_SchemaVersionNewerThanBinary_Rejected verifies that load() refuses
+// to read a vault-index.json stamped with a schema_version newer than this
+// binary's schemaVersion constant, instead of silently unmarshaling it and
+// potentially dropping or misinterpreting fields the binary doesn't know
+// about.
+func TestLoad_SchemaVersionNewerThanBinary_Rejected(t *testing.T) {
+	dir := t.TempDir()
+	futureJSON := `{"schema_version":9999,"entries":[{"cas_hash":"hash-future","artifact_kind":"tool","stable_ref":"bwa@1","lifecycle_phase":"Active","integrity_health":"Healthy"}]}`
+	if err := os.WriteFile(filepath.Join(dir, "vault-index.json"), []byte(futureJSON), 0o600); err != nil {
+		t.Fatalf("write future-schema fixture: %v", err)
+	}
+
+	if _, err := index.NewAt(dir); err == nil {
+		t.Fatal("expected NewAt to return an error for a schema_version newer than this binary supports")
 	}
 }

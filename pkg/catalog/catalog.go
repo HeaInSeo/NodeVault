@@ -149,22 +149,6 @@ func (c *Catalog) List() ([]*nfv1.RegisteredToolDefinition, error) {
 	return tools, nil
 }
 
-// ListActive returns only tools with lifecycle_phase == "Active".
-// Catalog 노출 규칙: lifecycle_phase = Active 기준만. integrity_health는 영향 없음.
-func (c *Catalog) ListActive() ([]*nfv1.RegisteredToolDefinition, error) {
-	all, err := c.List()
-	if err != nil {
-		return nil, err
-	}
-	out := make([]*nfv1.RegisteredToolDefinition, 0, len(all))
-	for _, t := range all {
-		if t.LifecyclePhase == "Active" {
-			out = append(out, t)
-		}
-	}
-	return out, nil
-}
-
 // ListByStableRef returns all tools matching the given stable_ref.
 // UI 검색·카탈로그 탐색 전용. 파이프라인 pin에는 casHash를 사용한다.
 func (c *Catalog) ListByStableRef(stableRef string) ([]*nfv1.RegisteredToolDefinition, error) {

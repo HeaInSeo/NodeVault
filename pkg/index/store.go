@@ -397,6 +397,41 @@ func (s *Store) SetIntegrityHealth(casHash string, health IntegrityHealth) error
 	return s.save()
 }
 
+// CompareAndSetIntegrityHealth updates the integrity_health of the entry identified by
+// casHash to newValue, but only if its current integrity_health still equals
+// expectedCurrent. This closes a stale-snapshot race: a long-running check (e.g. the
+// slow reconcile loop's pull-reachability probe) may snapshot an entry's state, and by
+// the time it is ready to write its verdict, a concurrent fast-loop pass may have
+// already moved the entry to a fresher state. Writing unconditionally would clobber
+// that fresher verdict with a stale one.
+//
+// swapped reports whether the write was performed. If the entry's integrity_health no
+// longer matches expectedCurrent, the write is skipped and swapped is false — this is
+// not an error; a fresher value already won.
+//
+// IMPORTANT: This method MUST be called only by the reconcile loop, same as
+// SetIntegrityHealth.
+func (s *Store) CompareAndSetIntegrityHealth(
+	casHash string, expectedCurrent, newValue IntegrityHealth,
+) (swapped bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	idx, err := s.findIndex(casHash)
+	if err != nil {
+		return false, err
+	}
+	if s.idx.Entries[idx].IntegrityHealth != expectedCurrent {
+		return false, nil
+	}
+	s.idx.Entries[idx].IntegrityHealth = newValue
+	s.idx.Entries[idx].HealthCheckedAt = time.Now().UTC()
+	if err := s.save(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // All returns a snapshot of all entries. Safe for read-only iteration.
 func (s *Store) All() ([]Entry, error) {
 	s.mu.RLock()

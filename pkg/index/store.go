@@ -1471,8 +1471,13 @@ func (s *Store) RegisterToolFunctionAtomic(
 		if reqID == "" {
 			return existing, false, nil
 		}
+		reqLen := len(s.idx.ToolFunctionRequestRecords)
 		s.appendToolFunctionRequestRecordLocked(reqID, existing, now)
 		if serr := s.save(); serr != nil {
+			// Roll the in-memory append back so a failed persist is not masked by
+			// the request ledger on a later retry (which would return success
+			// without ever writing the mapping to disk).
+			s.idx.ToolFunctionRequestRecords = s.idx.ToolFunctionRequestRecords[:reqLen]
 			return RegisteredToolFunction{}, false, serr
 		}
 		return existing, false, nil
@@ -1491,6 +1496,9 @@ func (s *Store) RegisterToolFunctionAtomic(
 	if rec.ArtifactKind == "" {
 		rec.ArtifactKind = KindToolFunction
 	}
+	recLen := len(s.idx.RegisteredToolFunctions)
+	revLen := len(s.idx.ToolFunctionPresentationRevisions)
+	reqLen := len(s.idx.ToolFunctionRequestRecords)
 	s.idx.RegisteredToolFunctions = append(s.idx.RegisteredToolFunctions, rec)
 	s.appendPresentationRevisionLocked(rev, now)
 	if reqID != "" {
@@ -1498,6 +1506,12 @@ func (s *Store) RegisterToolFunctionAtomic(
 	}
 
 	if serr := s.save(); serr != nil {
+		// A failed persist must leave no in-memory trace: otherwise the request
+		// ledger would make a retry with the same request id return success without
+		// the record ever reaching disk, losing it on restart.
+		s.idx.RegisteredToolFunctions = s.idx.RegisteredToolFunctions[:recLen]
+		s.idx.ToolFunctionPresentationRevisions = s.idx.ToolFunctionPresentationRevisions[:revLen]
+		s.idx.ToolFunctionRequestRecords = s.idx.ToolFunctionRequestRecords[:reqLen]
 		return RegisteredToolFunction{}, false, serr
 	}
 	return rec, true, nil
@@ -1665,6 +1679,11 @@ func (s *Store) load() error {
 // happens. The parent directory is fsync'd after the rename so the rename
 // itself survives a crash.
 func (s *Store) save() error {
+	// Stamp the current schema version. Once this binary writes any section, the file
+	// carries this version's shape (e.g. schema 5 ToolFunction sections), so it must be
+	// labeled as such: a rolled-back older binary then refuses it via load()'s version
+	// guard instead of silently dropping sections it cannot represent on its next save.
+	s.idx.SchemaVersion = schemaVersion
 	data, err := json.MarshalIndent(s.idx, "", "  ")
 	if err != nil {
 		return fmt.Errorf("index: marshal: %w", err)

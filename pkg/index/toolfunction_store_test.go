@@ -1,7 +1,10 @@
 package index_test
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/HeaInSeo/NodeVault/pkg/index"
@@ -198,4 +201,72 @@ func tfRecordWithRev(casHash, toolFunctionDigest, imageDigest, revID string) ind
 	r := tfRecord(casHash, toolFunctionDigest, imageDigest)
 	r.PresentationRevisionID = revID
 	return r
+}
+
+// TestSave_StampsCurrentSchemaVersionOnUpgrade proves a pre-upgrade (v4) index file
+// that gains v5 ToolFunction sections is re-stamped to the current schema version, so
+// a rolled-back older binary refuses it instead of silently dropping the new sections.
+func TestSave_StampsCurrentSchemaVersionOnUpgrade(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vault-index.json")
+	if err := os.WriteFile(path, []byte(`{"schema_version":4,"entries":[]}`), 0o644); err != nil {
+		t.Fatalf("seed v4 index: %v", err)
+	}
+	s, err := index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("NewAt: %v", err)
+	}
+	if _, _, rerr := s.RegisterToolFunctionAtomic(reqID1, tfRecord(casA, tfd1, imgA), nil); rerr != nil {
+		t.Fatalf("register: %v", rerr)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read index: %v", err)
+	}
+	var f struct {
+		SchemaVersion int `json:"schema_version"`
+	}
+	if err := json.Unmarshal(data, &f); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if f.SchemaVersion != 5 {
+		t.Fatalf("upgraded file schema_version = %d, want 5", f.SchemaVersion)
+	}
+}
+
+// TestRegisterToolFunctionAtomic_SaveFailureRollsBack proves a failed persist leaves no
+// in-memory trace: the record and request mapping are rolled back, so a later retry
+// with the same request id re-registers and persists (created=true) rather than being
+// masked as an already-acknowledged success that never reached disk.
+func TestRegisterToolFunctionAtomic_SaveFailureRollsBack(t *testing.T) {
+	dir := t.TempDir()
+	s, err := index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("NewAt: %v", err)
+	}
+	// Force save() to fail by removing write permission on the index directory
+	// (temp-file create / rename fails). Skip if running as root, where perms are
+	// bypassed and save would still succeed.
+	if os.Geteuid() == 0 {
+		t.Skip("cannot force a write failure as root")
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	_, _, ferr := s.RegisterToolFunctionAtomic(reqID1, tfRecord(casA, tfd1, imgA), nil)
+	_ = os.Chmod(dir, 0o700) // restore for retry + cleanup
+	if ferr == nil {
+		t.Fatal("expected save failure with a read-only index dir")
+	}
+	if _, gerr := s.GetToolFunctionByCasHash(casA); !errors.Is(gerr, index.ErrNotFound) {
+		t.Fatalf("record leaked after failed save: %v", gerr)
+	}
+	if _, gerr := s.GetToolFunctionRequestRecord(reqID1); !errors.Is(gerr, index.ErrNotFound) {
+		t.Fatalf("request mapping leaked after failed save: %v", gerr)
+	}
+	// Retry now persists cleanly (proves the earlier failure was not masked).
+	_, created, rerr := s.RegisterToolFunctionAtomic(reqID1, tfRecord(casA, tfd1, imgA), nil)
+	if rerr != nil || !created {
+		t.Fatalf("retry after rollback: created=%v err=%v", created, rerr)
+	}
 }

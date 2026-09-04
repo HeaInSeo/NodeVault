@@ -29,7 +29,8 @@ func imgDigest(c byte) string {
 	return "sha256:" + strings.Repeat(string(rune(c)), 64)
 }
 
-const baseDigest = "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+// baseDigest is a valid 64-char lowercase hex sha256 (resolve.ToolSpecDigest form).
+var baseDigest = strings.Repeat("ab", 32)
 
 const (
 	fmtFastq    = "fastq"
@@ -359,6 +360,16 @@ func TestRegisterToolFunction_InvalidRequests(t *testing.T) {
 	noBase.BaseToolSpecDigest = "   "
 	if _, err := svc.RegisterToolFunction(ctx, noBase); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("missing base_tool_spec_digest: got %v", err)
+	}
+	badBase := validTFReq()
+	badBase.BaseToolSpecDigest = "not-a-digest"
+	if _, err := svc.RegisterToolFunction(ctx, badBase); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("malformed base_tool_spec_digest: got %v", err)
+	}
+	badCard := validTFReq()
+	badCard.Spec.Inputs[0].Cardinality = nfv1.Cardinality(99)
+	if _, err := svc.RegisterToolFunction(ctx, badCard); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("unknown cardinality enum: got %v", err)
 	}
 	badImg := validTFReq()
 	badImg.ImageDigest = "not-a-digest"

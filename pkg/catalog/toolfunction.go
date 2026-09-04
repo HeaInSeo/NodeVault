@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 
 	"google.golang.org/grpc/codes"
@@ -37,6 +38,12 @@ import (
 // (ports, parameters, environment entries); defined once to keep canonicalization
 // consistent.
 const jsonKeyName = "name"
+
+// baseToolSpecDigestRE matches a NodeVault ToolSpec digest: a bare 64-character
+// lowercase hex SHA-256 (resolve.ToolSpecDigest's form). base_tool_spec_digest enters
+// an immutable ToolFunction identity + lineage, so an arbitrary string is rejected to
+// prevent permanently malformed/dangling lineage.
+var baseToolSpecDigestRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // RegisterToolFunction validates a typed ToolFunctionSpec declaration, computes the
 // NodeVault-owned tool_function_digest and cas_hash over its own canonical JSON,
@@ -61,6 +68,10 @@ func (s *ToolRegistryService) RegisterToolFunction(
 	imageDigest := strings.ToLower(strings.TrimSpace(req.GetImageDigest()))
 	if baseToolSpecDigest == "" {
 		return nil, status.Error(codes.InvalidArgument, "base_tool_spec_digest is required")
+	}
+	if !baseToolSpecDigestRE.MatchString(baseToolSpecDigest) {
+		return nil, status.Error(codes.InvalidArgument,
+			"base_tool_spec_digest must be a 64-character lowercase hex sha256 digest")
 	}
 	if !resolve.IsSHA256Digest(imageDigest) {
 		return nil, status.Error(codes.InvalidArgument, "image_digest must be a pinned sha256:<64 hex> digest")
@@ -116,10 +127,10 @@ func (s *ToolRegistryService) RegisterToolFunction(
 // ── validation (fail-closed) ──────────────────────────────────────────────────
 
 func validateToolFunctionSpec(spec *nfv1.ToolFunctionSpec) error {
-	if err := rejectMultipleCardinality(spec.GetInputs()); err != nil {
+	if err := validatePortCardinality(spec.GetInputs()); err != nil {
 		return err
 	}
-	if err := rejectMultipleCardinality(spec.GetOutputs()); err != nil {
+	if err := validatePortCardinality(spec.GetOutputs()); err != nil {
 		return err
 	}
 	if err := checkUniquePortNames("input", spec.GetInputs()); err != nil {
@@ -131,15 +142,23 @@ func validateToolFunctionSpec(spec *nfv1.ToolFunctionSpec) error {
 	return checkUniqueParameterNames(spec.GetParameters())
 }
 
-// rejectMultipleCardinality enforces the approved cardinality contract: CARDINALITY_
-// MULTIPLE is not supported on the current single-capability path and is rejected
-// fail-closed with zero persistent mutation. CARDINALITY_UNSPECIFIED (omitted from
-// canonical JSON, never normalized to SINGLE) and explicit CARDINALITY_SINGLE pass.
-func rejectMultipleCardinality(ports []*nfv1.FunctionPortSpec) error {
+// validatePortCardinality enforces the approved cardinality contract: only
+// CARDINALITY_UNSPECIFIED (omitted from canonical JSON, never normalized to SINGLE)
+// and explicit CARDINALITY_SINGLE are allowed on the current single-capability path.
+// CARDINALITY_MULTIPLE and any unknown/out-of-range enum value (a protobuf client can
+// send e.g. Cardinality(99)) are rejected fail-closed with zero persistent mutation,
+// so no uninterpretable cardinality ever enters the canonical digest.
+func validatePortCardinality(ports []*nfv1.FunctionPortSpec) error {
 	for _, p := range ports {
-		if p.GetCardinality() == nfv1.Cardinality_CARDINALITY_MULTIPLE {
+		switch p.GetCardinality() {
+		case nfv1.Cardinality_CARDINALITY_UNSPECIFIED, nfv1.Cardinality_CARDINALITY_SINGLE:
+			// allowed
+		case nfv1.Cardinality_CARDINALITY_MULTIPLE:
 			return status.Errorf(codes.InvalidArgument,
 				"CARDINALITY_MULTIPLE is not supported (port %q)", p.GetName())
+		default:
+			return status.Errorf(codes.InvalidArgument,
+				"unknown cardinality %d (port %q)", int32(p.GetCardinality()), p.GetName())
 		}
 	}
 	return nil

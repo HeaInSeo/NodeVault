@@ -1,6 +1,6 @@
 module github.com/HeaInSeo/NodeVault
 
-go 1.25.13
+go 1.26.6
 
 require google.golang.org/grpc v1.82.1
 
@@ -168,7 +168,7 @@ require (
 	go.podman.io/podman/v6 v6.0.0-rc1 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/crypto v0.55.0 // indirect
+	golang.org/x/crypto v0.56.0 // indirect
 	golang.org/x/mod v0.40.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect

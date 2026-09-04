@@ -144,8 +144,8 @@ func TestRegisterToolFunctionAtomic_PresentationRevision(t *testing.T) {
 	}
 	// A second record sharing the same revision id does not duplicate the revision.
 	sameRev := &index.ToolFunctionPresentationRevision{RevisionID: revX, CasHash: casB, PresentationJSON: `{"label":"X"}`}
-	if _, _, err := s.RegisterToolFunctionAtomic("r2", tfRecordWithRev(casB, tfd1, imgB, revX), sameRev); err != nil {
-		t.Fatalf("register 2: %v", err)
+	if _, _, rerr := s.RegisterToolFunctionAtomic("r2", tfRecordWithRev(casB, tfd1, imgB, revX), sameRev); rerr != nil {
+		t.Fatalf("register 2: %v", rerr)
 	}
 	got2, err := s.GetToolFunctionPresentationRevision(revX)
 	if err != nil || got2.CasHash != casA {
@@ -175,8 +175,8 @@ func TestRegisterToolFunctionAtomic_PersistAndReload(t *testing.T) {
 		t.Fatalf("NewAt: %v", err)
 	}
 	rev := &index.ToolFunctionPresentationRevision{RevisionID: revX, CasHash: casA, PresentationJSON: `{"label":"X"}`}
-	if _, _, err := s1.RegisterToolFunctionAtomic(reqID1, tfRecordWithRev(casA, tfd1, imgA, revX), rev); err != nil {
-		t.Fatalf("register: %v", err)
+	if _, _, rerr := s1.RegisterToolFunctionAtomic(reqID1, tfRecordWithRev(casA, tfd1, imgA, revX), rev); rerr != nil {
+		t.Fatalf("register: %v", rerr)
 	}
 	// Reopen from disk.
 	s2, err := index.NewAt(dir)

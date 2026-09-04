@@ -209,7 +209,7 @@ func tfRecordWithRev(casHash, toolFunctionDigest, imageDigest, revID string) ind
 func TestSave_StampsCurrentSchemaVersionOnUpgrade(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "vault-index.json")
-	if err := os.WriteFile(path, []byte(`{"schema_version":4,"entries":[]}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"schema_version":4,"entries":[]}`), 0o600); err != nil {
 		t.Fatalf("seed v4 index: %v", err)
 	}
 	s, err := index.NewAt(dir)
@@ -219,7 +219,7 @@ func TestSave_StampsCurrentSchemaVersionOnUpgrade(t *testing.T) {
 	if _, _, rerr := s.RegisterToolFunctionAtomic(reqID1, tfRecord(casA, tfd1, imgA), nil); rerr != nil {
 		t.Fatalf("register: %v", rerr)
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G304: path is under t.TempDir(), not user input
 	if err != nil {
 		t.Fatalf("read index: %v", err)
 	}
@@ -244,19 +244,14 @@ func TestRegisterToolFunctionAtomic_SaveFailureRollsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAt: %v", err)
 	}
-	// Force save() to fail by removing write permission on the index directory
-	// (temp-file create / rename fails). Skip if running as root, where perms are
-	// bypassed and save would still succeed.
-	if os.Geteuid() == 0 {
-		t.Skip("cannot force a write failure as root")
-	}
-	if err := os.Chmod(dir, 0o500); err != nil {
-		t.Fatalf("chmod: %v", err)
+	// Force save() to fail by removing the index directory: the temp-file create in a
+	// missing directory fails. (Works regardless of uid, unlike a chmod approach.)
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("remove index dir: %v", err)
 	}
 	_, _, ferr := s.RegisterToolFunctionAtomic(reqID1, tfRecord(casA, tfd1, imgA), nil)
-	_ = os.Chmod(dir, 0o700) // restore for retry + cleanup
 	if ferr == nil {
-		t.Fatal("expected save failure with a read-only index dir")
+		t.Fatal("expected save failure with a missing index dir")
 	}
 	if _, gerr := s.GetToolFunctionByCasHash(casA); !errors.Is(gerr, index.ErrNotFound) {
 		t.Fatalf("record leaked after failed save: %v", gerr)
@@ -264,7 +259,11 @@ func TestRegisterToolFunctionAtomic_SaveFailureRollsBack(t *testing.T) {
 	if _, gerr := s.GetToolFunctionRequestRecord(reqID1); !errors.Is(gerr, index.ErrNotFound) {
 		t.Fatalf("request mapping leaked after failed save: %v", gerr)
 	}
-	// Retry now persists cleanly (proves the earlier failure was not masked).
+	// Recreate the index dir; the retry must now persist cleanly (proving the earlier
+	// failure was rolled back, not masked as an already-acknowledged success).
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatalf("recreate index dir: %v", err)
+	}
 	_, created, rerr := s.RegisterToolFunctionAtomic(reqID1, tfRecord(casA, tfd1, imgA), nil)
 	if rerr != nil || !created {
 		t.Fatalf("retry after rollback: created=%v err=%v", created, rerr)

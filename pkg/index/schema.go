@@ -8,6 +8,11 @@ type ArtifactKind string
 const (
 	KindTool ArtifactKind = "tool"
 	KindData ArtifactKind = "data" // reserved for P3 data artifact axis
+	// KindToolFunction is the runnable second-image ToolFunction artifact axis
+	// (issue #19 W2). Runnable ToolFunctions are stored in their own index
+	// section (RegisteredToolFunctions), never as a KindTool Entry, so the legacy
+	// tool / GetTool read path can never reinterpret a ToolFunction.
+	KindToolFunction ArtifactKind = "tool_function"
 )
 
 // LifecyclePhase is the operator-intent axis of an artifact.
@@ -512,10 +517,79 @@ type ValidationRequestRecord struct {
 	CompletedAt time.Time `json:"completed_at,omitempty"`
 }
 
+// RegisteredToolFunction is a durable runnable ToolFunction registration (issue
+// #19 W2). Its identity is CasHash = SHA256(canonical_json(ToolFunctionArtifactSpec
+// {tool_function_digest, function_image_digest})) — computed by NodeVault, never a
+// caller. The multiplicity invariant (nodevault.proto ToolFunctionArtifactSpec)
+// holds: the same ToolFunctionDigest may back several runnable records with
+// different FunctionImageDigest, each with its own CasHash — so CasHash, not
+// ToolFunctionDigest, is the primary key and records are never overwritten.
+// Presentation/validation-policy/environment-hints are digest-out and are NOT
+// stored here (presentation lives in ToolFunctionPresentationRevision).
+type RegisteredToolFunction struct {
+	// CasHash is the runnable-artifact identity / pipeline pin. Primary key.
+	CasHash string `json:"cas_hash"`
+
+	// ToolFunctionDigest = SHA256(canonical_json({base_tool_spec_digest, spec})).
+	ToolFunctionDigest string `json:"tool_function_digest"`
+	// FunctionImageDigest is the second (function) image OCI digest — the
+	// RegisterToolFunctionRequest.image_digest, the other casHash preimage member.
+	FunctionImageDigest string `json:"function_image_digest"`
+	// BaseToolSpecDigest owns the lineage to the first base ToolSpec image; it is a
+	// tool_function_digest preimage member, not a casHash lineage pointer.
+	BaseToolSpecDigest string `json:"base_tool_spec_digest,omitempty"`
+
+	// ArtifactKind is always KindToolFunction; it keeps the typed axis explicit.
+	ArtifactKind ArtifactKind `json:"artifact_kind"`
+
+	// PresentationRevisionID references the ToolFunctionPresentationRevision this
+	// record was registered with (D-19-4). Empty when no presentation was supplied.
+	PresentationRevisionID string `json:"presentation_revision_id,omitempty"`
+
+	// RequestID is the idempotency key that first created this record (provenance).
+	RequestID string `json:"request_id,omitempty"`
+
+	// LifecyclePhase is the operator-intent axis; a new successful registration
+	// starts Active. Re-registration never resurrects a Retracted/Deleted record.
+	LifecyclePhase LifecyclePhase `json:"lifecycle_phase"`
+	// IntegrityHealth is the Harbor-observation axis; Partial until reconciled.
+	IntegrityHealth IntegrityHealth `json:"integrity_health"`
+
+	RegisteredAt       time.Time `json:"registered_at"`
+	LifecycleUpdatedAt time.Time `json:"lifecycle_updated_at,omitempty"`
+}
+
+// ToolFunctionPresentationRevision is a digest-out presentation revision (D-19-4),
+// separated from the runnable identity: changing presentation yields a new
+// RevisionID but never a new CasHash. RevisionID is the SHA256 of the canonical
+// presentation JSON, so identical presentation content converges to one revision.
+type ToolFunctionPresentationRevision struct {
+	RevisionID string `json:"revision_id"` // primary key; content-addressed
+	// CasHash records the runnable record this revision was first registered with
+	// (provenance only; the revision is content-addressed by RevisionID).
+	CasHash string `json:"cas_hash,omitempty"`
+	// PresentationJSON is the NodeVault canonical JSON of the presentation.
+	PresentationJSON string    `json:"presentation_json"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
+// ToolFunctionRequestRecord makes RegisterToolFunction idempotent by request_id:
+// the same request_id replays to the same CasHash result; the same request_id with
+// a different resulting CasHash is a conflict (fail-closed, no mutation).
+type ToolFunctionRequestRecord struct {
+	RequestID              string    `json:"request_id"` // primary key
+	CasHash                string    `json:"cas_hash"`
+	ToolFunctionDigest     string    `json:"tool_function_digest,omitempty"`
+	PresentationRevisionID string    `json:"presentation_revision_id,omitempty"`
+	CreatedAt              time.Time `json:"created_at"`
+}
+
 // indexFile is the on-disk representation of the index.
 // schemaVersion 3 adds ToolCheckRecords, ToolScanRecords,
 // CertifiedToolImageRecords, and ToolFunctionCatalogEntries.
 // schemaVersion 4 adds ValidationRequestRecords.
+// schemaVersion 5 adds RegisteredToolFunctions, ToolFunctionPresentationRevisions,
+// and ToolFunctionRequestRecords (issue #19 W2 RegisterToolFunction).
 type indexFile struct {
 	SchemaVersion int     `json:"schema_version"`
 	Entries       []Entry `json:"entries"`
@@ -533,4 +607,9 @@ type indexFile struct {
 
 	// schema_version >= 4: idempotent validation request correlation
 	ValidationRequestRecords []ValidationRequestRecord `json:"validation_request_records,omitempty"`
+
+	// schema_version >= 5: runnable ToolFunction registration (issue #19 W2)
+	RegisteredToolFunctions           []RegisteredToolFunction           `json:"registered_tool_functions,omitempty"`
+	ToolFunctionPresentationRevisions []ToolFunctionPresentationRevision `json:"tool_function_presentation_revisions,omitempty"` //nolint:lll // long typed field + descriptive tool_function_ key (sibling-section convention)
+	ToolFunctionRequestRecords        []ToolFunctionRequestRecord        `json:"tool_function_request_records,omitempty"`
 }

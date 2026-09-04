@@ -17,6 +17,9 @@ const (
 	// schemaVersion 3 adds ToolCheckRecords, ToolScanRecords,
 	// CertifiedToolImageRecords, and ToolFunctionCatalogEntries.
 	// schemaVersion 4 adds ValidationRequestRecords.
+	// schemaVersion 5 adds RegisteredToolFunctions,
+	// ToolFunctionPresentationRevisions, and ToolFunctionRequestRecords
+	// (issue #19 W2 RegisterToolFunction).
 	// Older files omit these fields; load() treats absent fields as empty slices.
 	//
 	// Every bump so far has been purely additive (new optional fields/sections
@@ -25,7 +28,7 @@ const (
 	// removes/renames/reinterprets a field instead of only adding one, this
 	// assumption breaks and load() must gain real per-version migration
 	// logic, not just a version check.
-	schemaVersion   = 4
+	schemaVersion   = 5
 	defaultIndexDir = "assets/index"
 	indexFileName   = "vault-index.json"
 )
@@ -83,6 +86,15 @@ var ErrRecordConflict = errors.New("index: record content conflict")
 // to log that as an expected, already-progressed outcome rather than a
 // genuine storage failure (a save() error, an I/O error, etc.).
 var ErrInvalidTransition = errors.New("index: invalid validation status transition")
+
+// ErrToolFunctionRequestConflict is returned by RegisterToolFunctionAtomic when a
+// request_id was already used for a registration that resolved to a DIFFERENT
+// runnable CasHash. RegisterToolFunction is idempotent by request_id: the same
+// request_id replaying identical content reconciles to the same record, but reusing
+// it for materially different content (a different resulting CasHash) is a conflict
+// — the store rejects it fail-closed with no mutation rather than silently
+// overwriting or forking the earlier request's result.
+var ErrToolFunctionRequestConflict = errors.New("index: tool function request id content conflict")
 
 // ErrInvalidLifecycleTransition is returned by SetLifecyclePhase when the
 // entry's current lifecycle_phase has no allowed edge to the requested one
@@ -1413,6 +1425,184 @@ func (s *Store) applyValidationCorrelationLocked(
 			r.FailureReason = failureReason
 		}
 	})
+}
+
+// ── RegisteredToolFunction (issue #19 W2) ─────────────────────────────────────
+
+// RegisterToolFunctionAtomic durably registers a runnable ToolFunction, its
+// optional presentation revision, and (when reqID != "") its request-id record in
+// a single atomic save(). It is idempotent along two independent axes and never
+// overwrites an existing runnable record:
+//
+//   - request_id: if reqID was already used, a replay resolving to the SAME CasHash
+//     returns the existing record unchanged; a replay resolving to a DIFFERENT
+//     CasHash is rejected with ErrToolFunctionRequestConflict (no mutation).
+//   - content (CasHash): if the CasHash already exists (same content via a prior
+//     request), the existing record is returned as-is — its authoritative
+//     LifecyclePhase is preserved, never resurrected to Active and never
+//     overwritten — and no new presentation revision is created. A new reqID that
+//     first observes existing content is still recorded so its later replays are
+//     idempotent.
+//
+// created is true only when a brand-new runnable record was appended.
+//
+//nolint:gocritic // hugeParam: RegisteredToolFunction by value is intentional — callers own their copy.
+func (s *Store) RegisterToolFunctionAtomic(
+	reqID string, rec RegisteredToolFunction, rev *ToolFunctionPresentationRevision,
+) (stored RegisteredToolFunction, created bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if rec.CasHash == "" {
+		return RegisteredToolFunction{}, false, errors.New("index: tool function CasHash must not be empty")
+	}
+
+	// Axis 1: request_id idempotency / conflict.
+	if existing, done, rerr := s.resolveToolFunctionRequestLocked(reqID, rec.CasHash); done {
+		return existing, false, rerr
+	}
+
+	now := time.Now().UTC()
+
+	// Axis 2: content idempotency by CasHash. An already-registered runnable record
+	// is authoritative: return it unchanged (never resurrect/overwrite), and only
+	// record the fresh request-id mapping so its later replays reconcile.
+	if existing, ferr := s.findToolFunctionLocked(rec.CasHash); ferr == nil {
+		if reqID == "" {
+			return existing, false, nil
+		}
+		s.appendToolFunctionRequestRecordLocked(reqID, existing, now)
+		if serr := s.save(); serr != nil {
+			return RegisteredToolFunction{}, false, serr
+		}
+		return existing, false, nil
+	}
+
+	// New registration.
+	if rec.RegisteredAt.IsZero() {
+		rec.RegisteredAt = now
+	}
+	if rec.LifecycleUpdatedAt.IsZero() {
+		rec.LifecycleUpdatedAt = now
+	}
+	if rec.LifecyclePhase == "" {
+		rec.LifecyclePhase = PhaseActive
+	}
+	if rec.ArtifactKind == "" {
+		rec.ArtifactKind = KindToolFunction
+	}
+	s.idx.RegisteredToolFunctions = append(s.idx.RegisteredToolFunctions, rec)
+	s.appendPresentationRevisionLocked(rev, now)
+	if reqID != "" {
+		s.appendToolFunctionRequestRecordLocked(reqID, rec, now)
+	}
+
+	if serr := s.save(); serr != nil {
+		return RegisteredToolFunction{}, false, serr
+	}
+	return rec, true, nil
+}
+
+// resolveToolFunctionRequestLocked applies the request_id idempotency axis. done is
+// true when the caller should return immediately: either an idempotent replay of the
+// same content (existing record, nil error) or a conflict — the same request_id
+// resolving to a different CasHash — returned fail-closed with no mutation. An empty
+// reqID or an unseen reqID yields done=false so the content axis proceeds.
+func (s *Store) resolveToolFunctionRequestLocked(reqID, casHash string) (RegisteredToolFunction, bool, error) {
+	if reqID == "" {
+		return RegisteredToolFunction{}, false, nil
+	}
+	for i := range s.idx.ToolFunctionRequestRecords {
+		if s.idx.ToolFunctionRequestRecords[i].RequestID != reqID {
+			continue
+		}
+		if s.idx.ToolFunctionRequestRecords[i].CasHash != casHash {
+			return RegisteredToolFunction{}, true, fmt.Errorf("%w: request_id=%q", ErrToolFunctionRequestConflict, reqID)
+		}
+		existing, ferr := s.findToolFunctionLocked(casHash)
+		if ferr != nil {
+			return RegisteredToolFunction{}, true, fmt.Errorf(
+				"index inconsistency: request %q maps to missing tool function %q: %w", reqID, casHash, ferr)
+		}
+		return existing, true, nil
+	}
+	return RegisteredToolFunction{}, false, nil
+}
+
+// appendToolFunctionRequestRecordLocked records a request_id -> runnable mapping.
+//
+//nolint:gocritic // hugeParam: RegisteredToolFunction by value is intentional — callers own their copy.
+func (s *Store) appendToolFunctionRequestRecordLocked(reqID string, rec RegisteredToolFunction, now time.Time) {
+	s.idx.ToolFunctionRequestRecords = append(s.idx.ToolFunctionRequestRecords, ToolFunctionRequestRecord{
+		RequestID:              reqID,
+		CasHash:                rec.CasHash,
+		ToolFunctionDigest:     rec.ToolFunctionDigest,
+		PresentationRevisionID: rec.PresentationRevisionID,
+		CreatedAt:              now,
+	})
+}
+
+// appendPresentationRevisionLocked appends a presentation revision, content-addressed
+// by RevisionID and deduplicated so an identical presentation shared by several
+// runnable records is stored once. A nil or id-less revision is a no-op.
+func (s *Store) appendPresentationRevisionLocked(rev *ToolFunctionPresentationRevision, now time.Time) {
+	if rev == nil || rev.RevisionID == "" {
+		return
+	}
+	for i := range s.idx.ToolFunctionPresentationRevisions {
+		if s.idx.ToolFunctionPresentationRevisions[i].RevisionID == rev.RevisionID {
+			return
+		}
+	}
+	r := *rev
+	if r.CreatedAt.IsZero() {
+		r.CreatedAt = now
+	}
+	s.idx.ToolFunctionPresentationRevisions = append(s.idx.ToolFunctionPresentationRevisions, r)
+}
+
+// GetToolFunctionByCasHash returns the runnable ToolFunction with the given CasHash.
+// Returns ErrNotFound if none exists. The legacy GetTool/GetByCasHash path does not
+// read this section, so a ToolFunction is never reinterpreted as a legacy Tool.
+func (s *Store) GetToolFunctionByCasHash(casHash string) (RegisteredToolFunction, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.findToolFunctionLocked(casHash)
+}
+
+// GetToolFunctionPresentationRevision returns the presentation revision with the
+// given RevisionID. Returns ErrNotFound if none exists.
+func (s *Store) GetToolFunctionPresentationRevision(revisionID string) (ToolFunctionPresentationRevision, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for i := range s.idx.ToolFunctionPresentationRevisions {
+		if s.idx.ToolFunctionPresentationRevisions[i].RevisionID == revisionID {
+			return s.idx.ToolFunctionPresentationRevisions[i], nil
+		}
+	}
+	return ToolFunctionPresentationRevision{}, fmt.Errorf("%w: revision_id=%q", ErrNotFound, revisionID)
+}
+
+// GetToolFunctionRequestRecord returns the request-id idempotency record with the
+// given RequestID. Returns ErrNotFound if none exists.
+func (s *Store) GetToolFunctionRequestRecord(requestID string) (ToolFunctionRequestRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for i := range s.idx.ToolFunctionRequestRecords {
+		if s.idx.ToolFunctionRequestRecords[i].RequestID == requestID {
+			return s.idx.ToolFunctionRequestRecords[i], nil
+		}
+	}
+	return ToolFunctionRequestRecord{}, fmt.Errorf("%w: request_id=%q", ErrNotFound, requestID)
+}
+
+func (s *Store) findToolFunctionLocked(casHash string) (RegisteredToolFunction, error) {
+	for i := range s.idx.RegisteredToolFunctions {
+		if s.idx.RegisteredToolFunctions[i].CasHash == casHash {
+			return s.idx.RegisteredToolFunctions[i], nil
+		}
+	}
+	return RegisteredToolFunction{}, fmt.Errorf("%w: cas_hash=%q", ErrNotFound, casHash)
 }
 
 // ── internal helpers ──────────────────────────────────────────────────────────

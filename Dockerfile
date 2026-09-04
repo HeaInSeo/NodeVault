@@ -6,7 +6,7 @@
 # vendor/ 디렉토리가 없으면 -mod=vendor 빌드가 실패한다.
 FROM quay.io/buildah/stable:latest AS builder
 
-ENV GO_VERSION=1.25.13
+ENV GO_VERSION=1.26.6
 # gpgme-devel/libassuan-devel: go.podman.io/image/v5's default (cgo-based)
 # signature mechanism needs these headers now that containers_image_openpgp
 # is no longer set below (#29) — without the tag it would otherwise fall

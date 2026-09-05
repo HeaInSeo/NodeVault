@@ -60,6 +60,13 @@ func (s *ToolRegistryService) RegisterToolFunction(
 	if s.store == nil {
 		return nil, status.Error(codes.Unavailable, "tool registry unavailable")
 	}
+	// request_id is the idempotency key (nodevault.proto): without it a lost response
+	// followed by a retry whose spec/image changed would be accepted as a second runnable
+	// record instead of being detected as reuse of the same operation. Reject empty before
+	// any mutation, matching the analogous SubmitToolBuild contract.
+	if req.GetRequestId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "request_id is required (idempotency key)")
+	}
 	// Canonicalize the two identity-bearing digest inputs before they enter any
 	// preimage (N2/N3, NodeVault owns identity): trim surrounding whitespace and
 	// lowercase, so case- or whitespace-variant spellings of the same digest converge
@@ -139,7 +146,43 @@ func validateToolFunctionSpec(spec *nfv1.ToolFunctionSpec) error {
 	if err := checkUniquePortNames("output", spec.GetOutputs()); err != nil {
 		return err
 	}
-	return checkUniqueParameterNames(spec.GetParameters())
+	if err := checkUniqueParameterNames(spec.GetParameters()); err != nil {
+		return err
+	}
+	if err := validateParameterTypes(spec.GetParameters()); err != nil {
+		return err
+	}
+	return validateIntermediateFilePolicyKinds(spec.GetIntermediateFilePolicies())
+}
+
+// validateParameterTypes rejects any ParameterSpec.type whose numeric value is not a
+// defined ParameterType enum member. Like the cardinality gate, this is fail-closed with
+// zero persistent mutation: a forward protobuf client can send e.g. ParameterType(99),
+// and the canonicalizer would otherwise serialize that uninterpretable number into
+// tool_function_digest, minting a durable identity for a declaration the current contract
+// cannot interpret. Allowlist by the generated enum name table (which includes the
+// UNSPECIFIED 0 value; 0 is omitted from the digest, so it is harmless).
+func validateParameterTypes(params []*nfv1.ParameterSpec) error {
+	for _, p := range params {
+		if _, ok := nfv1.ParameterType_name[int32(p.GetType())]; !ok {
+			return status.Errorf(codes.InvalidArgument,
+				"unknown parameter type %d (parameter %q)", int32(p.GetType()), p.GetName())
+		}
+	}
+	return nil
+}
+
+// validateIntermediateFilePolicyKinds rejects any IntermediateFilePolicy.policy whose
+// numeric value is not a defined IntermediateFilePolicyKind enum member, for the same
+// reason as validateParameterTypes: the policy value enters tool_function_digest.
+func validateIntermediateFilePolicyKinds(policies []*nfv1.IntermediateFilePolicy) error {
+	for _, p := range policies {
+		if _, ok := nfv1.IntermediateFilePolicyKind_name[int32(p.GetPolicy())]; !ok {
+			return status.Errorf(codes.InvalidArgument,
+				"unknown intermediate file policy %d (path %q)", int32(p.GetPolicy()), p.GetPathOrPattern())
+		}
+	}
+	return nil
 }
 
 // validatePortCardinality enforces the approved cardinality contract: only

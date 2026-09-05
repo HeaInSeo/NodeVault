@@ -448,3 +448,54 @@ func TestRegisterToolFunction_ContentIdempotentAcrossRequestIDs(t *testing.T) {
 		t.Fatalf("expected 2 request records, got %d", recs)
 	}
 }
+
+// TestRegisterToolFunction_RequestIDRequired covers the P2 idempotency-key gate: an empty
+// request_id is rejected before any mutation, since without it a lost-response retry whose
+// spec/image changed would be accepted as a second runnable record.
+func TestRegisterToolFunction_RequestIDRequired(t *testing.T) {
+	svc, _ := newTFService(t)
+	req := validTFReq()
+	req.RequestId = ""
+	if _, err := svc.RegisterToolFunction(context.Background(), req); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("empty request_id: want InvalidArgument, got %v", err)
+	}
+	// The reject is clean: the same request with a request_id still registers.
+	req.RequestId = "req-ok"
+	if _, err := svc.RegisterToolFunction(context.Background(), req); err != nil {
+		t.Fatalf("valid request_id should register: %v", err)
+	}
+}
+
+// TestRegisterToolFunction_UnknownParameterTypeRejected covers the P2 identity-bearing enum
+// gate: an out-of-range ParameterType (a forward protobuf client can send e.g. type 99)
+// must be rejected fail-closed rather than serialized into tool_function_digest.
+func TestRegisterToolFunction_UnknownParameterTypeRejected(t *testing.T) {
+	svc, _ := newTFService(t)
+	req := validTFReq()
+	req.Spec.Parameters[0].Type = nfv1.ParameterType(99)
+	if _, err := svc.RegisterToolFunction(context.Background(), req); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("unknown ParameterType: want InvalidArgument, got %v", err)
+	}
+	// Restoring a defined value makes the same request valid — only the unknown enum was rejected.
+	req.Spec.Parameters[0].Type = nfv1.ParameterType_PARAMETER_TYPE_STRING
+	if _, err := svc.RegisterToolFunction(context.Background(), req); err != nil {
+		t.Fatalf("defined ParameterType should register: %v", err)
+	}
+}
+
+// TestRegisterToolFunction_UnknownIntermediatePolicyRejected covers the P2 identity-bearing
+// enum gate for IntermediateFilePolicyKind, which also enters tool_function_digest.
+func TestRegisterToolFunction_UnknownIntermediatePolicyRejected(t *testing.T) {
+	svc, _ := newTFService(t)
+	req := validTFReq()
+	req.Spec.IntermediateFilePolicies = []*nfv1.IntermediateFilePolicy{
+		{PathOrPattern: "tmp/*", Policy: nfv1.IntermediateFilePolicyKind(99)},
+	}
+	if _, err := svc.RegisterToolFunction(context.Background(), req); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("unknown IntermediateFilePolicyKind: want InvalidArgument, got %v", err)
+	}
+	req.Spec.IntermediateFilePolicies[0].Policy = nfv1.IntermediateFilePolicyKind_INTERMEDIATE_FILE_POLICY_KIND_EPHEMERAL
+	if _, err := svc.RegisterToolFunction(context.Background(), req); err != nil {
+		t.Fatalf("defined IntermediateFilePolicyKind should register: %v", err)
+	}
+}

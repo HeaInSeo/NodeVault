@@ -104,6 +104,22 @@ var ErrToolFunctionRequestConflict = errors.New("index: tool function request id
 // would let a genuine lifecycle-transition violation be silently swallowed.
 var ErrInvalidLifecycleTransition = errors.New("index: invalid lifecycle transition")
 
+// errIndexPersistedNotDurable tags a save() failure that occurred AFTER os.Rename had
+// already atomically swapped the replacement index into place, i.e. a parent-directory
+// fsync/close error. The on-disk index already reflects the write, so a caller that
+// mutated memory before save() MUST NOT roll that mutation back on this error — memory
+// already matches disk, and rolling back would diverge them and let a later save()
+// overwrite the committed file with the stale index. The error is still propagated so the
+// operation surfaces the durability uncertainty (the rename may not survive a power loss
+// until the dir entry is fsync'd) and the caller can retry. Pre-rename save() errors do
+// NOT carry this tag, so their callers still roll back (disk is unchanged there).
+var errIndexPersistedNotDurable = errors.New("index: persisted but parent-dir fsync failed (durability uncertain)")
+
+// failAfterRenameForTest is a test-only injection point (nil in production) invoked in
+// save() immediately after a successful os.Rename to simulate a post-rename durability
+// failure. See save().
+var failAfterRenameForTest func() error
+
 // New creates a Store backed by the JSON file at dir/vault-index.json.
 // The directory is created if it does not exist.
 // INDEX_DIR env overrides the default directory.
@@ -1476,8 +1492,13 @@ func (s *Store) RegisterToolFunctionAtomic(
 		if serr := s.save(); serr != nil {
 			// Roll the in-memory append back so a failed persist is not masked by
 			// the request ledger on a later retry (which would return success
-			// without ever writing the mapping to disk).
-			s.idx.ToolFunctionRequestRecords = s.idx.ToolFunctionRequestRecords[:reqLen]
+			// without ever writing the mapping to disk) — but ONLY for a pre-rename
+			// failure (disk unchanged). A post-rename durability failure already wrote
+			// the mapping to disk, so keep memory consistent with disk and just surface
+			// the durability error.
+			if !errors.Is(serr, errIndexPersistedNotDurable) {
+				s.idx.ToolFunctionRequestRecords = s.idx.ToolFunctionRequestRecords[:reqLen]
+			}
 			return RegisteredToolFunction{}, false, serr
 		}
 		return existing, false, nil
@@ -1506,12 +1527,17 @@ func (s *Store) RegisterToolFunctionAtomic(
 	}
 
 	if serr := s.save(); serr != nil {
-		// A failed persist must leave no in-memory trace: otherwise the request
-		// ledger would make a retry with the same request id return success without
-		// the record ever reaching disk, losing it on restart.
-		s.idx.RegisteredToolFunctions = s.idx.RegisteredToolFunctions[:recLen]
-		s.idx.ToolFunctionPresentationRevisions = s.idx.ToolFunctionPresentationRevisions[:revLen]
-		s.idx.ToolFunctionRequestRecords = s.idx.ToolFunctionRequestRecords[:reqLen]
+		// A failed PRE-RENAME persist must leave no in-memory trace: otherwise the
+		// request ledger would make a retry with the same request id return success
+		// without the record ever reaching disk, losing it on restart. But a POST-RENAME
+		// durability failure already wrote the record to disk; rolling memory back there
+		// would diverge memory from disk and let a later save() delete the committed
+		// record. So keep memory (it matches disk) and only surface the durability error.
+		if !errors.Is(serr, errIndexPersistedNotDurable) {
+			s.idx.RegisteredToolFunctions = s.idx.RegisteredToolFunctions[:recLen]
+			s.idx.ToolFunctionPresentationRevisions = s.idx.ToolFunctionPresentationRevisions[:revLen]
+			s.idx.ToolFunctionRequestRecords = s.idx.ToolFunctionRequestRecords[:reqLen]
+		}
 		return RegisteredToolFunction{}, false, serr
 	}
 	return rec, true, nil
@@ -1718,22 +1744,36 @@ func (s *Store) save() error {
 	if err := os.Rename(tmpPath, s.path); err != nil {
 		return fmt.Errorf("index: rename %s to %s: %w", tmpPath, s.path, err)
 	}
-	// fsync the parent directory so the rename itself is durable. The temp
-	// file's contents are fsync'd above, but the directory entry created by
-	// rename() is a separate metadata write: without this a crash right after
-	// rename() could leave s.path still pointing at the old inode (or absent)
-	// on restart, defeating the atomic-replace guarantee.
+	// Test-only seam: simulate a post-rename durability failure (nil in production). It runs
+	// only after the rename has already swapped the file, exactly where a real parent-dir
+	// fsync error would occur, so it exercises the errIndexPersistedNotDurable path.
+	if failAfterRenameForTest != nil {
+		if e := failAfterRenameForTest(); e != nil {
+			return errors.Join(errIndexPersistedNotDurable, e)
+		}
+	}
+	// PAST THIS POINT the replacement index is already atomically visible at s.path:
+	// any further error is a post-rename DURABILITY error, not a failure to persist the
+	// content. Such errors are tagged errIndexPersistedNotDurable so callers keep their
+	// in-memory mutation (which now matches disk) instead of rolling it back — a rollback
+	// here would diverge memory from disk and let a later save() overwrite the committed
+	// file with the stale index, permanently losing the record.
+	//
+	// fsync the parent directory so the rename itself is durable. The temp file's contents
+	// are fsync'd above, but the directory entry created by rename() is a separate metadata
+	// write: without this a crash right after rename() could leave s.path still pointing at
+	// the old inode (or absent) on restart, defeating the atomic-replace guarantee.
 	//nolint:gosec // dir is operator-configured and not from user input
 	dirFile, dirErr := os.Open(dir)
 	if dirErr != nil {
-		return fmt.Errorf("index: open dir %s for fsync: %w", dir, dirErr)
+		return errors.Join(errIndexPersistedNotDurable, fmt.Errorf("index: open dir %s for fsync: %w", dir, dirErr))
 	}
 	if dirErr = dirFile.Sync(); dirErr != nil {
 		_ = dirFile.Close()
-		return fmt.Errorf("index: sync dir %s: %w", dir, dirErr)
+		return errors.Join(errIndexPersistedNotDurable, fmt.Errorf("index: sync dir %s: %w", dir, dirErr))
 	}
 	if dirErr = dirFile.Close(); dirErr != nil {
-		return fmt.Errorf("index: close dir %s: %w", dir, dirErr)
+		return errors.Join(errIndexPersistedNotDurable, fmt.Errorf("index: close dir %s: %w", dir, dirErr))
 	}
 	return nil
 }

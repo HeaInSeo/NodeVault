@@ -17,6 +17,9 @@ const (
 	// schemaVersion 3 adds ToolCheckRecords, ToolScanRecords,
 	// CertifiedToolImageRecords, and ToolFunctionCatalogEntries.
 	// schemaVersion 4 adds ValidationRequestRecords.
+	// schemaVersion 5 adds RegisteredToolFunctions,
+	// ToolFunctionPresentationRevisions, and ToolFunctionRequestRecords
+	// (issue #19 W2 RegisterToolFunction).
 	// Older files omit these fields; load() treats absent fields as empty slices.
 	//
 	// Every bump so far has been purely additive (new optional fields/sections
@@ -25,7 +28,7 @@ const (
 	// removes/renames/reinterprets a field instead of only adding one, this
 	// assumption breaks and load() must gain real per-version migration
 	// logic, not just a version check.
-	schemaVersion   = 4
+	schemaVersion   = 5
 	defaultIndexDir = "assets/index"
 	indexFileName   = "vault-index.json"
 )
@@ -41,6 +44,14 @@ type Store struct {
 	mu   sync.RWMutex
 	path string     // path to vault-index.json
 	idx  *indexFile // in-memory cache; nil before first load
+	// toolFunctionDurabilityUncertain is set when a RegisterToolFunctionAtomic save reached
+	// os.Rename but a subsequent parent-dir fsync failed (errIndexPersistedNotDurable): the
+	// record is on disk and in memory, but the rename's directory entry may not survive a
+	// crash. It is cleared only by a fully-successful save() (which fsyncs the dir, making
+	// prior renames durable). RegisterToolFunctionAtomic re-saves before acknowledging ANY
+	// result (including an idempotent replay) while this is set, so no success is returned
+	// on an un-fsync'd rename. Guarded by mu.
+	toolFunctionDurabilityUncertain bool
 }
 
 // ErrNotFound is returned when a requested entry does not exist.
@@ -84,6 +95,15 @@ var ErrRecordConflict = errors.New("index: record content conflict")
 // genuine storage failure (a save() error, an I/O error, etc.).
 var ErrInvalidTransition = errors.New("index: invalid validation status transition")
 
+// ErrToolFunctionRequestConflict is returned by RegisterToolFunctionAtomic when a
+// request_id was already used for a registration that resolved to a DIFFERENT
+// runnable CasHash. RegisterToolFunction is idempotent by request_id: the same
+// request_id replaying identical content reconciles to the same record, but reusing
+// it for materially different content (a different resulting CasHash) is a conflict
+// — the store rejects it fail-closed with no mutation rather than silently
+// overwriting or forking the earlier request's result.
+var ErrToolFunctionRequestConflict = errors.New("index: tool function request id content conflict")
+
 // ErrInvalidLifecycleTransition is returned by SetLifecyclePhase when the
 // entry's current lifecycle_phase has no allowed edge to the requested one
 // (see validLifecycleTransitions). This is deliberately distinct from
@@ -91,6 +111,26 @@ var ErrInvalidTransition = errors.New("index: invalid validation status transiti
 // expected, ignorable race on the validation-status axis, so reusing it here
 // would let a genuine lifecycle-transition violation be silently swallowed.
 var ErrInvalidLifecycleTransition = errors.New("index: invalid lifecycle transition")
+
+// errIndexPersistedNotDurable tags a save() failure that occurred AFTER os.Rename had
+// already atomically swapped the replacement index into place, i.e. a parent-directory
+// fsync/close error. The on-disk index already reflects the write, so a caller that
+// mutated memory before save() MUST NOT roll that mutation back on this error — memory
+// already matches disk, and rolling back would diverge them and let a later save()
+// overwrite the committed file with the stale index. The error is still propagated so the
+// operation surfaces the durability uncertainty (the rename may not survive a power loss
+// until the dir entry is fsync'd) and the caller can retry. Pre-rename save() errors do
+// NOT carry this tag, so their callers still roll back (disk is unchanged there).
+var errIndexPersistedNotDurable = errors.New("index: persisted but parent-dir fsync failed (durability uncertain)")
+
+// failAfterRenameForTest is a test-only injection point (nil in production) invoked in
+// save() immediately after a successful os.Rename to simulate a post-rename durability
+// failure. See save().
+var failAfterRenameForTest func() error
+
+// syncDirForTest overrides syncDir when non-nil (nil in production). Test-only: lets a test
+// observe that the startup/save directory fsync is invoked and simulate its failure.
+var syncDirForTest func(string) error
 
 // New creates a Store backed by the JSON file at dir/vault-index.json.
 // The directory is created if it does not exist.
@@ -108,6 +148,13 @@ func New() (*Store, error) {
 	if err := s.load(); err != nil {
 		return nil, err
 	}
+	// Conservative startup durability: fsync the index parent directory before the Store is
+	// usable, so any directory entry (e.g. an index rename) that was visible but not yet
+	// fsync'd when a prior process crashed becomes durable now. Fail closed — a Store whose
+	// startup durability cannot be established must not serve/ack requests (W2 round-2 P1).
+	if err := syncDir(dir); err != nil {
+		return nil, fmt.Errorf("index: startup durability sync failed: %w", err)
+	}
 	return s, nil
 }
 
@@ -119,6 +166,10 @@ func NewAt(dir string) (*Store, error) {
 	s := &Store{path: filepath.Join(dir, indexFileName)}
 	if err := s.load(); err != nil {
 		return nil, err
+	}
+	// See New: conservative startup parent-directory durability sync, fail-closed.
+	if err := syncDir(dir); err != nil {
+		return nil, fmt.Errorf("index: startup durability sync failed: %w", err)
 	}
 	return s, nil
 }
@@ -1415,6 +1466,230 @@ func (s *Store) applyValidationCorrelationLocked(
 	})
 }
 
+// ── RegisteredToolFunction (issue #19 W2) ─────────────────────────────────────
+
+// RegisterToolFunctionAtomic durably registers a runnable ToolFunction, its
+// optional presentation revision, and (when reqID != "") its request-id record in
+// a single atomic save(). It is idempotent along two independent axes and never
+// overwrites an existing runnable record:
+//
+//   - request_id: if reqID was already used, a replay resolving to the SAME CasHash
+//     returns the existing record unchanged; a replay resolving to a DIFFERENT
+//     CasHash is rejected with ErrToolFunctionRequestConflict (no mutation).
+//   - content (CasHash): if the CasHash already exists (same content via a prior
+//     request), the existing record is returned as-is — its authoritative
+//     LifecyclePhase is preserved, never resurrected to Active and never
+//     overwritten — and no new presentation revision is created. A new reqID that
+//     first observes existing content is still recorded so its later replays are
+//     idempotent.
+//
+// created is true only when a brand-new runnable record was appended.
+//
+//nolint:gocritic // hugeParam: RegisteredToolFunction by value is intentional — callers own their copy.
+func (s *Store) RegisterToolFunctionAtomic(
+	reqID string, rec RegisteredToolFunction, rev *ToolFunctionPresentationRevision,
+) (stored RegisteredToolFunction, created bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Durability repair: if a prior registration reached os.Rename but its parent-dir fsync
+	// failed, the record is on disk/in memory but the rename may not survive a crash. Re-save
+	// (which re-runs the dir fsync) BEFORE acknowledging any result here — including an
+	// idempotent replay that would otherwise return success without touching disk — so no
+	// success is ever returned on an un-fsync'd rename. A still-failing re-save keeps the
+	// flag set and surfaces the durability error for another retry.
+	if s.toolFunctionDurabilityUncertain {
+		if serr := s.save(); serr != nil {
+			return RegisteredToolFunction{}, false, serr
+		}
+		s.toolFunctionDurabilityUncertain = false
+	}
+
+	if rec.CasHash == "" {
+		return RegisteredToolFunction{}, false, errors.New("index: tool function CasHash must not be empty")
+	}
+
+	// Axis 1: request_id idempotency / conflict.
+	if existing, done, rerr := s.resolveToolFunctionRequestLocked(reqID, rec.CasHash); done {
+		return existing, false, rerr
+	}
+
+	now := time.Now().UTC()
+
+	// Axis 2: content idempotency by CasHash. An already-registered runnable record
+	// is authoritative: return it unchanged (never resurrect/overwrite), and only
+	// record the fresh request-id mapping so its later replays reconcile.
+	if existing, ferr := s.findToolFunctionLocked(rec.CasHash); ferr == nil {
+		if reqID == "" {
+			return existing, false, nil
+		}
+		reqLen := len(s.idx.ToolFunctionRequestRecords)
+		s.appendToolFunctionRequestRecordLocked(reqID, existing, now)
+		if serr := s.save(); serr != nil {
+			// Roll the in-memory append back so a failed persist is not masked by
+			// the request ledger on a later retry (which would return success
+			// without ever writing the mapping to disk) — but ONLY for a pre-rename
+			// failure (disk unchanged). A post-rename durability failure already wrote
+			// the mapping to disk, so keep memory consistent with disk and just surface
+			// the durability error.
+			if !errors.Is(serr, errIndexPersistedNotDurable) {
+				s.idx.ToolFunctionRequestRecords = s.idx.ToolFunctionRequestRecords[:reqLen]
+			} else {
+				// Rename succeeded but the dir fsync did not: the append is on disk/in memory
+				// but the rename may not be durable. Force a re-save before the next ack.
+				s.toolFunctionDurabilityUncertain = true
+			}
+			return RegisteredToolFunction{}, false, serr
+		}
+		return existing, false, nil
+	}
+
+	// New registration.
+	if rec.RegisteredAt.IsZero() {
+		rec.RegisteredAt = now
+	}
+	if rec.LifecycleUpdatedAt.IsZero() {
+		rec.LifecycleUpdatedAt = now
+	}
+	if rec.LifecyclePhase == "" {
+		rec.LifecyclePhase = PhaseActive
+	}
+	if rec.ArtifactKind == "" {
+		rec.ArtifactKind = KindToolFunction
+	}
+	recLen := len(s.idx.RegisteredToolFunctions)
+	revLen := len(s.idx.ToolFunctionPresentationRevisions)
+	reqLen := len(s.idx.ToolFunctionRequestRecords)
+	s.idx.RegisteredToolFunctions = append(s.idx.RegisteredToolFunctions, rec)
+	s.appendPresentationRevisionLocked(rev, now)
+	if reqID != "" {
+		s.appendToolFunctionRequestRecordLocked(reqID, rec, now)
+	}
+
+	if serr := s.save(); serr != nil {
+		// A failed PRE-RENAME persist must leave no in-memory trace: otherwise the
+		// request ledger would make a retry with the same request id return success
+		// without the record ever reaching disk, losing it on restart. But a POST-RENAME
+		// durability failure already wrote the record to disk; rolling memory back there
+		// would diverge memory from disk and let a later save() delete the committed
+		// record. So keep memory (it matches disk) and only surface the durability error.
+		if !errors.Is(serr, errIndexPersistedNotDurable) {
+			s.idx.RegisteredToolFunctions = s.idx.RegisteredToolFunctions[:recLen]
+			s.idx.ToolFunctionPresentationRevisions = s.idx.ToolFunctionPresentationRevisions[:revLen]
+			s.idx.ToolFunctionRequestRecords = s.idx.ToolFunctionRequestRecords[:reqLen]
+		} else {
+			// Rename succeeded but the dir fsync did not: the record is on disk/in memory but
+			// the rename may not be durable. Force a re-save before the next ack (including an
+			// idempotent replay).
+			s.toolFunctionDurabilityUncertain = true
+		}
+		return RegisteredToolFunction{}, false, serr
+	}
+	return rec, true, nil
+}
+
+// resolveToolFunctionRequestLocked applies the request_id idempotency axis. done is
+// true when the caller should return immediately: either an idempotent replay of the
+// same content (existing record, nil error) or a conflict — the same request_id
+// resolving to a different CasHash — returned fail-closed with no mutation. An empty
+// reqID or an unseen reqID yields done=false so the content axis proceeds.
+func (s *Store) resolveToolFunctionRequestLocked(reqID, casHash string) (RegisteredToolFunction, bool, error) {
+	if reqID == "" {
+		return RegisteredToolFunction{}, false, nil
+	}
+	for i := range s.idx.ToolFunctionRequestRecords {
+		if s.idx.ToolFunctionRequestRecords[i].RequestID != reqID {
+			continue
+		}
+		if s.idx.ToolFunctionRequestRecords[i].CasHash != casHash {
+			return RegisteredToolFunction{}, true, fmt.Errorf("%w: request_id=%q", ErrToolFunctionRequestConflict, reqID)
+		}
+		existing, ferr := s.findToolFunctionLocked(casHash)
+		if ferr != nil {
+			return RegisteredToolFunction{}, true, fmt.Errorf(
+				"index inconsistency: request %q maps to missing tool function %q: %w", reqID, casHash, ferr)
+		}
+		return existing, true, nil
+	}
+	return RegisteredToolFunction{}, false, nil
+}
+
+// appendToolFunctionRequestRecordLocked records a request_id -> runnable mapping.
+//
+//nolint:gocritic // hugeParam: RegisteredToolFunction by value is intentional — callers own their copy.
+func (s *Store) appendToolFunctionRequestRecordLocked(reqID string, rec RegisteredToolFunction, now time.Time) {
+	s.idx.ToolFunctionRequestRecords = append(s.idx.ToolFunctionRequestRecords, ToolFunctionRequestRecord{
+		RequestID:              reqID,
+		CasHash:                rec.CasHash,
+		ToolFunctionDigest:     rec.ToolFunctionDigest,
+		PresentationRevisionID: rec.PresentationRevisionID,
+		CreatedAt:              now,
+	})
+}
+
+// appendPresentationRevisionLocked appends a presentation revision, content-addressed
+// by RevisionID and deduplicated so an identical presentation shared by several
+// runnable records is stored once. A nil or id-less revision is a no-op.
+func (s *Store) appendPresentationRevisionLocked(rev *ToolFunctionPresentationRevision, now time.Time) {
+	if rev == nil || rev.RevisionID == "" {
+		return
+	}
+	for i := range s.idx.ToolFunctionPresentationRevisions {
+		if s.idx.ToolFunctionPresentationRevisions[i].RevisionID == rev.RevisionID {
+			return
+		}
+	}
+	r := *rev
+	if r.CreatedAt.IsZero() {
+		r.CreatedAt = now
+	}
+	s.idx.ToolFunctionPresentationRevisions = append(s.idx.ToolFunctionPresentationRevisions, r)
+}
+
+// GetToolFunctionByCasHash returns the runnable ToolFunction with the given CasHash.
+// Returns ErrNotFound if none exists. The legacy GetTool/GetByCasHash path does not
+// read this section, so a ToolFunction is never reinterpreted as a legacy Tool.
+func (s *Store) GetToolFunctionByCasHash(casHash string) (RegisteredToolFunction, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.findToolFunctionLocked(casHash)
+}
+
+// GetToolFunctionPresentationRevision returns the presentation revision with the
+// given RevisionID. Returns ErrNotFound if none exists.
+func (s *Store) GetToolFunctionPresentationRevision(revisionID string) (ToolFunctionPresentationRevision, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for i := range s.idx.ToolFunctionPresentationRevisions {
+		if s.idx.ToolFunctionPresentationRevisions[i].RevisionID == revisionID {
+			return s.idx.ToolFunctionPresentationRevisions[i], nil
+		}
+	}
+	return ToolFunctionPresentationRevision{}, fmt.Errorf("%w: revision_id=%q", ErrNotFound, revisionID)
+}
+
+// GetToolFunctionRequestRecord returns the request-id idempotency record with the
+// given RequestID. Returns ErrNotFound if none exists.
+func (s *Store) GetToolFunctionRequestRecord(requestID string) (ToolFunctionRequestRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for i := range s.idx.ToolFunctionRequestRecords {
+		if s.idx.ToolFunctionRequestRecords[i].RequestID == requestID {
+			return s.idx.ToolFunctionRequestRecords[i], nil
+		}
+	}
+	return ToolFunctionRequestRecord{}, fmt.Errorf("%w: request_id=%q", ErrNotFound, requestID)
+}
+
+func (s *Store) findToolFunctionLocked(casHash string) (RegisteredToolFunction, error) {
+	for i := range s.idx.RegisteredToolFunctions {
+		if s.idx.RegisteredToolFunctions[i].CasHash == casHash {
+			return s.idx.RegisteredToolFunctions[i], nil
+		}
+	}
+	return RegisteredToolFunction{}, fmt.Errorf("%w: cas_hash=%q", ErrNotFound, casHash)
+}
+
 // ── internal helpers ──────────────────────────────────────────────────────────
 
 func (s *Store) findIndex(casHash string) (int, error) {
@@ -1475,6 +1750,11 @@ func (s *Store) load() error {
 // happens. The parent directory is fsync'd after the rename so the rename
 // itself survives a crash.
 func (s *Store) save() error {
+	// Stamp the current schema version. Once this binary writes any section, the file
+	// carries this version's shape (e.g. schema 5 ToolFunction sections), so it must be
+	// labeled as such: a rolled-back older binary then refuses it via load()'s version
+	// guard instead of silently dropping sections it cannot represent on its next save.
+	s.idx.SchemaVersion = schemaVersion
 	data, err := json.MarshalIndent(s.idx, "", "  ")
 	if err != nil {
 		return fmt.Errorf("index: marshal: %w", err)
@@ -1509,22 +1789,50 @@ func (s *Store) save() error {
 	if err := os.Rename(tmpPath, s.path); err != nil {
 		return fmt.Errorf("index: rename %s to %s: %w", tmpPath, s.path, err)
 	}
-	// fsync the parent directory so the rename itself is durable. The temp
-	// file's contents are fsync'd above, but the directory entry created by
-	// rename() is a separate metadata write: without this a crash right after
-	// rename() could leave s.path still pointing at the old inode (or absent)
-	// on restart, defeating the atomic-replace guarantee.
+	// Test-only seam: simulate a post-rename durability failure (nil in production). It runs
+	// only after the rename has already swapped the file, exactly where a real parent-dir
+	// fsync error would occur, so it exercises the errIndexPersistedNotDurable path.
+	if failAfterRenameForTest != nil {
+		if e := failAfterRenameForTest(); e != nil {
+			return errors.Join(errIndexPersistedNotDurable, e)
+		}
+	}
+	// PAST THIS POINT the replacement index is already atomically visible at s.path:
+	// any further error is a post-rename DURABILITY error, not a failure to persist the
+	// content. Such errors are tagged errIndexPersistedNotDurable so callers keep their
+	// in-memory mutation (which now matches disk) instead of rolling it back — a rollback
+	// here would diverge memory from disk and let a later save() overwrite the committed
+	// file with the stale index, permanently losing the record.
+	//
+	// fsync the parent directory so the rename itself is durable. The temp file's contents
+	// are fsync'd above, but the directory entry created by rename() is a separate metadata
+	// write: without this a crash right after rename() could leave s.path still pointing at
+	// the old inode (or absent) on restart, defeating the atomic-replace guarantee.
+	if dirErr := syncDir(dir); dirErr != nil {
+		return errors.Join(errIndexPersistedNotDurable, dirErr)
+	}
+	return nil
+}
+
+// syncDir fsyncs a directory so directory-entry changes (e.g. a rename) become durable.
+// It is the shared parent-directory durability primitive used by save() (to make a rename
+// durable) and by the Store constructors (to conservatively make any visible-but-un-fsync'd
+// rename from before a crash durable at startup, before the Store serves requests).
+func syncDir(dir string) error {
+	if syncDirForTest != nil {
+		return syncDirForTest(dir)
+	}
 	//nolint:gosec // dir is operator-configured and not from user input
-	dirFile, dirErr := os.Open(dir)
-	if dirErr != nil {
-		return fmt.Errorf("index: open dir %s for fsync: %w", dir, dirErr)
+	dirFile, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("index: open dir %s for fsync: %w", dir, err)
 	}
-	if dirErr = dirFile.Sync(); dirErr != nil {
+	if err := dirFile.Sync(); err != nil {
 		_ = dirFile.Close()
-		return fmt.Errorf("index: sync dir %s: %w", dir, dirErr)
+		return fmt.Errorf("index: sync dir %s: %w", dir, err)
 	}
-	if dirErr = dirFile.Close(); dirErr != nil {
-		return fmt.Errorf("index: close dir %s: %w", dir, dirErr)
+	if err := dirFile.Close(); err != nil {
+		return fmt.Errorf("index: close dir %s: %w", dir, err)
 	}
 	return nil
 }

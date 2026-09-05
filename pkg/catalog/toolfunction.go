@@ -433,12 +433,16 @@ func canonicalToolFunctionSpec(spec *nfv1.ToolFunctionSpec) map[string]any {
 	if spec == nil {
 		return m
 	}
-	putMap(m, "command", canonicalCommand(spec.GetCommand()))
+	// Singular nested messages use putMsg so a PRESENT-but-empty message (e.g. command: {})
+	// is distinguished from an absent one in the digest (N1): an empty-but-present message is
+	// included as {}, an absent message is omitted.
+	putMsg(m, "command", spec.GetCommand() != nil, canonicalCommand(spec.GetCommand()))
 	putList(m, "inputs", canonicalPorts(spec.GetInputs()))
 	putList(m, "outputs", canonicalPorts(spec.GetOutputs()))
 	putList(m, "parameters", canonicalParameters(spec.GetParameters()))
 	putList(m, "intermediate_file_policies", canonicalIntermediatePolicies(spec.GetIntermediateFilePolicies()))
-	putMap(m, "execution_environment", canonicalExecEnv(spec.GetExecutionEnvironment()))
+	ee := spec.GetExecutionEnvironment()
+	putMsg(m, "execution_environment", ee != nil, canonicalExecEnv(ee))
 	return m
 }
 
@@ -469,7 +473,9 @@ func canonicalCommand(c *nfv1.CommandContract) map[string]any {
 		tm := map[string]any{}
 		putInt(tm, "soft_seconds", int64(tp.GetSoftSeconds()))
 		putInt(tm, "hard_seconds", int64(tp.GetHardSeconds()))
-		putMap(m, "timeout_policy", tm)
+		// Present (tp != nil): include even if both seconds are zero, to distinguish a
+		// present-but-empty timeout_policy from an absent one (N1).
+		putMsg(m, "timeout_policy", true, tm)
 	}
 	return m
 }
@@ -616,8 +622,14 @@ func putList(m map[string]any, k string, v []any) {
 	}
 }
 
-func putMap(m map[string]any, k string, v map[string]any) {
-	if len(v) > 0 {
+// putMsg includes a singular nested message's canonical map when the message is PRESENT on
+// the wire, even if it canonicalizes to an empty object — so an explicitly-empty message
+// (e.g. command: {}) is distinguished from an absent one in the digest (N1). An absent
+// message (present=false) is omitted. Repeated messages do not use this: proto3 has no
+// presence for a repeated field, so present-but-empty and absent are indistinguishable and
+// both correctly omit.
+func putMsg(m map[string]any, k string, present bool, v map[string]any) {
+	if present {
 		m[k] = v
 	}
 }

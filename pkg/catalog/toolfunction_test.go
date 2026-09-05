@@ -564,3 +564,22 @@ func TestRegisterToolFunction_UnknownPresentationFieldRejected(t *testing.T) {
 		}
 	})
 }
+
+// TestRegisterToolFunction_PresentEmptyMessageDistinctDigest covers the N1 digest gap: an
+// explicitly-present-but-empty nested message (command: {}) must produce a different
+// tool_function_digest than an absent one, so distinct authored specs cannot collide.
+func TestRegisterToolFunction_PresentEmptyMessageDistinctDigest(t *testing.T) {
+	svcAbsent, _ := newTFService(t)
+	reqAbsent := validTFReq()
+	reqAbsent.Spec.Command = nil // absent
+	respAbsent := mustRegisterTF(t, svcAbsent, reqAbsent)
+
+	svcEmpty, _ := newTFService(t)
+	reqEmpty := validTFReq()
+	reqEmpty.Spec.Command = &nfv1.CommandContract{} // present but empty
+	respEmpty := mustRegisterTF(t, svcEmpty, reqEmpty)
+
+	if respAbsent.GetToolFunctionDigest() == respEmpty.GetToolFunctionDigest() {
+		t.Fatal("present-empty command must yield a different tool_function_digest than an absent command")
+	}
+}

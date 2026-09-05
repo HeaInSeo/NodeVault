@@ -537,3 +537,30 @@ func TestRegisterToolFunction_UnknownProtoFieldRejected(t *testing.T) {
 		}
 	})
 }
+
+// TestRegisterToolFunction_UnknownPresentationFieldRejected covers the round-2 P2: an unknown
+// protobuf field anywhere in ToolFunctionPresentation must be rejected before the presentation
+// revision is hashed/persisted (the canonicalizer would otherwise silently drop it, producing
+// a lossy or empty revision).
+func TestRegisterToolFunction_UnknownPresentationFieldRejected(t *testing.T) {
+	unknown := protowire.AppendTag(nil, 50000, protowire.VarintType)
+	unknown = protowire.AppendVarint(unknown, 7)
+
+	t.Run("top-level", func(t *testing.T) {
+		svc, _ := newTFService(t)
+		req := validTFReq()
+		req.Presentation.ProtoReflect().SetUnknown(protoreflect.RawFields(unknown))
+		if _, err := svc.RegisterToolFunction(context.Background(), req); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("unknown presentation field: want InvalidArgument, got %v", err)
+		}
+	})
+
+	t.Run("nested", func(t *testing.T) {
+		svc, _ := newTFService(t)
+		req := validTFReq()
+		req.Presentation.OutputPortPresentations[0].ProtoReflect().SetUnknown(protoreflect.RawFields(unknown))
+		if _, err := svc.RegisterToolFunction(context.Background(), req); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("unknown nested presentation field: want InvalidArgument, got %v", err)
+		}
+	})
+}

@@ -99,6 +99,9 @@ func (s *ToolRegistryService) RegisterToolFunction(
 	if err := validateToolFunctionSpec(req.GetSpec()); err != nil {
 		return nil, err
 	}
+	if err := rejectUnknownPresentationFields(req.GetPresentation()); err != nil {
+		return nil, err
+	}
 	if err := validateToolFunctionPresentation(req.GetPresentation(), req.GetSpec()); err != nil {
 		return nil, err
 	}
@@ -203,6 +206,23 @@ func firstUnknownField(m protoreflect.Message) (string, bool) {
 		return !found
 	})
 	return name, found
+}
+
+// rejectUnknownPresentationFields fails closed if the presentation, or any message nested
+// within it, carries unknown protobuf fields (a newer client). The presentation is persisted
+// as a content-addressed revision (canonicalPresentation serializes only known accessors), so
+// an unknown field would be silently dropped — the revision id/JSON would not reflect it, and
+// an unknown-only presentation would even collapse to an empty revision. Reject before the
+// revision is hashed/persisted, mirroring the spec unknown-field gate.
+func rejectUnknownPresentationFields(pres *nfv1.ToolFunctionPresentation) error {
+	if pres == nil {
+		return nil
+	}
+	if name, found := firstUnknownField(pres.ProtoReflect()); found {
+		return status.Errorf(codes.InvalidArgument,
+			"presentation contains unknown protobuf field(s) in %s; revision would be lossy", name)
+	}
+	return nil
 }
 
 func validateToolFunctionSpec(spec *nfv1.ToolFunctionSpec) error {

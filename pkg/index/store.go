@@ -128,6 +128,10 @@ var errIndexPersistedNotDurable = errors.New("index: persisted but parent-dir fs
 // failure. See save().
 var failAfterRenameForTest func() error
 
+// syncDirForTest overrides syncDir when non-nil (nil in production). Test-only: lets a test
+// observe that the startup/save directory fsync is invoked and simulate its failure.
+var syncDirForTest func(string) error
+
 // New creates a Store backed by the JSON file at dir/vault-index.json.
 // The directory is created if it does not exist.
 // INDEX_DIR env overrides the default directory.
@@ -144,6 +148,13 @@ func New() (*Store, error) {
 	if err := s.load(); err != nil {
 		return nil, err
 	}
+	// Conservative startup durability: fsync the index parent directory before the Store is
+	// usable, so any directory entry (e.g. an index rename) that was visible but not yet
+	// fsync'd when a prior process crashed becomes durable now. Fail closed — a Store whose
+	// startup durability cannot be established must not serve/ack requests (W2 round-2 P1).
+	if err := syncDir(dir); err != nil {
+		return nil, fmt.Errorf("index: startup durability sync failed: %w", err)
+	}
 	return s, nil
 }
 
@@ -155,6 +166,10 @@ func NewAt(dir string) (*Store, error) {
 	s := &Store{path: filepath.Join(dir, indexFileName)}
 	if err := s.load(); err != nil {
 		return nil, err
+	}
+	// See New: conservative startup parent-directory durability sync, fail-closed.
+	if err := syncDir(dir); err != nil {
+		return nil, fmt.Errorf("index: startup durability sync failed: %w", err)
 	}
 	return s, nil
 }
@@ -1793,17 +1808,31 @@ func (s *Store) save() error {
 	// are fsync'd above, but the directory entry created by rename() is a separate metadata
 	// write: without this a crash right after rename() could leave s.path still pointing at
 	// the old inode (or absent) on restart, defeating the atomic-replace guarantee.
+	if dirErr := syncDir(dir); dirErr != nil {
+		return errors.Join(errIndexPersistedNotDurable, dirErr)
+	}
+	return nil
+}
+
+// syncDir fsyncs a directory so directory-entry changes (e.g. a rename) become durable.
+// It is the shared parent-directory durability primitive used by save() (to make a rename
+// durable) and by the Store constructors (to conservatively make any visible-but-un-fsync'd
+// rename from before a crash durable at startup, before the Store serves requests).
+func syncDir(dir string) error {
+	if syncDirForTest != nil {
+		return syncDirForTest(dir)
+	}
 	//nolint:gosec // dir is operator-configured and not from user input
-	dirFile, dirErr := os.Open(dir)
-	if dirErr != nil {
-		return errors.Join(errIndexPersistedNotDurable, fmt.Errorf("index: open dir %s for fsync: %w", dir, dirErr))
+	dirFile, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("index: open dir %s for fsync: %w", dir, err)
 	}
-	if dirErr = dirFile.Sync(); dirErr != nil {
+	if err := dirFile.Sync(); err != nil {
 		_ = dirFile.Close()
-		return errors.Join(errIndexPersistedNotDurable, fmt.Errorf("index: sync dir %s: %w", dir, dirErr))
+		return fmt.Errorf("index: sync dir %s: %w", dir, err)
 	}
-	if dirErr = dirFile.Close(); dirErr != nil {
-		return errors.Join(errIndexPersistedNotDurable, fmt.Errorf("index: close dir %s: %w", dir, dirErr))
+	if err := dirFile.Close(); err != nil {
+		return fmt.Errorf("index: close dir %s: %w", dir, err)
 	}
 	return nil
 }

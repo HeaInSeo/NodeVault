@@ -44,6 +44,14 @@ type Store struct {
 	mu   sync.RWMutex
 	path string     // path to vault-index.json
 	idx  *indexFile // in-memory cache; nil before first load
+	// toolFunctionDurabilityUncertain is set when a RegisterToolFunctionAtomic save reached
+	// os.Rename but a subsequent parent-dir fsync failed (errIndexPersistedNotDurable): the
+	// record is on disk and in memory, but the rename's directory entry may not survive a
+	// crash. It is cleared only by a fully-successful save() (which fsyncs the dir, making
+	// prior renames durable). RegisterToolFunctionAtomic re-saves before acknowledging ANY
+	// result (including an idempotent replay) while this is set, so no success is returned
+	// on an un-fsync'd rename. Guarded by mu.
+	toolFunctionDurabilityUncertain bool
 }
 
 // ErrNotFound is returned when a requested entry does not exist.
@@ -1469,6 +1477,19 @@ func (s *Store) RegisterToolFunctionAtomic(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Durability repair: if a prior registration reached os.Rename but its parent-dir fsync
+	// failed, the record is on disk/in memory but the rename may not survive a crash. Re-save
+	// (which re-runs the dir fsync) BEFORE acknowledging any result here — including an
+	// idempotent replay that would otherwise return success without touching disk — so no
+	// success is ever returned on an un-fsync'd rename. A still-failing re-save keeps the
+	// flag set and surfaces the durability error for another retry.
+	if s.toolFunctionDurabilityUncertain {
+		if serr := s.save(); serr != nil {
+			return RegisteredToolFunction{}, false, serr
+		}
+		s.toolFunctionDurabilityUncertain = false
+	}
+
 	if rec.CasHash == "" {
 		return RegisteredToolFunction{}, false, errors.New("index: tool function CasHash must not be empty")
 	}
@@ -1498,6 +1519,10 @@ func (s *Store) RegisterToolFunctionAtomic(
 			// the durability error.
 			if !errors.Is(serr, errIndexPersistedNotDurable) {
 				s.idx.ToolFunctionRequestRecords = s.idx.ToolFunctionRequestRecords[:reqLen]
+			} else {
+				// Rename succeeded but the dir fsync did not: the append is on disk/in memory
+				// but the rename may not be durable. Force a re-save before the next ack.
+				s.toolFunctionDurabilityUncertain = true
 			}
 			return RegisteredToolFunction{}, false, serr
 		}
@@ -1537,6 +1562,11 @@ func (s *Store) RegisterToolFunctionAtomic(
 			s.idx.RegisteredToolFunctions = s.idx.RegisteredToolFunctions[:recLen]
 			s.idx.ToolFunctionPresentationRevisions = s.idx.ToolFunctionPresentationRevisions[:revLen]
 			s.idx.ToolFunctionRequestRecords = s.idx.ToolFunctionRequestRecords[:reqLen]
+		} else {
+			// Rename succeeded but the dir fsync did not: the record is on disk/in memory but
+			// the rename may not be durable. Force a re-save before the next ack (including an
+			// idempotent replay).
+			s.toolFunctionDurabilityUncertain = true
 		}
 		return RegisteredToolFunction{}, false, serr
 	}

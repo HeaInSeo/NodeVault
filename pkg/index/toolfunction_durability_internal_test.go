@@ -69,3 +69,61 @@ func TestRegisterToolFunctionAtomic_PostRenameDurabilityDoesNotDivergeMemory(t *
 		}
 	}
 }
+
+// TestRegisterToolFunctionAtomic_ReplayRepairsUncertainDurability is the regression for the
+// round P1 durability-replay gap: after a first registration whose rename succeeded but
+// parent-dir fsync failed (durability uncertain), a subsequent idempotent replay must NOT
+// acknowledge success without first re-saving (re-fsyncing) the index. It re-saves on the
+// next call and only acks once durability is confirmed.
+func TestRegisterToolFunctionAtomic_ReplayRepairsUncertainDurability(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewAt(dir)
+	if err != nil {
+		t.Fatalf("NewAt: %v", err)
+	}
+	rec := tfDurRec("cas-1", "tfd-1", "img-1")
+
+	// First call: rename succeeds, dir fsync fails → uncertain durability.
+	failAfterRenameForTest = func() error { return errors.New("simulated post-rename dir fsync failure") }
+	t.Cleanup(func() { failAfterRenameForTest = nil })
+	if _, _, err = s.RegisterToolFunctionAtomic("req-1", rec, nil); !errors.Is(err, errIndexPersistedNotDurable) {
+		t.Fatalf("first call: want errIndexPersistedNotDurable, got %v", err)
+	}
+	if !s.toolFunctionDurabilityUncertain {
+		t.Fatal("durability-uncertain flag not set after post-rename failure")
+	}
+
+	// Replay while the fault persists: the top-of-function re-save fails again, so the replay
+	// must NOT acknowledge success, and the flag stays set (no durability gap acknowledged).
+	if _, _, err = s.RegisterToolFunctionAtomic("req-1", rec, nil); err == nil {
+		t.Fatal("replay acknowledged success while durability was still uncertain")
+	}
+	if !s.toolFunctionDurabilityUncertain {
+		t.Fatal("flag cleared despite a still-failing re-save")
+	}
+
+	// Clear the fault and replay: the re-save now fsyncs the dir, durability is confirmed,
+	// the flag clears, and the idempotent replay returns success.
+	failAfterRenameForTest = nil
+	stored, created, rerr := s.RegisterToolFunctionAtomic("req-1", rec, nil)
+	if rerr != nil {
+		t.Fatalf("replay after repair: %v", rerr)
+	}
+	if created {
+		t.Fatal("idempotent replay must not create a new record")
+	}
+	if s.toolFunctionDurabilityUncertain {
+		t.Fatal("flag not cleared after a successful re-save")
+	}
+	if stored.CasHash != "cas-1" {
+		t.Fatalf("replay returned wrong record: %+v", stored)
+	}
+	// Durable on reload.
+	s2, err := NewAt(dir)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if _, e := s2.GetToolFunctionByCasHash("cas-1"); e != nil {
+		t.Fatalf("record not durable after repair: %v", e)
+	}
+}

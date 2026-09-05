@@ -28,6 +28,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/HeaInSeo/NodeVault/pkg/index"
 	"github.com/HeaInSeo/NodeVault/pkg/resolve"
@@ -86,6 +87,15 @@ func (s *ToolRegistryService) RegisterToolFunction(
 	if req.GetSpec() == nil {
 		return nil, status.Error(codes.InvalidArgument, "spec is required")
 	}
+	// The entire spec is identity-bearing (it feeds tool_function_digest), but the
+	// canonicalizer only serializes the currently-known fields. A client built from a newer
+	// proto could send an added field that survives as unknown wire bytes and would be
+	// omitted from the digest, so two semantically different specs would collide on one
+	// identity. Reject unknown fields anywhere in the spec subtree before hashing, fail-closed
+	// (same spirit as the cardinality/enum gates: no uninterpretable content enters identity).
+	if err := rejectUnknownSpecFields(req.GetSpec()); err != nil {
+		return nil, err
+	}
 	if err := validateToolFunctionSpec(req.GetSpec()); err != nil {
 		return nil, err
 	}
@@ -132,6 +142,68 @@ func (s *ToolRegistryService) RegisterToolFunction(
 }
 
 // ── validation (fail-closed) ──────────────────────────────────────────────────
+
+// rejectUnknownSpecFields fails closed if the spec, or any message nested within it,
+// carries unknown protobuf fields (forward-compatible wire bytes from a newer client). Such
+// fields are invisible to the canonicalizer and would otherwise be silently excluded from
+// tool_function_digest, letting a newer, semantically-different spec collide with an older
+// identity. It walks the whole spec subtree via protoreflect and checks GetUnknown() at each
+// message level.
+func rejectUnknownSpecFields(spec *nfv1.ToolFunctionSpec) error {
+	if spec == nil {
+		return nil
+	}
+	if name, found := firstUnknownField(spec.ProtoReflect()); found {
+		return status.Errorf(codes.InvalidArgument,
+			"spec contains unknown protobuf field(s) in %s; identity would be incomplete", name)
+	}
+	return nil
+}
+
+// firstUnknownField returns the descriptor name of the first message in the subtree that
+// carries unknown fields, walking populated message/list/map fields recursively. Unknown
+// fields are captured per-message by GetUnknown(), so checking each reachable message level
+// covers the entire tree.
+func firstUnknownField(m protoreflect.Message) (string, bool) {
+	if m == nil || !m.IsValid() {
+		return "", false
+	}
+	if len(m.GetUnknown()) > 0 {
+		return string(m.Descriptor().FullName()), true
+	}
+	name := ""
+	found := false
+	m.Range(func(fd protoreflect.FieldDescriptor, v protoreflect.Value) bool {
+		switch {
+		case fd.IsMap():
+			if fd.MapValue().Message() != nil {
+				v.Map().Range(func(_ protoreflect.MapKey, mv protoreflect.Value) bool {
+					if n, ok := firstUnknownField(mv.Message()); ok {
+						name, found = n, true
+						return false
+					}
+					return true
+				})
+			}
+		case fd.IsList():
+			if fd.Message() != nil {
+				l := v.List()
+				for i := 0; i < l.Len(); i++ {
+					if n, ok := firstUnknownField(l.Get(i).Message()); ok {
+						name, found = n, true
+						break
+					}
+				}
+			}
+		case fd.Message() != nil:
+			if n, ok := firstUnknownField(v.Message()); ok {
+				name, found = n, true
+			}
+		}
+		return !found
+	})
+	return name, found
+}
 
 func validateToolFunctionSpec(spec *nfv1.ToolFunctionSpec) error {
 	if err := validatePortCardinality(spec.GetInputs()); err != nil {

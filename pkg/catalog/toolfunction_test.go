@@ -9,6 +9,8 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/HeaInSeo/NodeVault/pkg/catalog"
 	"github.com/HeaInSeo/NodeVault/pkg/index"
@@ -498,4 +500,40 @@ func TestRegisterToolFunction_UnknownIntermediatePolicyRejected(t *testing.T) {
 	if _, err := svc.RegisterToolFunction(context.Background(), req); err != nil {
 		t.Fatalf("defined IntermediateFilePolicyKind should register: %v", err)
 	}
+}
+
+// TestRegisterToolFunction_UnknownProtoFieldRejected covers the identity-completeness gate:
+// an unknown protobuf field anywhere in the identity-bearing spec (a newer-proto client)
+// must be rejected before hashing, since the canonicalizer would otherwise omit it and let a
+// semantically-different spec collide with an older tool_function_digest.
+func TestRegisterToolFunction_UnknownProtoFieldRejected(t *testing.T) {
+	// An unknown field: tag for field 50000 (varint) + value.
+	unknown := protowire.AppendTag(nil, 50000, protowire.VarintType)
+	unknown = protowire.AppendVarint(unknown, 7)
+
+	t.Run("top-level", func(t *testing.T) {
+		svc, _ := newTFService(t)
+		req := validTFReq()
+		req.Spec.ProtoReflect().SetUnknown(protoreflect.RawFields(unknown))
+		if _, err := svc.RegisterToolFunction(context.Background(), req); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("unknown top-level spec field: want InvalidArgument, got %v", err)
+		}
+	})
+
+	t.Run("nested", func(t *testing.T) {
+		svc, _ := newTFService(t)
+		req := validTFReq()
+		// Unknown field inside a nested repeated message (an input port) — exercises recursion.
+		req.Spec.Inputs[0].ProtoReflect().SetUnknown(protoreflect.RawFields(unknown))
+		if _, err := svc.RegisterToolFunction(context.Background(), req); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("unknown nested spec field: want InvalidArgument, got %v", err)
+		}
+	})
+
+	t.Run("known-spec-still-registers", func(t *testing.T) {
+		svc, _ := newTFService(t)
+		if _, err := svc.RegisterToolFunction(context.Background(), validTFReq()); err != nil {
+			t.Fatalf("a spec with no unknown fields must register: %v", err)
+		}
+	})
 }

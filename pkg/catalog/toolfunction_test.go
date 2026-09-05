@@ -24,7 +24,19 @@ func newTFService(t *testing.T) (*catalog.ToolRegistryService, *index.Store) {
 	if err != nil {
 		t.Fatalf("index.NewAt: %v", err)
 	}
+	// RegisterToolFunction requires base_tool_spec_digest to resolve to an existing
+	// ResolvedToolSpec, so seed the base used by validTFReq.
+	seedResolvedToolSpec(t, store, baseDigest)
 	return catalog.NewToolRegistryService(cat, store), store
+}
+
+// seedResolvedToolSpec registers an authoritative ResolvedToolSpec so a ToolFunction whose
+// base_tool_spec_digest equals digest passes the base-existence check.
+func seedResolvedToolSpec(t *testing.T, store *index.Store, digest string) {
+	t.Helper()
+	if err := store.AppendResolvedToolSpec(index.ResolvedToolSpec{ToolSpecDigest: digest}); err != nil {
+		t.Fatalf("seed ResolvedToolSpec %q: %v", digest, err)
+	}
 }
 
 func imgDigest(c byte) string {
@@ -136,9 +148,10 @@ func TestRegisterToolFunction_DigestMembership(t *testing.T) {
 	}
 
 	// Different base_tool_spec_digest → different tool_function_digest AND cas_hash.
-	svc4, _ := newTFService(t)
+	svc4, store4 := newTFService(t)
 	r4 := validTFReq()
 	r4.BaseToolSpecDigest = strings.Repeat("c", 63) + "d"
+	seedResolvedToolSpec(t, store4, r4.BaseToolSpecDigest) // base must resolve
 	resp4 := mustRegisterTF(t, svc4, r4)
 	if resp4.GetToolFunctionDigest() == base.GetToolFunctionDigest() {
 		t.Fatal("base_tool_spec_digest change must alter tool_function_digest")
@@ -582,4 +595,46 @@ func TestRegisterToolFunction_PresentEmptyMessageDistinctDigest(t *testing.T) {
 	if respAbsent.GetToolFunctionDigest() == respEmpty.GetToolFunctionDigest() {
 		t.Fatal("present-empty command must yield a different tool_function_digest than an absent command")
 	}
+}
+
+// TestRegisterToolFunction_BaseToolSpecMustExist covers the round-4 base-existence contract:
+// a well-formed base_tool_spec_digest that does not resolve to an authoritative
+// ResolvedToolSpec is rejected NotFound with zero mutation; a present base registers.
+func TestRegisterToolFunction_BaseToolSpecMustExist(t *testing.T) {
+	t.Run("missing-base-not-found", func(t *testing.T) {
+		cat := catalog.NewCatalogAt(t.TempDir())
+		store, err := index.NewAt(t.TempDir())
+		if err != nil {
+			t.Fatalf("index.NewAt: %v", err)
+		}
+		svc := catalog.NewToolRegistryService(cat, store) // base deliberately NOT seeded
+		req := validTFReq()
+		if _, err := svc.RegisterToolFunction(context.Background(), req); status.Code(err) != codes.NotFound {
+			t.Fatalf("absent base: want NotFound, got %v", err)
+		}
+		// Clean reject (zero mutation): after seeding the base, the same request registers
+		// as a fresh record (no conflict/partial state from the rejected attempt).
+		seedResolvedToolSpec(t, store, baseDigest)
+		if _, err := svc.RegisterToolFunction(context.Background(), req); err != nil {
+			t.Fatalf("after seeding base, registration should succeed: %v", err)
+		}
+	})
+
+	t.Run("present-base-registers", func(t *testing.T) {
+		svc, _ := newTFService(t) // seeds baseDigest
+		if _, err := svc.RegisterToolFunction(context.Background(), validTFReq()); err != nil {
+			t.Fatalf("present base should register: %v", err)
+		}
+	})
+
+	t.Run("normalized-digest-resolves", func(t *testing.T) {
+		// The base lookup uses the normalized (trim+lower) digest, matching how the base was
+		// stored, so a case/whitespace-variant base still resolves.
+		svc, _ := newTFService(t)
+		req := validTFReq()
+		req.BaseToolSpecDigest = "  " + strings.ToUpper(baseDigest) + "  "
+		if _, err := svc.RegisterToolFunction(context.Background(), req); err != nil {
+			t.Fatalf("normalized base should resolve: %v", err)
+		}
+	})
 }

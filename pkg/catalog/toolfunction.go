@@ -109,6 +109,20 @@ func (s *ToolRegistryService) RegisterToolFunction(
 		return nil, err
 	}
 
+	// base_tool_spec_digest is both an identity preimage and a typed lineage/dependency
+	// reference (W1 contract). A new immutable ToolFunction must not permanently record a
+	// dangling base: the digest must resolve to an existing authoritative ResolvedToolSpec.
+	// Look up the normalized digest and fail closed with NotFound BEFORE computing or
+	// persisting any identity (zero mutation). (Scope is strictly existence — no lifecycle,
+	// tag/latest resolution, or eligibility re-evaluation.)
+	if _, err := s.store.GetResolvedToolSpecByDigest(baseToolSpecDigest); err != nil {
+		if errors.Is(err, index.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound,
+				"base_tool_spec_digest %q does not resolve to a registered ResolvedToolSpec", baseToolSpecDigest)
+		}
+		return nil, status.Errorf(codes.Internal, "resolve base tool spec: %v", err)
+	}
+
 	// NodeVault-owned identity (N3): canonical JSON + SHA256, over frozen preimages.
 	toolFunctionDigest := computeToolFunctionDigest(baseToolSpecDigest, req.GetSpec())
 	casHash := computeToolFunctionCasHash(toolFunctionDigest, imageDigest)

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/big"
+	"strconv"
 	"strings"
 )
 
@@ -113,6 +113,47 @@ func DetectSchema(rawSpec string) string {
 	return SchemaLegacyV0
 }
 
+// jsonNumberEqualsTwo reports whether s (a JSON number literal already validated as well-formed
+// JSON by the decoder) is mathematically equal to the integer 2, using bounded lexical logic:
+// O(len(s)) work that never materializes an arbitrary-precision value, so a schema-valid but
+// adversarial representation (e.g. 2e-2000000, or 2 followed by millions of zeros) cannot burn
+// CPU/memory. It accepts 2, 2.0, 2e0, 20e-1, 0.2e1, … and rejects a negative sign, a JSON
+// string ("2"), non-numeric tokens, and any value not exactly equal to 2 (1, 2.5, 20, 0.2, and
+// nearby non-2 values like 2.0000000000000001 that a float compare would round to 2).
+func jsonNumberEqualsTwo(s string) bool {
+	if s == "" || s[0] == '-' { // 2 is positive; also rejects a leading-quote JSON string
+		return false
+	}
+	mant := s
+	exp := 0
+	if i := strings.IndexAny(s, "eE"); i >= 0 {
+		mant = s[:i]
+		e, err := strconv.Atoi(s[i+1:]) // bounded by len(s); errors on overflow or non-digits
+		if err != nil {
+			return false
+		}
+		exp = e
+	}
+	intPart, fracPart := mant, ""
+	if i := strings.IndexByte(mant, '.'); i >= 0 {
+		intPart, fracPart = mant[:i], mant[i+1:]
+	}
+	// digits = significand with the point removed; its value is (digits × 10^(exp-len(fracPart))).
+	// Strip leading zeros to the significant digits: value == 2 iff those are exactly a single '2'
+	// followed only by zeros (single nonzero digit '2'), AND the net scale lands that '2' at the
+	// units position, i.e. (len(stripped)-1) + exp - len(fracPart) == 0.
+	stripped := strings.TrimLeft(intPart+fracPart, "0")
+	if stripped == "" || stripped[0] != '2' {
+		return false
+	}
+	for i := 1; i < len(stripped); i++ {
+		if stripped[i] != '0' {
+			return false
+		}
+	}
+	return (len(stripped)-1)+exp-len(fracPart) == 0
+}
+
 // ParseRawSpecV1 strictly parses and validates a v1 build raw_spec, returning the normalized
 // DTO (base image digest hex lowercased). It rejects unknown fields, trailing content, a
 // wrong/absent schema_version, a wrong kind, a malformed base image digest, and an empty
@@ -132,17 +173,12 @@ func ParseRawSpecV1(rawSpec string) (RawSpecV1, error) {
 		return RawSpecV1{}, fmt.Errorf("v1 raw_spec schema_version must be %q, got %q", SchemaBuildV1, w.SchemaVersion)
 	}
 	// Accept any schema-valid representation of the integer BUILD_KIND_TOOLFUNCTIONSPEC (2, 2.0,
-	// 2e0 …) using EXACT rational arithmetic — never float64, which would round a nearby non-2
-	// value such as 2.0000000000000001 to exactly 2 and admit a schema-invalid document into the
-	// kind-2 identity. Reject a missing kind, a JSON string ("2"), and any non-2 or non-numeric
-	// value (1, 2.5, true, null). encoding/json already validated w.Kind is a well-formed JSON
-	// value, so big.Rat.SetString here only ever parses a decimal/scientific JSON number; the
-	// leading-quote guard makes the JSON-string rejection explicit (SetString would fail on it
-	// regardless). Evaluation order keeps kindRat.Cmp after the "" / quote / !ok short-circuits.
+	// 2e0 …) via BOUNDED lexical comparison — never float64 (which rounds a nearby non-2 value
+	// such as 2.0000000000000001 to exactly 2) and never big.Rat (which would materialize a
+	// multi-million-digit rational for an adversarial-but-schema-valid literal like 2e-2000000,
+	// a per-RPC DoS). jsonNumberEqualsTwo decides value-equality to 2 in O(len) lexical work.
 	kindRaw := strings.TrimSpace(string(w.Kind))
-	kindRat, ok := new(big.Rat).SetString(kindRaw)
-	if kindRaw == "" || kindRaw[0] == '"' || !ok ||
-		kindRat.Cmp(big.NewRat(int64(buildKindToolFunctionSpec), 1)) != 0 {
+	if !jsonNumberEqualsTwo(kindRaw) {
 		return RawSpecV1{}, fmt.Errorf(
 			"v1 raw_spec kind must be the integer %d (BUILD_KIND_TOOLFUNCTIONSPEC), got %s", buildKindToolFunctionSpec, kindRaw)
 	}
@@ -245,8 +281,12 @@ func ResolveRawSpec(req Request, ctx Context) (Resolved, Provenance, error) {
 // assumed legacy. A stored but UNKNOWN schema/derivation (e.g. a newer writer) also fails
 // closed.
 func EffectiveProvenance(storedSchemaVersion, storedDerivationVersion string) (Provenance, error) {
-	schema := strings.TrimSpace(storedSchemaVersion)
-	derivation := strings.TrimSpace(storedDerivationVersion)
+	// Compare stored identifiers EXACTLY (no trimming): a whitespace-padded value is a corrupt
+	// identifier, not a supported one, and an all-whitespace field is NOT a genuine pre-W3-PRE
+	// record. The legacy mapping is reserved for fields that are literally empty; anything that
+	// is not an exact known identifier fails closed below.
+	schema := storedSchemaVersion
+	derivation := storedDerivationVersion
 	if schema == "" && derivation == "" {
 		// pre-W3-PRE record: historical legacy-v0 + resolve-v1 only.
 		return Provenance{SchemaVersion: SchemaLegacyV0, DerivationVersion: DerivationV1}, nil

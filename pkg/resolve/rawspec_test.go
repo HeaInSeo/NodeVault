@@ -123,7 +123,10 @@ func TestParseRawSpecV1_AcceptsIntegerKindRepresentations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("kind 2 baseline: %v", err)
 	}
-	for _, kind := range []string{"2.0", "2e0", "2.0e0"} {
+	for _, kind := range []string{
+		"2.0", "2e0", "2.0e0", "2.00", "20e-1", "0.2e1", "0.0002e4",
+		"20000000000000000000e-19", // large-but-bounded scaling that still equals 2
+	} {
 		raw := `{"schema_version":"nodevault.build.raw_spec.v1","kind":` + kind +
 			`,"base_image_digest":"sha256:` + hex64 + `","script":"x"}`
 		v, err := ParseRawSpecV1(raw)
@@ -152,6 +155,9 @@ func TestParseRawSpecV1_Rejects(t *testing.T) {
 		"string kind":            `{"schema_version":"nodevault.build.raw_spec.v1","kind":"2","base_image_digest":"sha256:` + hex64 + `","script":"x"}`,
 		"near-2 kind (high)":     `{"schema_version":"nodevault.build.raw_spec.v1","kind":2.0000000000000001,"base_image_digest":"sha256:` + hex64 + `","script":"x"}`,
 		"near-2 kind (low)":      `{"schema_version":"nodevault.build.raw_spec.v1","kind":1.99999999999999999,"base_image_digest":"sha256:` + hex64 + `","script":"x"}`,
+		"kind huge exp not 2":    `{"schema_version":"nodevault.build.raw_spec.v1","kind":2e-2000000,"base_image_digest":"sha256:` + hex64 + `","script":"x"}`,
+		"kind scaled below 2":    `{"schema_version":"nodevault.build.raw_spec.v1","kind":20e-2,"base_image_digest":"sha256:` + hex64 + `","script":"x"}`,
+		"negative kind":          `{"schema_version":"nodevault.build.raw_spec.v1","kind":-2,"base_image_digest":"sha256:` + hex64 + `","script":"x"}`,
 		"invalid base digest":    `{"schema_version":"nodevault.build.raw_spec.v1","kind":2,"base_image_digest":"notadigest","script":"x"}`,
 		"empty script":           `{"schema_version":"nodevault.build.raw_spec.v1","kind":2,"base_image_digest":"sha256:` + hex64 + `","script":""}`,
 		"whitespace-only script": `{"schema_version":"nodevault.build.raw_spec.v1","kind":2,"base_image_digest":"sha256:` + hex64 + `","script":"   "}`,
@@ -197,6 +203,17 @@ func TestEffectiveProvenance(t *testing.T) {
 	}
 	if _, err := EffectiveProvenance("", DerivationV1); err == nil {
 		t.Fatal("half-populated provenance (derivation only) must fail closed")
+	}
+	// Identifiers are compared EXACTLY: whitespace padding is a corrupt identifier (not the
+	// supported one) and an all-whitespace field is NOT a genuine pre-W3-PRE (both-empty) record.
+	if _, err := EffectiveProvenance(" "+SchemaBuildV1+" ", DerivationV1); err == nil {
+		t.Fatal("whitespace-padded schema identifier must fail closed, not be trimmed to a known value")
+	}
+	if _, err := EffectiveProvenance(SchemaBuildV1, " "+DerivationV1); err == nil {
+		t.Fatal("whitespace-padded derivation identifier must fail closed")
+	}
+	if _, err := EffectiveProvenance("   ", "   "); err == nil {
+		t.Fatal("all-whitespace provenance must fail closed, not map to legacy")
 	}
 }
 

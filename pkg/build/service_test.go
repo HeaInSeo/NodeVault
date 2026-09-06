@@ -161,7 +161,7 @@ func TestRecordBuildSuccess_WritesToolBuildRecordAndToolImageRecord(t *testing.T
 	svc := &Service{builder: &mockBuilder{}, indexStore: store}
 
 	startedAt := mustParseTime(t)
-	svc.recordBuildSuccess("build-xyz", startedAt, "sha256:imgdigest", "harbor.example.com/library/tool:latest", true)
+	_ = svc.recordBuildSuccess("build-xyz", startedAt, "sha256:imgdigest", "harbor.example.com/library/tool:latest", true)
 
 	rec, gerr := store.GetToolBuildRecordByBuildID("build-xyz")
 	if gerr != nil {
@@ -224,7 +224,7 @@ func TestRecordBuildFailure_WritesFailedToolBuildRecord(t *testing.T) {
 func TestRecordBuildSuccess_NilIndexStore_NoOp(t *testing.T) {
 	svc := &Service{builder: &mockBuilder{}}
 	// Must not panic.
-	svc.recordBuildSuccess("build-noop", mustParseTime(t), "sha256:x", "ref", false)
+	_ = svc.recordBuildSuccess("build-noop", mustParseTime(t), "sha256:x", "ref", false)
 	svc.recordBuildFailure("build-noop-2", mustParseTime(t), errors.New("err"))
 }
 
@@ -763,9 +763,9 @@ func TestWarnIfTagReassigned_DoesNotErrorOrPanic(t *testing.T) {
 	svc := &Service{builder: &mockBuilder{}, indexStore: store}
 	const dest = "harbor.example.com/library/bwa:0.7.17"
 
-	svc.recordBuildSuccess("build-1", mustParseTime(t), "sha256:first", dest, false)
+	_ = svc.recordBuildSuccess("build-1", mustParseTime(t), "sha256:first", dest, false)
 	svc.warnIfTagReassigned(dest, "sha256:second") // must not panic/error
-	svc.recordBuildSuccess("build-2", mustParseTime(t), "sha256:second", dest, false)
+	_ = svc.recordBuildSuccess("build-2", mustParseTime(t), "sha256:second", dest, false)
 
 	first, err := store.GetToolBuildRecordByBuildID("build-1")
 	if err != nil || first.ImageDigest != "sha256:first" {

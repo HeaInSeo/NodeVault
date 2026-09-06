@@ -2,6 +2,7 @@ package build
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -284,5 +285,24 @@ func TestFunctionBuildRequestFromResolved_UsesLatestLocator(t *testing.T) {
 	}
 	if strings.Contains(df, "/library/stale@") {
 		t.Fatalf("must not use the stale (older) locator; got:\n%s", df)
+	}
+}
+
+// W3: recordBuildSuccess surfaces the ToolImageRecord (authoritative digest->locator)
+// persistence error so the function path can fail rather than report success without
+// a recoverable pull locator.
+func TestRecordBuildSuccess_ImageRecordPersistFailure_ReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	idx, err := index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("index.NewAt: %v", err)
+	}
+	s := &Service{indexStore: idx}
+	// Removing the index directory makes the atomic rename-based write fail.
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+	if err := s.recordBuildSuccess("b", time.Unix(1, 0).UTC(), "sha256:x", "reg/repo:tag", false); err == nil {
+		t.Fatal("recordBuildSuccess must return an error when the ToolImageRecord cannot be persisted")
 	}
 }

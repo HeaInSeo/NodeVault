@@ -310,7 +310,7 @@ func (s *Service) runSubmittedBuild(
 		// (registry + catalog), so a buildstate artifact-write miss is non-fatal.
 		slog.Warn("buildstate set artifact failed", "build_id", rec.BuildID, "err", artifactErr)
 	}
-	s.recordBuildSuccess(rec.BuildID, rec.RequestedAt, digest, destination, layerCacheHit)
+	imageRecErr := s.recordBuildSuccess(rec.BuildID, rec.RequestedAt, digest, destination, layerCacheHit)
 
 	if isFunctionBuild {
 		// W3 boundary: the function image is built, pushed, and its exact
@@ -325,6 +325,14 @@ func (s *Service) runSubmittedBuild(
 		// "Succeeded" build — fail instead of falsely reporting success.
 		if artifactErr != nil {
 			s.failSubmittedBuild(rec, fmt.Errorf("record function image artifact: %w", artifactErr))
+			return
+		}
+		// The function path skips registration, so the index ToolImageRecord is the
+		// ONLY durable digest->repository locator W4's RegisterToolFunction (which
+		// persists just the digest) can recover the pull location from. Fail rather
+		// than report success without it.
+		if imageRecErr != nil {
+			s.failSubmittedBuild(rec, fmt.Errorf("persist function image provenance: %w", imageRecErr))
 			return
 		}
 		s.finalizeSubmittedBuild(rec, "succeeding", buildstate.StatusSucceeded, "")

@@ -64,7 +64,10 @@ func (s *Service) ResolveToolSpec(
 		}
 	}
 
-	resolved, err := resolve.Resolve(resolve.Request{
+	// Schema-aware resolution (W3-PRE): legacy-v0 raw_spec resolves byte-for-byte as before;
+	// a v1 build raw_spec is strictly parsed/validated and identity-derived from its own
+	// schema-governed fields. Both return the frozen schema/derivation provenance.
+	resolved, prov, err := resolve.ResolveRawSpec(resolve.Request{
 		ToolName: req.GetToolName(),
 		Version:  req.GetVersion(),
 		RawSpec:  req.GetRawSpec(),
@@ -74,16 +77,18 @@ func (s *Service) ResolveToolSpec(
 	}
 
 	rec := index.ResolvedToolSpec{
-		ToolSpecDigest:     resolved.ToolSpecDigest,
-		ToolName:           req.GetToolName(),
-		Version:            req.GetVersion(),
-		RawSpec:            req.GetRawSpec(),
-		RecipeInputsDigest: resolved.RecipeInputsDigest,
-		BuildPlanDigest:    resolved.BuildPlanDigest,
-		BuilderIdentity:    resolved.BuilderIdentity,
-		BaseImageRef:       resolved.BaseImageRef,
-		BaseImageDigest:    resolved.BaseImageDigest,
-		ResolvedAt:         time.Now().UTC(),
+		ToolSpecDigest:       resolved.ToolSpecDigest,
+		ToolName:             req.GetToolName(),
+		Version:              req.GetVersion(),
+		RawSpec:              req.GetRawSpec(),
+		RecipeInputsDigest:   resolved.RecipeInputsDigest,
+		BuildPlanDigest:      resolved.BuildPlanDigest,
+		BuilderIdentity:      resolved.BuilderIdentity,
+		BaseImageRef:         resolved.BaseImageRef,
+		BaseImageDigest:      resolved.BaseImageDigest,
+		RawSpecSchemaVersion: prov.SchemaVersion,
+		DerivationVersion:    prov.DerivationVersion,
+		ResolvedAt:           time.Now().UTC(),
 	}
 
 	stored, err := s.indexStore.UpsertResolvedToolSpec(rec)

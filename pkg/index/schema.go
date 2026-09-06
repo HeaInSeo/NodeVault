@@ -119,6 +119,13 @@ type ResolvedToolSpec struct {
 	BaseImageRef       string `json:"base_image_ref,omitempty"`
 	BaseImageDigest    string `json:"base_image_digest,omitempty"`
 
+	// W3-PRE (raw_spec schema authority): the frozen raw_spec schema id and resolver
+	// derivation id this record was resolved under. Additive/omitempty: records written
+	// before W3-PRE have neither and map to the historical legacy-v0 schema + resolve-v1
+	// derivation (see resolve.EffectiveProvenance); an unknown value fails closed on read.
+	RawSpecSchemaVersion string `json:"raw_spec_schema_version,omitempty"`
+	DerivationVersion    string `json:"derivation_version,omitempty"`
+
 	ResolvedAt time.Time `json:"resolved_at"`
 }
 

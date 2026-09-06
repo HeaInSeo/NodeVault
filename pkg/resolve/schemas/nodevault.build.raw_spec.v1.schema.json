@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nodevault.build.raw_spec.v1",
+  "title": "NodeVault ToolFunction build raw_spec v1",
+  "description": "Machine-checkable, NodeVault-owned schema for the second-image ToolFunction build raw_spec (kind=2). It is exact: exactly these four fields, no additional or unknown fields, no trailing content. This schema governs raw_spec identity/derivation only; it does NOT enable kind=2 build execution (W3-PRE).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "base_image_digest", "script"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "nodevault.build.raw_spec.v1",
+      "description": "Self-identifying schema id; must equal the schema $id exactly."
+    },
+    "kind": {
+      "type": "integer",
+      "const": 2,
+      "description": "Build kind. 2 == BUILD_KIND_TOOLFUNCTIONSPEC (second-image ToolFunction build)."
+    },
+    "base_image_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-fA-F]{64}$",
+      "description": "Pinned base image digest. Hex case is normalized to lowercase before v1 identity derivation, so upper/lower spellings converge to one identity."
+    },
+    "script": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The ToolFunction build script source content. Identity-bearing; must be non-empty."
+    }
+  }
+}

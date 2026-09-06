@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/HeaInSeo/NodeVault/pkg/index"
+	"github.com/HeaInSeo/NodeVault/pkg/resolve"
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
@@ -347,5 +348,56 @@ func TestResolveToolSpec_UnpinnedBaseImage_FlagOn_AlreadyPinned_ResolverNotCalle
 	}
 	if resolver.gotRef != "" {
 		t.Errorf("resolver should not be called for an already-pinned ref, got %q", resolver.gotRef)
+	}
+}
+
+// TestResolveToolSpec_RecordsRawSpecProvenance covers W3-PRE durable schema/derivation
+// provenance: a resolved record stores the frozen raw_spec schema id + derivation id, read
+// back from the store; legacy and v1 raw_specs record their respective schema ids; and a
+// pre-W3-PRE record with absent provenance maps to the historical legacy-v0 / resolve-v1
+// derivation (no latest-parser fallback).
+func TestResolveToolSpec_RecordsRawSpecProvenance(t *testing.T) {
+	const hx = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+	s := newResolveTestService(t)
+	ctx := context.Background()
+
+	// Legacy raw_spec → legacy-v0 / resolve-v1.
+	legacyResp, err := s.ResolveToolSpec(ctx, &nfv1.ToolSpecRequest{
+		ToolName: "legacy-tool",
+		RawSpec:  `{"image_uri":"harbor.lab.local/t@sha256:` + hx + `"}`,
+	})
+	if err != nil {
+		t.Fatalf("resolve legacy: %v", err)
+	}
+	legacyRec, err := s.indexStore.GetResolvedToolSpecByDigest(legacyResp.GetToolSpecDigest())
+	if err != nil {
+		t.Fatalf("read legacy record: %v", err)
+	}
+	if legacyRec.RawSpecSchemaVersion != resolve.SchemaLegacyV0 || legacyRec.DerivationVersion != resolve.DerivationV1 {
+		t.Fatalf("legacy provenance = %q/%q, want %q/%q",
+			legacyRec.RawSpecSchemaVersion, legacyRec.DerivationVersion, resolve.SchemaLegacyV0, resolve.DerivationV1)
+	}
+
+	// v1 build raw_spec → build.raw_spec.v1 / resolve-v1.
+	v1Resp, err := s.ResolveToolSpec(ctx, &nfv1.ToolSpecRequest{
+		ToolName: "fn-tool",
+		RawSpec:  `{"schema_version":"nodevault.build.raw_spec.v1","kind":2,"base_image_digest":"sha256:` + hx + `","script":"#!/bin/sh\necho hi"}`,
+	})
+	if err != nil {
+		t.Fatalf("resolve v1: %v", err)
+	}
+	v1Rec, err := s.indexStore.GetResolvedToolSpecByDigest(v1Resp.GetToolSpecDigest())
+	if err != nil {
+		t.Fatalf("read v1 record: %v", err)
+	}
+	if v1Rec.RawSpecSchemaVersion != resolve.SchemaBuildV1 || v1Rec.DerivationVersion != resolve.DerivationV1 {
+		t.Fatalf("v1 provenance = %q/%q, want %q/%q",
+			v1Rec.RawSpecSchemaVersion, v1Rec.DerivationVersion, resolve.SchemaBuildV1, resolve.DerivationV1)
+	}
+
+	// Pre-W3-PRE record (absent provenance) → historical legacy-v0 / resolve-v1.
+	eff, err := resolve.EffectiveProvenance(index.ResolvedToolSpec{}.RawSpecSchemaVersion, index.ResolvedToolSpec{}.DerivationVersion)
+	if err != nil || eff.SchemaVersion != resolve.SchemaLegacyV0 || eff.DerivationVersion != resolve.DerivationV1 {
+		t.Fatalf("absent-provenance record must map to legacy-v0/resolve-v1, got %+v err=%v", eff, err)
 	}
 }

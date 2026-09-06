@@ -304,18 +304,29 @@ func (s *Service) runSubmittedBuild(
 		s.abandonSubmittedBuild(rec, "pushing", err)
 		return
 	}
-	if _, err := s.buildState.SetArtifact(rec.BuildID, destination, digest, time.Now().UTC()); err != nil {
-		slog.Warn("buildstate set artifact failed", "build_id", rec.BuildID, "err", err)
+	_, artifactErr := s.buildState.SetArtifact(rec.BuildID, destination, digest, time.Now().UTC())
+	if artifactErr != nil && !isFunctionBuild {
+		// Legacy ToolSpec path: registration below records the digest independently
+		// (registry + catalog), so a buildstate artifact-write miss is non-fatal.
+		slog.Warn("buildstate set artifact failed", "build_id", rec.BuildID, "err", artifactErr)
 	}
 	s.recordBuildSuccess(rec.BuildID, rec.RequestedAt, digest, destination, layerCacheHit)
 
 	if isFunctionBuild {
 		// W3 boundary: the function image is built, pushed, and its exact
 		// function_image_digest + locator are recorded (recordBuildSuccess /
-		// SetArtifact above). It is deliberately NOT registered as a runnable
-		// ToolFunction and gets no :latest alias — typed RegisterToolFunction (W4)
-		// is the separate step that combines the declaration digest with this image
-		// digest into the final casHash.
+		// SetArtifact). It is deliberately NOT registered as a runnable ToolFunction
+		// and gets no :latest alias — typed RegisterToolFunction (W4) is the separate
+		// step that combines the declaration digest with this image digest.
+		//
+		// Because the function path skips registration, the WatchToolBuild event's
+		// image_digest is the ONLY client-facing handoff of the digest W4 needs. If
+		// persisting the artifact failed, that handoff would be empty on a
+		// "Succeeded" build — fail instead of falsely reporting success.
+		if artifactErr != nil {
+			s.failSubmittedBuild(rec, fmt.Errorf("record function image artifact: %w", artifactErr))
+			return
+		}
 		s.finalizeSubmittedBuild(rec, "succeeding", buildstate.StatusSucceeded, "")
 		return
 	}

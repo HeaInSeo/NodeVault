@@ -346,15 +346,41 @@ func TestValidateBuildRequest_NodeKitStructuredSourceBuildDockerfile_Passes(t *t
 	}
 }
 
-func TestValidateBuildRequest_RejectsToolFunctionSpecOnDockerfileBuildPath(t *testing.T) {
+// W3: a ToolFunction build request with an exact base image digest and a
+// (NodeVault-generated) build recipe is now ADMITTED, not rejected. The
+// client-facing runtime-tools Dockerfile policy does not apply to it.
+func TestValidateBuildRequest_AdmitsToolFunctionSpecWithBaseAndRecipe(t *testing.T) {
 	req := &nfv1.BuildRequest{
-		ToolName:        "bwa-fn",
-		Kind:            nfv1.BuildKind_BUILD_KIND_TOOLFUNCTIONSPEC,
-		BaseImageDigest: validDigestB,
+		ToolName:          "bwa-fn",
+		Kind:              nfv1.BuildKind_BUILD_KIND_TOOLFUNCTIONSPEC,
+		BaseImageDigest:   validDigestB,
+		DockerfileContent: "FROM registry.example/library/bwa@" + validDigestB + "\n",
 	}
-	err := ValidateBuildRequest(req)
-	if err == nil || !strings.Contains(err.Error(), "TOOLFUNCTIONSPEC") {
-		t.Fatalf("ValidateBuildRequest error got %v, want unsupported ToolFunctionSpec rejection", err)
+	if err := ValidateBuildRequest(req); err != nil {
+		t.Fatalf("ValidateBuildRequest(kind=2) got %v, want admit", err)
+	}
+}
+
+// W3: a ToolFunction build request is still rejected fail-closed if its base image
+// digest is malformed or its build recipe is empty.
+func TestValidateBuildRequest_ToolFunctionSpecFailClosed(t *testing.T) {
+	cases := map[string]*nfv1.BuildRequest{
+		"bad base digest": {
+			Kind:              nfv1.BuildKind_BUILD_KIND_TOOLFUNCTIONSPEC,
+			BaseImageDigest:   "not-a-digest",
+			DockerfileContent: "FROM x@" + validDigestB + "\n",
+		},
+		"empty recipe": {
+			Kind:            nfv1.BuildKind_BUILD_KIND_TOOLFUNCTIONSPEC,
+			BaseImageDigest: validDigestB,
+		},
+	}
+	for name, req := range cases {
+		t.Run(name, func(t *testing.T) {
+			if err := ValidateBuildRequest(req); err == nil {
+				t.Fatalf("ValidateBuildRequest(%s) got nil, want fail-closed", name)
+			}
+		})
 	}
 }
 

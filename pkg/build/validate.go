@@ -30,12 +30,30 @@ func ValidateBuildRequest(req *nfv1.BuildRequest) error {
 	}
 	switch req.GetKind() {
 	case nfv1.BuildKind_BUILD_KIND_TOOLFUNCTIONSPEC:
-		return errors.New("BUILD_KIND_TOOLFUNCTIONSPEC is not supported by the Dockerfile build path")
+		return validateToolFunctionBuildRequest(req)
 	case nfv1.BuildKind_BUILD_KIND_UNSPECIFIED, nfv1.BuildKind_BUILD_KIND_TOOLSPEC:
 		return validateToolSpecBuildRequest(req)
 	default:
 		return fmt.Errorf("unsupported build kind: %v", req.GetKind())
 	}
+}
+
+// validateToolFunctionBuildRequest is the W3 admission gate for a second-image
+// function build (kind=2). The v1 raw_spec fields (kind=2, exact base image
+// digest, non-empty script) were already validated by the frozen
+// resolve.ParseRawSpecV1 parse; this validates the internal build request
+// NodeVault assembled from them. The client-facing runtime-tools Dockerfile policy
+// deliberately does NOT apply: the Dockerfile is NodeVault-generated (not
+// client-supplied) and a function script may legitimately reference tools; the
+// script is baked in via COPY, not executed as a final-stage RUN.
+func validateToolFunctionBuildRequest(req *nfv1.BuildRequest) error {
+	if !resolve.IsSHA256Digest(req.GetBaseImageDigest()) {
+		return errors.New("base_image_digest must match sha256:<64 hex chars>")
+	}
+	if strings.TrimSpace(req.GetDockerfileContent()) == "" {
+		return errors.New("function image build recipe is required")
+	}
+	return nil
 }
 
 func validateToolSpecBuildRequest(req *nfv1.BuildRequest) error {

@@ -44,9 +44,23 @@ func (s *Service) SubmitToolBuild(
 	if _, provErr := resolve.EffectiveProvenance(spec.RawSpecSchemaVersion, spec.DerivationVersion); provErr != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "resolved tool spec provenance: %v", provErr)
 	}
-	buildReq, err := buildRequestFromResolved(req.GetRequestId(), spec)
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "resolved tool spec is not buildable: %v", err)
+	// W3: a resolved record whose frozen provenance is the v1 build contract
+	// (nodevault.build.raw_spec.v1, kind=2) takes the second-image ToolFunction
+	// build path; every other (legacy first-image) record takes the existing
+	// ToolSpec Dockerfile path. Base-image resolution for the function path fails
+	// closed here — before any build state is created — if the exact base locator
+	// is missing/mismatched.
+	var buildReq *nfv1.BuildRequest
+	if spec.RawSpecSchemaVersion == resolve.SchemaBuildV1 {
+		buildReq, err = s.functionBuildRequestFromResolved(req.GetRequestId(), spec)
+		if err != nil {
+			return nil, status.Errorf(codes.FailedPrecondition, "function build not admissible: %v", err)
+		}
+	} else {
+		buildReq, err = buildRequestFromResolved(req.GetRequestId(), spec)
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "resolved tool spec is not buildable: %v", err)
+		}
 	}
 	if err = ValidateBuildRequest(buildReq); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "resolved tool spec failed build policy: %v", err)
@@ -256,7 +270,17 @@ func (s *Service) runSubmittedBuild(
 		s.failSubmittedBuild(rec, errors.New("build backend unavailable"))
 		return
 	}
-	destination, isVersioned := primaryBuildDestination(req.GetToolName(), req.GetVersion())
+	isFunctionBuild := req.GetKind() == nfv1.BuildKind_BUILD_KIND_TOOLFUNCTIONSPEC
+	var destination string
+	var isVersioned bool
+	if isFunctionBuild {
+		// A function image is pushed to a distinct :toolfn-<digest> locator so it can
+		// never overwrite the base tool's tags; its authoritative identity is the
+		// recorded function_image_digest.
+		destination = functionDestination(req.GetToolName(), rec.ToolSpecDigest)
+	} else {
+		destination, isVersioned = primaryBuildDestination(req.GetToolName(), req.GetVersion())
+	}
 	_, digest, layerCacheHit, err := s.builder.Build(ctx, req.GetDockerfileContent(), destination)
 	if err != nil {
 		s.failSubmittedBuild(rec, err)
@@ -271,6 +295,17 @@ func (s *Service) runSubmittedBuild(
 		slog.Warn("buildstate set artifact failed", "build_id", rec.BuildID, "err", err)
 	}
 	s.recordBuildSuccess(rec.BuildID, rec.RequestedAt, digest, destination, layerCacheHit)
+
+	if isFunctionBuild {
+		// W3 boundary: the function image is built, pushed, and its exact
+		// function_image_digest + locator are recorded (recordBuildSuccess /
+		// SetArtifact above). It is deliberately NOT registered as a runnable
+		// ToolFunction and gets no :latest alias — typed RegisterToolFunction (W4)
+		// is the separate step that combines the declaration digest with this image
+		// digest into the final casHash.
+		s.finalizeSubmittedBuild(rec, "succeeding", buildstate.StatusSucceeded, "")
+		return
+	}
 
 	logFn := func(msg string) { slog.Info("submitted build", "build_id", rec.BuildID, "msg", msg) }
 	if isVersioned {

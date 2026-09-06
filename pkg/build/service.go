@@ -184,11 +184,16 @@ func (s *Service) recordBuildFailure(buildID string, startedAt time.Time, buildE
 }
 
 // recordBuildSuccess persists a successful ToolBuildRecord and the corresponding
-// ToolImageRecord to the index, if a Store is wired. Best-effort: a recording
-// failure is logged but never fails the RPC — the image has already been pushed.
-func (s *Service) recordBuildSuccess(buildID string, startedAt time.Time, digest, imageRef string, layerCacheHit bool) {
+// ToolImageRecord (the authoritative digest->repository locator). It returns the
+// ToolImageRecord persistence error, if any: that record is the only durable
+// digest->locator mapping for a function build (which skips registration), so its
+// caller must be able to fail the build rather than report success without a
+// recoverable pull locator. A ToolBuildRecord (audit) write failure is logged only.
+func (s *Service) recordBuildSuccess(
+	buildID string, startedAt time.Time, digest, imageRef string, layerCacheHit bool,
+) error {
 	if s.indexStore == nil {
-		return
+		return nil
 	}
 	completedAt := time.Now().UTC()
 	rec := index.ToolBuildRecord{
@@ -212,7 +217,9 @@ func (s *Service) recordBuildSuccess(buildID string, startedAt time.Time, digest
 	}
 	if err := s.indexStore.AppendToolImageRecord(img); err != nil {
 		slog.Warn("index: failed to record ToolImageRecord", "build_id", buildID, "image_digest", digest, "err", err)
+		return fmt.Errorf("record tool image (digest->locator): %w", err)
 	}
+	return nil
 }
 
 // postBuildRegistration performs tool registration, spec referrer push, and

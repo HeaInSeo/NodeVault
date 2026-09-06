@@ -655,8 +655,21 @@ func (s *Store) AppendToolImageRecord(r ToolImageRecord) error {
 	if r.PushedAt.IsZero() {
 		r.PushedAt = time.Now().UTC()
 	}
+	imgLen := len(s.idx.ToolImageRecords)
 	s.idx.ToolImageRecords = append(s.idx.ToolImageRecords, r)
-	return s.save()
+	if err := s.save(); err != nil {
+		// A failed PRE-RENAME persist must leave no in-memory trace: otherwise
+		// GetLatestToolImageRecordByDigest (or the other digest/ref lookups) could serve
+		// a never-persisted record as an authoritative digest->locator mapping. But a
+		// POST-RENAME durability failure already wrote the record to disk, so rolling
+		// memory back would diverge memory from disk and let a later save() overwrite the
+		// committed file with the stale index — keep it and only surface the error.
+		if !errors.Is(err, errIndexPersistedNotDurable) {
+			s.idx.ToolImageRecords = s.idx.ToolImageRecords[:imgLen]
+		}
+		return err
+	}
+	return nil
 }
 
 // GetToolImageRecordByDigest returns the image record with the given ImageDigest.
@@ -673,18 +686,43 @@ func (s *Store) GetToolImageRecordByDigest(imageDigest string) (ToolImageRecord,
 	return ToolImageRecord{}, fmt.Errorf("%w: image_digest=%q", ErrNotFound, imageDigest)
 }
 
+// GetLatestToolImageRecordByDigest returns the most recently pushed
+// ToolImageRecord with the given ImageDigest. The store permits the same digest
+// across multiple build IDs (the same image content recorded by successive builds,
+// possibly under different locators); the earliest such record can point at a
+// repository whose manifest has since been garbage-collected, so a caller that
+// needs a live locator to pull from must prefer the most recent record rather than
+// the first inserted (which GetToolImageRecordByDigest returns). Returns
+// ErrNotFound if no record has this digest.
+func (s *Store) GetLatestToolImageRecordByDigest(imageDigest string) (ToolImageRecord, error) {
+	return s.latestToolImageRecord(
+		func(r ToolImageRecord) bool { return r.ImageDigest == imageDigest },
+		"image_digest", imageDigest)
+}
+
 // GetLatestToolImageRecordByRef returns the most recently pushed ToolImageRecord
 // whose ImageRef equals ref (multiple builds can share the same tag — e.g. a
 // version tag reused across rebuilds, or :latest across any tool version).
 // Returns ErrNotFound if no record has this ref.
 func (s *Store) GetLatestToolImageRecordByRef(ref string) (ToolImageRecord, error) {
+	return s.latestToolImageRecord(
+		func(r ToolImageRecord) bool { return r.ImageRef == ref },
+		"image_ref", ref)
+}
+
+// latestToolImageRecord returns the most recently pushed (by PushedAt)
+// ToolImageRecord matching pred, or ErrNotFound (qualified by keyName=keyVal) if
+// none match. Shared by the digest- and ref-keyed latest-record lookups.
+func (s *Store) latestToolImageRecord(
+	pred func(ToolImageRecord) bool, keyName, keyVal string,
+) (ToolImageRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var latest ToolImageRecord
 	found := false
 	for i := range s.idx.ToolImageRecords {
-		if s.idx.ToolImageRecords[i].ImageRef != ref {
+		if !pred(s.idx.ToolImageRecords[i]) {
 			continue
 		}
 		if !found || s.idx.ToolImageRecords[i].PushedAt.After(latest.PushedAt) {
@@ -693,7 +731,7 @@ func (s *Store) GetLatestToolImageRecordByRef(ref string) (ToolImageRecord, erro
 		}
 	}
 	if !found {
-		return ToolImageRecord{}, fmt.Errorf("%w: image_ref=%q", ErrNotFound, ref)
+		return ToolImageRecord{}, fmt.Errorf("%w: %s=%q", ErrNotFound, keyName, keyVal)
 	}
 	return latest, nil
 }

@@ -96,8 +96,8 @@
 
 **결정**
 
-- 현재 NodeVault Dockerfile build path는 `BUILD_KIND_UNSPECIFIED`(legacy compatibility)와 `BUILD_KIND_TOOLSPEC`만 지원한다.
-- `BUILD_KIND_TOOLFUNCTIONSPEC`은 proto/API 모델에는 존재하지만, function-image builder가 생기기 전까지 `ValidateBuildRequest`에서 명시적으로 거부한다.
+- NodeVault Dockerfile build path는 `BUILD_KIND_UNSPECIFIED`(legacy compatibility)와 `BUILD_KIND_TOOLSPEC`를 지원한다.
+- `BUILD_KIND_TOOLFUNCTIONSPEC`은 W3(#19)부터 frozen `nodevault.build.raw_spec.v1` contract(`base_image_digest` + `script`) 기반 function-image builder로 `ValidateBuildRequest`/`SubmitToolBuild`에서 지원된다(base는 `ToolImageRecord` exact locator로 해석, exact digest pull, `function_image_digest` 기록, 자동 ToolFunction 등록 없음 — W4가 별도). (proto `BuildRequest` 주석은 no-proto-change 펜스 때문에 W3에서 갱신하지 않았고, staleness는 중앙에 보고함.)
 - `ResolveToolSpec`은 raw spec digest/index 생성 단계다. Dockerfile rewrite, package pin rewrite, base image ref rewrite를 수행하지 않는다.
 - NodeVault final gate는 Go native validator를 기준 구현으로 유지한다. DockGuard WASM 직접 실행은 정책 drift를 줄이기 위한 별도 후속 이슈 [#17](https://github.com/HeaInSeo/NodeVault/issues/17)로 분리한다.
 

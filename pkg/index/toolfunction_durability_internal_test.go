@@ -197,3 +197,29 @@ func TestRegisterToolFunctionAtomic_ReplaySafeAcrossRestart(t *testing.T) {
 		t.Fatalf("replay returned wrong record: %+v", stored)
 	}
 }
+
+// TestAppendToolImageRecord_PostRenameDurabilityKeepsRecord mirrors the post-rename
+// durability contract for the ToolImageRecord path (the digest->locator mapping the W3
+// function base resolution relies on): a failure AFTER os.Rename already wrote the record
+// to disk must NOT roll the in-memory append back, or memory would diverge from disk and a
+// later save() would drop the committed record.
+func TestAppendToolImageRecord_PostRenameDurabilityKeepsRecord(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewAt(dir)
+	if err != nil {
+		t.Fatalf("NewAt: %v", err)
+	}
+	failAfterRenameForTest = func() error { return errors.New("simulated post-rename dir fsync failure") }
+	t.Cleanup(func() { failAfterRenameForTest = nil })
+	err = s.AppendToolImageRecord(ToolImageRecord{ImageDigest: "sha256:img", ImageRef: "reg/repo:tag", BuildID: "b"})
+	if err == nil {
+		t.Fatal("expected a durability error for the post-rename failure")
+	}
+	if !errors.Is(err, errIndexPersistedNotDurable) {
+		t.Fatalf("post-rename failure must be tagged errIndexPersistedNotDurable, got %v", err)
+	}
+	failAfterRenameForTest = nil
+	if _, e := s.GetLatestToolImageRecordByDigest("sha256:img"); e != nil {
+		t.Fatalf("record rolled out of memory after a post-rename failure (memory/disk divergence): %v", e)
+	}
+}

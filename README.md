@@ -180,6 +180,7 @@ SQLite 파일 포맷은 플랫폼 외부 계약이 아니다. 장기적으로 No
 | `DATA_CATALOG_DIR` | `assets/data-catalog` | data CAS 파일 저장 디렉토리 |
 | `INDEX_DIR` | `assets/index` | vault-index.json 저장 디렉토리 |
 | `KUBECONFIG` | `~/.kube/config` | 로컬 compatibility/테스트 경로에서만 사용; Pod는 ServiceAccount 사용 |
+| `NODEVAULT_GRPC_SHARED_SECRET` | — (비활성) | 설정 시 gRPC 서버(모든 RPC) + webhook/validation REST 서버에 공유 비밀 토큰 인증을 요구한다. gRPC는 `x-nodevault-token` 메타데이터, REST는 `X-NodeVault-Token` 헤더. 미설정 시 완전 무인증(현재 기본값) — 활성화 전 `pkg/grpcauth` 패키지 주석 참조: 모든 클라이언트(NodeKit, NodeSentinel, Harbor webhook 설정)가 토큰을 보내도록 먼저 갱신해야 한다. |
 
 ---
 

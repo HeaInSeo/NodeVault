@@ -25,7 +25,8 @@
     "script": {
       "type": "string",
       "minLength": 1,
-      "description": "The ToolFunction build script source content. Identity-bearing; must be non-empty."
+      "pattern": "\\S",
+      "description": "The ToolFunction build script source content. Identity-bearing; must contain at least one non-whitespace character (matches the runtime parser, which rejects a blank/whitespace-only script)."
     }
   }
 }

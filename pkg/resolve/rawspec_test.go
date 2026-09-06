@@ -120,6 +120,7 @@ func TestParseRawSpecV1_Rejects(t *testing.T) {
 		"unknown field":          `{"schema_version":"nodevault.build.raw_spec.v1","kind":2,"base_image_digest":"sha256:` + hex64 + `","script":"x","extra":true}`,
 		"invalid base digest":    `{"schema_version":"nodevault.build.raw_spec.v1","kind":2,"base_image_digest":"notadigest","script":"x"}`,
 		"empty script":           `{"schema_version":"nodevault.build.raw_spec.v1","kind":2,"base_image_digest":"sha256:` + hex64 + `","script":""}`,
+		"whitespace-only script": `{"schema_version":"nodevault.build.raw_spec.v1","kind":2,"base_image_digest":"sha256:` + hex64 + `","script":"   "}`,
 		"trailing content":       `{"schema_version":"nodevault.build.raw_spec.v1","kind":2,"base_image_digest":"sha256:` + hex64 + `","script":"x"}{}`,
 		"missing script":         `{"schema_version":"nodevault.build.raw_spec.v1","kind":2,"base_image_digest":"sha256:` + hex64 + `"}`,
 	}

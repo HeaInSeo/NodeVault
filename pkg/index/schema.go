@@ -597,6 +597,8 @@ type ToolFunctionRequestRecord struct {
 // schemaVersion 4 adds ValidationRequestRecords.
 // schemaVersion 5 adds RegisteredToolFunctions, ToolFunctionPresentationRevisions,
 // and ToolFunctionRequestRecords (issue #19 W2 RegisterToolFunction).
+// schemaVersion 6 adds ResolvedToolSpec.RawSpecSchemaVersion + DerivationVersion
+// (W3-PRE raw_spec schema authority & frozen derivation provenance).
 type indexFile struct {
 	SchemaVersion int     `json:"schema_version"`
 	Entries       []Entry `json:"entries"`

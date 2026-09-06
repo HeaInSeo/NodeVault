@@ -96,6 +96,16 @@ func (s *Service) ResolveToolSpec(
 		return nil, status.Errorf(codes.Internal, "resolved tool spec append: %v", err)
 	}
 
+	// W3-PRE: enforce that the resolved record's frozen provenance is interpretable before it
+	// is returned/consumed, so an unknown schema/derivation fails closed rather than being
+	// served under the current parser. A fresh record has known provenance; an idempotent hit
+	// on a record carrying an unknown derivation (e.g. written by a different binary) is
+	// rejected. Absent provenance (pre-W3-PRE records) maps to the historical legacy-v0 /
+	// resolve-v1 derivation and passes.
+	if _, provErr := resolve.EffectiveProvenance(stored.RawSpecSchemaVersion, stored.DerivationVersion); provErr != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "resolved tool spec provenance: %v", provErr)
+	}
+
 	return &nfv1.ResolvedToolSpecResponse{
 		ToolSpecDigest: stored.ToolSpecDigest,
 		ToolName:       stored.ToolName,

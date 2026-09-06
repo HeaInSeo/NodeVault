@@ -1002,7 +1002,7 @@ func TestNewIndex_StampsCurrentSchemaVersion(t *testing.T) {
 	if err := json.Unmarshal(data, &stamped); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	const wantSchemaVersion = 5 // bump alongside indexFile's doc comment in schema.go
+	const wantSchemaVersion = 6 // bump alongside indexFile's doc comment in schema.go
 	if stamped.SchemaVersion != wantSchemaVersion {
 		t.Errorf("stamped schema_version = %d, want %d", stamped.SchemaVersion, wantSchemaVersion)
 	}

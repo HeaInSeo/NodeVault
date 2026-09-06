@@ -150,6 +150,8 @@ func TestParseRawSpecV1_Rejects(t *testing.T) {
 		"unknown field":          `{"schema_version":"nodevault.build.raw_spec.v1","kind":2,"base_image_digest":"sha256:` + hex64 + `","script":"x","extra":true}`,
 		"non-integer kind":       `{"schema_version":"nodevault.build.raw_spec.v1","kind":2.5,"base_image_digest":"sha256:` + hex64 + `","script":"x"}`,
 		"string kind":            `{"schema_version":"nodevault.build.raw_spec.v1","kind":"2","base_image_digest":"sha256:` + hex64 + `","script":"x"}`,
+		"near-2 kind (high)":     `{"schema_version":"nodevault.build.raw_spec.v1","kind":2.0000000000000001,"base_image_digest":"sha256:` + hex64 + `","script":"x"}`,
+		"near-2 kind (low)":      `{"schema_version":"nodevault.build.raw_spec.v1","kind":1.99999999999999999,"base_image_digest":"sha256:` + hex64 + `","script":"x"}`,
 		"invalid base digest":    `{"schema_version":"nodevault.build.raw_spec.v1","kind":2,"base_image_digest":"notadigest","script":"x"}`,
 		"empty script":           `{"schema_version":"nodevault.build.raw_spec.v1","kind":2,"base_image_digest":"sha256:` + hex64 + `","script":""}`,
 		"whitespace-only script": `{"schema_version":"nodevault.build.raw_spec.v1","kind":2,"base_image_digest":"sha256:` + hex64 + `","script":"   "}`,

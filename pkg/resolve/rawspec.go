@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"strings"
 )
 
@@ -131,17 +132,17 @@ func ParseRawSpecV1(rawSpec string) (RawSpecV1, error) {
 		return RawSpecV1{}, fmt.Errorf("v1 raw_spec schema_version must be %q, got %q", SchemaBuildV1, w.SchemaVersion)
 	}
 	// Accept any schema-valid representation of the integer BUILD_KIND_TOOLFUNCTIONSPEC (2, 2.0,
-	// 2e0 …); reject a missing kind, a JSON string ("2"), and any non-2 or non-numeric value
-	// (1, 2.5, true, null). The leading-quote guard is required because encoding/json accepts a
-	// quoted number string into a json.Number, which the schema (integer type) does not admit.
+	// 2e0 …) using EXACT rational arithmetic — never float64, which would round a nearby non-2
+	// value such as 2.0000000000000001 to exactly 2 and admit a schema-invalid document into the
+	// kind-2 identity. Reject a missing kind, a JSON string ("2"), and any non-2 or non-numeric
+	// value (1, 2.5, true, null). encoding/json already validated w.Kind is a well-formed JSON
+	// value, so big.Rat.SetString here only ever parses a decimal/scientific JSON number; the
+	// leading-quote guard makes the JSON-string rejection explicit (SetString would fail on it
+	// regardless). Evaluation order keeps kindRat.Cmp after the "" / quote / !ok short-circuits.
 	kindRaw := strings.TrimSpace(string(w.Kind))
-	var kindNum json.Number
-	if kindRaw == "" || kindRaw[0] == '"' || json.Unmarshal([]byte(kindRaw), &kindNum) != nil {
-		return RawSpecV1{}, fmt.Errorf(
-			"v1 raw_spec kind must be the integer %d (BUILD_KIND_TOOLFUNCTIONSPEC), got %s", buildKindToolFunctionSpec, kindRaw)
-	}
-	kindF, err := kindNum.Float64()
-	if err != nil || kindF != float64(buildKindToolFunctionSpec) {
+	kindRat, ok := new(big.Rat).SetString(kindRaw)
+	if kindRaw == "" || kindRaw[0] == '"' || !ok ||
+		kindRat.Cmp(big.NewRat(int64(buildKindToolFunctionSpec), 1)) != 0 {
 		return RawSpecV1{}, fmt.Errorf(
 			"v1 raw_spec kind must be the integer %d (BUILD_KIND_TOOLFUNCTIONSPEC), got %s", buildKindToolFunctionSpec, kindRaw)
 	}

@@ -78,12 +78,14 @@ func (s *Service) functionBuildRequestFromResolved(
 // the script's own hash so it cannot collide with the script content.
 //
 // The rendering is a pure function of (baseRef, baseDigest, script): an identical
-// function spec yields an identical build recipe and a script change changes the
-// recipe. The baked file is normalized to end with exactly one newline — Buildah's
-// heredoc COPY always writes a trailing newline, so the recipe honestly reflects
-// that rather than claiming byte-identical output for a script that lacks one.
-// (Reproducibility still holds; distinct v1 scripts still resolve to distinct
-// tool_spec_digests and therefore distinct :toolfn-<digest> destinations.)
+// function spec yields an identical build recipe and any script change changes it.
+// Buildah's heredoc COPY normalizes the BAKED file's line endings (strips CR, adds
+// a trailing newline), so the baked /nodevault/function/source is not guaranteed
+// byte-identical to the source; a source-sha256 label over the exact bytes makes
+// any byte-level difference (CRLF vs LF, trailing newline) still produce a distinct
+// image, so distinct declared scripts never collide onto one function image. Exact
+// baked-byte fidelity matters only for script execution, which W3 does not perform
+// (nan/N-track).
 func renderFunctionDockerfile(baseRef, baseDigest, script string) (string, error) {
 	base := baseImageByDigest(baseRef, baseDigest)
 	sum := sha256.Sum256([]byte(script))
@@ -97,6 +99,15 @@ func renderFunctionDockerfile(baseRef, baseDigest, script string) (string, error
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "FROM %s\n", base)
+	// Bind the image to the EXACT script bytes via a label over their sha256. The
+	// heredoc COPY below normalizes the baked file's line endings (Buildah's parser
+	// strips CR and adds a trailing newline), so two byte-different scripts (e.g.
+	// CRLF vs LF, or with/without a trailing newline) could otherwise build the same
+	// image; this label makes any byte-level difference produce a distinct image
+	// config and therefore a distinct function_image_digest, so distinct declared
+	// scripts never collide onto one function image. (Script execution semantics,
+	// where the baked bytes would matter, are out of W3 scope — nan/N-track.)
+	fmt.Fprintf(&b, "LABEL io.nodevault.function.source-sha256=%q\n", hex.EncodeToString(sum[:]))
 	fmt.Fprintf(&b, "COPY <<'%s' %s\n", marker, functionScriptPath)
 	b.WriteString(script)
 	if !strings.HasSuffix(script, "\n") {

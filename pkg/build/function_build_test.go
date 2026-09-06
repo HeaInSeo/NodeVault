@@ -225,3 +225,24 @@ func TestBuildRequestFromResolved_RejectsLegacyKind2(t *testing.T) {
 		t.Fatal("legacy raw_spec declaring kind=2 must be rejected on the legacy path")
 	}
 }
+
+// W3: any byte-level script difference (e.g. CRLF vs LF) yields a distinct build
+// recipe via the source-sha256 label, so byte-different declared scripts never
+// collide onto one function image even though the heredoc normalizes the baked
+// file's line endings.
+func TestRenderFunctionDockerfile_ByteDifferencesDistinctRecipe(t *testing.T) {
+	lf, err := renderFunctionDockerfile("registry.example/library/x:latest", fnBaseDigest, "echo hi\n")
+	if err != nil {
+		t.Fatalf("lf: %v", err)
+	}
+	crlf, err := renderFunctionDockerfile("registry.example/library/x:latest", fnBaseDigest, "echo hi\r\n")
+	if err != nil {
+		t.Fatalf("crlf: %v", err)
+	}
+	if lf == crlf {
+		t.Fatal("CRLF vs LF scripts must produce distinct recipes (source-sha256 label)")
+	}
+	if !strings.Contains(lf, "io.nodevault.function.source-sha256=") {
+		t.Fatal("recipe must bind the exact source hash via a label")
+	}
+}

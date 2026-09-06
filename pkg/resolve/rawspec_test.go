@@ -7,9 +7,9 @@ import (
 
 const hex64 = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 
-func v1RawSpec(baseDigestHex, script string) string {
+func v1RawSpec(script string) string {
 	return `{"schema_version":"nodevault.build.raw_spec.v1","kind":2,` +
-		`"base_image_digest":"sha256:` + baseDigestHex + `","script":` + strconvQuote(script) + `}`
+		`"base_image_digest":"sha256:` + hex64 + `","script":` + strconvQuote(script) + `}`
 }
 
 // strconvQuote is a tiny JSON string quoter for test literals (avoids importing strconv just
@@ -70,7 +70,7 @@ func TestResolveRawSpec_LegacyByteForByte(t *testing.T) {
 // TestResolveRawSpec_V1Deterministic proves v1 parse+digest is invariant to key order,
 // insignificant whitespace, and base-digest hex case.
 func TestResolveRawSpec_V1Deterministic(t *testing.T) {
-	req := Request{ToolName: "fn", Version: "1", RawSpec: v1RawSpec(hex64, "#!/bin/sh\necho hi")}
+	req := Request{ToolName: "fn", Version: "1", RawSpec: v1RawSpec("#!/bin/sh\necho hi")}
 	base, prov, err := ResolveRawSpec(req, Context{})
 	if err != nil {
 		t.Fatalf("ResolveRawSpec(v1): %v", err)
@@ -100,7 +100,7 @@ func TestResolveRawSpec_V1Deterministic(t *testing.T) {
 // TestResolveRawSpec_V1DistinctFromLegacy proves a v1 raw_spec never collides with a legacy
 // one (schema_version + kind are in the identity content).
 func TestResolveRawSpec_V1DistinctFromLegacy(t *testing.T) {
-	v1, _, err := ResolveRawSpec(Request{ToolName: "fn", RawSpec: v1RawSpec(hex64, "x")}, Context{})
+	v1, _, err := ResolveRawSpec(Request{ToolName: "fn", RawSpec: v1RawSpec("x")}, Context{})
 	if err != nil {
 		t.Fatalf("v1: %v", err)
 	}
@@ -113,11 +113,43 @@ func TestResolveRawSpec_V1DistinctFromLegacy(t *testing.T) {
 	}
 }
 
+// TestParseRawSpecV1_AcceptsIntegerKindRepresentations proves the runtime parser accepts every
+// JSON representation the schema (draft 2020-12) treats as the integer 2 (2, 2.0, 2e0), matching
+// the machine-checkable contract, and that all such representations converge to one v1 identity
+// because kind is normalized to the enum int before digesting.
+func TestParseRawSpecV1_AcceptsIntegerKindRepresentations(t *testing.T) {
+	canonical, _, err := ResolveRawSpec(
+		Request{ToolName: "fn", RawSpec: v1RawSpec("x")}, Context{})
+	if err != nil {
+		t.Fatalf("kind 2 baseline: %v", err)
+	}
+	for _, kind := range []string{"2.0", "2e0", "2.0e0"} {
+		raw := `{"schema_version":"nodevault.build.raw_spec.v1","kind":` + kind +
+			`,"base_image_digest":"sha256:` + hex64 + `","script":"x"}`
+		v, err := ParseRawSpecV1(raw)
+		if err != nil {
+			t.Fatalf("kind %s must be accepted (schema admits it): %v", kind, err)
+		}
+		if v.Kind != 2 {
+			t.Fatalf("kind %s normalized to %d, want 2", kind, v.Kind)
+		}
+		got, _, err := ResolveRawSpec(Request{ToolName: "fn", RawSpec: raw}, Context{})
+		if err != nil {
+			t.Fatalf("kind %s resolve: %v", kind, err)
+		}
+		if got.ToolSpecDigest != canonical.ToolSpecDigest {
+			t.Fatalf("kind %s must yield the same v1 identity as kind 2", kind)
+		}
+	}
+}
+
 func TestParseRawSpecV1_Rejects(t *testing.T) {
 	cases := map[string]string{
 		"unknown schema_version": `{"schema_version":"nodevault.build.raw_spec.v2","kind":2,"base_image_digest":"sha256:` + hex64 + `","script":"x"}`,
 		"wrong kind":             `{"schema_version":"nodevault.build.raw_spec.v1","kind":1,"base_image_digest":"sha256:` + hex64 + `","script":"x"}`,
 		"unknown field":          `{"schema_version":"nodevault.build.raw_spec.v1","kind":2,"base_image_digest":"sha256:` + hex64 + `","script":"x","extra":true}`,
+		"non-integer kind":       `{"schema_version":"nodevault.build.raw_spec.v1","kind":2.5,"base_image_digest":"sha256:` + hex64 + `","script":"x"}`,
+		"string kind":            `{"schema_version":"nodevault.build.raw_spec.v1","kind":"2","base_image_digest":"sha256:` + hex64 + `","script":"x"}`,
 		"invalid base digest":    `{"schema_version":"nodevault.build.raw_spec.v1","kind":2,"base_image_digest":"notadigest","script":"x"}`,
 		"empty script":           `{"schema_version":"nodevault.build.raw_spec.v1","kind":2,"base_image_digest":"sha256:` + hex64 + `","script":""}`,
 		"whitespace-only script": `{"schema_version":"nodevault.build.raw_spec.v1","kind":2,"base_image_digest":"sha256:` + hex64 + `","script":"   "}`,
@@ -170,7 +202,7 @@ func TestEffectiveProvenance(t *testing.T) {
 // is DETECTED as v1 and rejected by the strict v1 parser (trailing-content check) on the
 // production ResolveRawSpec path — not misrouted to the legacy branch (adversarial P2).
 func TestResolveRawSpec_TrailingV1RoutesToStrictV1(t *testing.T) {
-	raw := v1RawSpec(hex64, "x") + "{}"
+	raw := v1RawSpec("x") + "{}"
 	if !IsV1RawSpec(raw) {
 		t.Fatal("a v1 document with trailing content must still be detected as a v1 candidate")
 	}

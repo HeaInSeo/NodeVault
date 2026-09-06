@@ -71,6 +71,18 @@ type RawSpecV1 struct {
 	Script          string `json:"script"`
 }
 
+// rawSpecV1Wire is the on-the-wire decode shape. kind is captured raw so the parser can accept
+// every JSON representation the schema treats as the integer 2 (draft 2020-12 integer equality:
+// 2, 2.0, 2e0 …) while still rejecting a JSON string like "2" — which encoding/json would
+// otherwise silently accept into a json.Number (or reject from a Go int), both diverging from
+// the machine-checkable schema. Reconciliation to the canonical int happens in the DTO below.
+type rawSpecV1Wire struct {
+	SchemaVersion   string          `json:"schema_version"`
+	Kind            json.RawMessage `json:"kind"`
+	BaseImageDigest string          `json:"base_image_digest"`
+	Script          string          `json:"script"`
+}
+
 // IsV1RawSpec reports whether rawSpec is a v1-schema CANDIDATE: a JSON object that carries a
 // schema_version field at all (any value). Detection is by field PRESENCE, not value, so a
 // document with a wrong/unknown schema_version is routed to strict v1 parsing and rejected
@@ -107,36 +119,51 @@ func DetectSchema(rawSpec string) string {
 func ParseRawSpecV1(rawSpec string) (RawSpecV1, error) {
 	dec := json.NewDecoder(strings.NewReader(rawSpec))
 	dec.DisallowUnknownFields()
-	var v RawSpecV1
-	if err := dec.Decode(&v); err != nil {
+	var w rawSpecV1Wire
+	if err := dec.Decode(&w); err != nil {
 		return RawSpecV1{}, fmt.Errorf("v1 raw_spec parse: %w", err)
 	}
 	// Reject trailing content after the single JSON document.
 	if _, err := dec.Token(); err != io.EOF {
 		return RawSpecV1{}, fmt.Errorf("v1 raw_spec has trailing content after the document")
 	}
-	if v.SchemaVersion != SchemaBuildV1 {
-		return RawSpecV1{}, fmt.Errorf("v1 raw_spec schema_version must be %q, got %q", SchemaBuildV1, v.SchemaVersion)
+	if w.SchemaVersion != SchemaBuildV1 {
+		return RawSpecV1{}, fmt.Errorf("v1 raw_spec schema_version must be %q, got %q", SchemaBuildV1, w.SchemaVersion)
 	}
-	if v.Kind != buildKindToolFunctionSpec {
+	// Accept any schema-valid representation of the integer BUILD_KIND_TOOLFUNCTIONSPEC (2, 2.0,
+	// 2e0 …); reject a missing kind, a JSON string ("2"), and any non-2 or non-numeric value
+	// (1, 2.5, true, null). The leading-quote guard is required because encoding/json accepts a
+	// quoted number string into a json.Number, which the schema (integer type) does not admit.
+	kindRaw := strings.TrimSpace(string(w.Kind))
+	var kindNum json.Number
+	if kindRaw == "" || kindRaw[0] == '"' || json.Unmarshal([]byte(kindRaw), &kindNum) != nil {
 		return RawSpecV1{}, fmt.Errorf(
-			"v1 raw_spec kind must be %d (BUILD_KIND_TOOLFUNCTIONSPEC), got %d", buildKindToolFunctionSpec, v.Kind)
+			"v1 raw_spec kind must be the integer %d (BUILD_KIND_TOOLFUNCTIONSPEC), got %s", buildKindToolFunctionSpec, kindRaw)
+	}
+	kindF, err := kindNum.Float64()
+	if err != nil || kindF != float64(buildKindToolFunctionSpec) {
+		return RawSpecV1{}, fmt.Errorf(
+			"v1 raw_spec kind must be the integer %d (BUILD_KIND_TOOLFUNCTIONSPEC), got %s", buildKindToolFunctionSpec, kindRaw)
 	}
 	// Reject surrounding whitespace: the schema pattern is exactly sha256:<64 hex> with no
 	// whitespace, so accept only that (IsSHA256Digest tolerates surrounding whitespace via its
 	// own TrimSpace, which would diverge from the machine-checkable schema).
-	if v.BaseImageDigest != strings.TrimSpace(v.BaseImageDigest) || !IsSHA256Digest(v.BaseImageDigest) {
+	if w.BaseImageDigest != strings.TrimSpace(w.BaseImageDigest) || !IsSHA256Digest(w.BaseImageDigest) {
 		return RawSpecV1{}, fmt.Errorf(
 			"v1 raw_spec base_image_digest must be exactly sha256:<64 hex chars> with no surrounding whitespace")
 	}
-	if strings.TrimSpace(v.Script) == "" {
+	if strings.TrimSpace(w.Script) == "" {
 		return RawSpecV1{}, fmt.Errorf("v1 raw_spec script must not be empty")
 	}
-	// Normalize the accepted digest hex to canonical lowercase before identity derivation so
-	// upper/lower spellings of the same digest converge to one v1 identity (no surrounding
-	// whitespace remains — it was rejected above).
-	v.BaseImageDigest = strings.ToLower(v.BaseImageDigest)
-	return v, nil
+	// Reconcile to the canonical DTO: kind normalized to the int enum value and the base digest
+	// to canonical lowercase, so representation variants of the same logical spec (kind 2/2.0,
+	// upper/lower hex) converge to one v1 identity.
+	return RawSpecV1{
+		SchemaVersion:   w.SchemaVersion,
+		Kind:            buildKindToolFunctionSpec,
+		BaseImageDigest: strings.ToLower(w.BaseImageDigest),
+		Script:          w.Script,
+	}, nil
 }
 
 // canonicalV1 renders the normalized v1 DTO as deterministic canonical JSON (struct field

@@ -14,6 +14,7 @@ import (
 
 	"github.com/HeaInSeo/NodeVault/pkg/catalog"
 	"github.com/HeaInSeo/NodeVault/pkg/index"
+	"github.com/HeaInSeo/NodeVault/pkg/resolve"
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
@@ -85,6 +86,43 @@ func mustRegisterTF(t *testing.T, svc *catalog.ToolRegistryService, req *nfv1.Re
 		t.Fatalf("RegisterToolFunction: %v", err)
 	}
 	return resp
+}
+
+// TestRegisterToolFunction_BaseProvenanceFailsClosed proves that a base ResolvedToolSpec whose
+// schema/derivation provenance is uninterpretable (half-populated or unknown) cannot have derived
+// ToolFunction lineage registered against it: the W3-PRE provenance guard fails closed at the
+// catalog consume site too — not only in SubmitToolBuild / ResolveToolSpec — with zero mutation.
+// A genuine both-absent (pre-W3-PRE) base stays valid and is exercised by the other tests.
+func TestRegisterToolFunction_BaseProvenanceFailsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		schema, deriv string
+	}{
+		{"half-populated schema only", resolve.SchemaBuildV1, ""},
+		{"half-populated derivation only", "", resolve.DerivationV1},
+		{"unknown schema", "nodevault.build.raw_spec.v99", resolve.DerivationV1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, store := newTFService(t)
+			anomalous := strings.Repeat("cd", 32)
+			if err := store.AppendResolvedToolSpec(index.ResolvedToolSpec{
+				ToolSpecDigest:       anomalous,
+				RawSpecSchemaVersion: tc.schema,
+				DerivationVersion:    tc.deriv,
+			}); err != nil {
+				t.Fatalf("seed anomalous base: %v", err)
+			}
+			req := validTFReq()
+			req.BaseToolSpecDigest = anomalous
+			if _, err := svc.RegisterToolFunction(context.Background(), req); status.Code(err) != codes.FailedPrecondition {
+				t.Fatalf("want FailedPrecondition on uninterpretable base provenance, got %v", err)
+			}
+			// Zero mutation: no ToolFunction request record may be persisted on the failure.
+			if _, gerr := store.GetToolFunctionRequestRecord(req.GetRequestId()); !errors.Is(gerr, index.ErrNotFound) {
+				t.Fatalf("no ToolFunction must be persisted on provenance failure, got %v", gerr)
+			}
+		})
+	}
 }
 
 func TestRegisterToolFunction_Success(t *testing.T) {

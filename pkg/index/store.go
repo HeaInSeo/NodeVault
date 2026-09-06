@@ -20,6 +20,11 @@ const (
 	// schemaVersion 5 adds RegisteredToolFunctions,
 	// ToolFunctionPresentationRevisions, and ToolFunctionRequestRecords
 	// (issue #19 W2 RegisterToolFunction).
+	// schemaVersion 6 adds ResolvedToolSpec.RawSpecSchemaVersion and
+	// ResolvedToolSpec.DerivationVersion (W3-PRE raw_spec schema authority). The bump makes
+	// this durable provenance actually durable: a rolled-back schema-5 binary refuses the file
+	// via load()'s version guard instead of silently dropping the provenance fields on its
+	// next save (which would defeat the frozen-derivation guarantee).
 	// Older files omit these fields; load() treats absent fields as empty slices.
 	//
 	// Every bump so far has been purely additive (new optional fields/sections
@@ -28,7 +33,7 @@ const (
 	// removes/renames/reinterprets a field instead of only adding one, this
 	// assumption breaks and load() must gain real per-version migration
 	// logic, not just a version check.
-	schemaVersion   = 5
+	schemaVersion   = 6
 	defaultIndexDir = "assets/index"
 	indexFileName   = "vault-index.json"
 )

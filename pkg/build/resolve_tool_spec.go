@@ -64,7 +64,10 @@ func (s *Service) ResolveToolSpec(
 		}
 	}
 
-	resolved, err := resolve.Resolve(resolve.Request{
+	// Schema-aware resolution (W3-PRE): legacy-v0 raw_spec resolves byte-for-byte as before;
+	// a v1 build raw_spec is strictly parsed/validated and identity-derived from its own
+	// schema-governed fields. Both return the frozen schema/derivation provenance.
+	resolved, prov, err := resolve.ResolveRawSpec(resolve.Request{
 		ToolName: req.GetToolName(),
 		Version:  req.GetVersion(),
 		RawSpec:  req.GetRawSpec(),
@@ -74,21 +77,33 @@ func (s *Service) ResolveToolSpec(
 	}
 
 	rec := index.ResolvedToolSpec{
-		ToolSpecDigest:     resolved.ToolSpecDigest,
-		ToolName:           req.GetToolName(),
-		Version:            req.GetVersion(),
-		RawSpec:            req.GetRawSpec(),
-		RecipeInputsDigest: resolved.RecipeInputsDigest,
-		BuildPlanDigest:    resolved.BuildPlanDigest,
-		BuilderIdentity:    resolved.BuilderIdentity,
-		BaseImageRef:       resolved.BaseImageRef,
-		BaseImageDigest:    resolved.BaseImageDigest,
-		ResolvedAt:         time.Now().UTC(),
+		ToolSpecDigest:       resolved.ToolSpecDigest,
+		ToolName:             req.GetToolName(),
+		Version:              req.GetVersion(),
+		RawSpec:              req.GetRawSpec(),
+		RecipeInputsDigest:   resolved.RecipeInputsDigest,
+		BuildPlanDigest:      resolved.BuildPlanDigest,
+		BuilderIdentity:      resolved.BuilderIdentity,
+		BaseImageRef:         resolved.BaseImageRef,
+		BaseImageDigest:      resolved.BaseImageDigest,
+		RawSpecSchemaVersion: prov.SchemaVersion,
+		DerivationVersion:    prov.DerivationVersion,
+		ResolvedAt:           time.Now().UTC(),
 	}
 
 	stored, err := s.indexStore.UpsertResolvedToolSpec(rec)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "resolved tool spec append: %v", err)
+	}
+
+	// W3-PRE: enforce that the resolved record's frozen provenance is interpretable before it
+	// is returned/consumed, so an unknown schema/derivation fails closed rather than being
+	// served under the current parser. A fresh record has known provenance; an idempotent hit
+	// on a record carrying an unknown derivation (e.g. written by a different binary) is
+	// rejected. Absent provenance (pre-W3-PRE records) maps to the historical legacy-v0 /
+	// resolve-v1 derivation and passes.
+	if _, provErr := resolve.EffectiveProvenance(stored.RawSpecSchemaVersion, stored.DerivationVersion); provErr != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "resolved tool spec provenance: %v", provErr)
 	}
 
 	return &nfv1.ResolvedToolSpecResponse{

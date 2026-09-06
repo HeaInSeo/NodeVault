@@ -14,6 +14,7 @@ import (
 
 	"github.com/HeaInSeo/NodeVault/pkg/buildstate"
 	"github.com/HeaInSeo/NodeVault/pkg/index"
+	"github.com/HeaInSeo/NodeVault/pkg/resolve"
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
@@ -820,5 +821,27 @@ func TestSubmitToolBuild_BuilderPanic_RecoveredAsFailedBuild(t *testing.T) {
 	}
 	if !strings.Contains(got.FailureReason, "panicked") {
 		t.Errorf("FailureReason = %q, want it to mention the recovered panic", got.FailureReason)
+	}
+}
+
+// TestSubmitToolBuild_UnknownProvenanceFailsClosed proves SubmitToolBuild (a second consume
+// site of a stored resolved record) also fails closed when the record's frozen raw_spec
+// provenance is uninterpretable, so a build is never submitted under an unknown parser.
+func TestSubmitToolBuild_UnknownProvenanceFailsClosed(t *testing.T) {
+	s := newSubmitTestService(t)
+	if err := s.indexStore.AppendResolvedToolSpec(index.ResolvedToolSpec{
+		ToolSpecDigest:       "unknown-prov",
+		RawSpecSchemaVersion: resolve.SchemaBuildV1,
+		DerivationVersion:    "nodevault.resolve.v99", // unknown/newer derivation
+		RawSpec:              `{"tool_name":"x"}`,
+	}); err != nil {
+		t.Fatalf("seed unknown-provenance record: %v", err)
+	}
+	_, err := s.SubmitToolBuild(context.Background(), &nfv1.SubmitToolBuildRequest{
+		RequestId:      "r-unknown",
+		ToolSpecDigest: "unknown-prov",
+	})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("submit against unknown-provenance record must fail closed with FailedPrecondition, got %v", err)
 	}
 }

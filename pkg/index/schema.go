@@ -119,6 +119,13 @@ type ResolvedToolSpec struct {
 	BaseImageRef       string `json:"base_image_ref,omitempty"`
 	BaseImageDigest    string `json:"base_image_digest,omitempty"`
 
+	// W3-PRE (raw_spec schema authority): the frozen raw_spec schema id and resolver
+	// derivation id this record was resolved under. Additive/omitempty: records written
+	// before W3-PRE have neither and map to the historical legacy-v0 schema + resolve-v1
+	// derivation (see resolve.EffectiveProvenance); an unknown value fails closed on read.
+	RawSpecSchemaVersion string `json:"raw_spec_schema_version,omitempty"`
+	DerivationVersion    string `json:"derivation_version,omitempty"`
+
 	ResolvedAt time.Time `json:"resolved_at"`
 }
 
@@ -590,6 +597,8 @@ type ToolFunctionRequestRecord struct {
 // schemaVersion 4 adds ValidationRequestRecords.
 // schemaVersion 5 adds RegisteredToolFunctions, ToolFunctionPresentationRevisions,
 // and ToolFunctionRequestRecords (issue #19 W2 RegisterToolFunction).
+// schemaVersion 6 adds ResolvedToolSpec.RawSpecSchemaVersion + DerivationVersion
+// (W3-PRE raw_spec schema authority & frozen derivation provenance).
 type indexFile struct {
 	SchemaVersion int     `json:"schema_version"`
 	Entries       []Entry `json:"entries"`

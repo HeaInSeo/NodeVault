@@ -115,12 +115,23 @@ func (s *ToolRegistryService) RegisterToolFunction(
 	// Look up the normalized digest and fail closed with NotFound BEFORE computing or
 	// persisting any identity (zero mutation). (Scope is strictly existence — no lifecycle,
 	// tag/latest resolution, or eligibility re-evaluation.)
-	if _, err := s.store.GetResolvedToolSpecByDigest(baseToolSpecDigest); err != nil {
+	baseSpec, err := s.store.GetResolvedToolSpecByDigest(baseToolSpecDigest)
+	if err != nil {
 		if errors.Is(err, index.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound,
 				"base_tool_spec_digest %q does not resolve to a registered ResolvedToolSpec", baseToolSpecDigest)
 		}
 		return nil, status.Errorf(codes.Internal, "resolve base tool spec: %v", err)
+	}
+	// The base ResolvedToolSpec must be interpretable under the frozen schema/derivation
+	// provenance (W3-PRE) before its lineage is recorded into a new immutable ToolFunction:
+	// a half-populated or unknown provenance pair means NodeVault can no longer vouch for how
+	// that base was derived, so fail closed rather than persisting derived lineage against it
+	// (mirrors the SubmitToolBuild / ResolveToolSpec read-back guards — same shared record,
+	// same fail-closed contract at every consume site).
+	if _, provErr := resolve.EffectiveProvenance(
+		baseSpec.RawSpecSchemaVersion, baseSpec.DerivationVersion); provErr != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "base tool spec provenance: %v", provErr)
 	}
 
 	// NodeVault-owned identity (N3): canonical JSON + SHA256, over frozen preimages.

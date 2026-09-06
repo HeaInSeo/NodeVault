@@ -203,9 +203,9 @@ func tfRecordWithRev(casHash, toolFunctionDigest, imageDigest, revID string) ind
 	return r
 }
 
-// TestSave_StampsCurrentSchemaVersionOnUpgrade proves a pre-upgrade (v4) index file
-// that gains v5 ToolFunction sections is re-stamped to the current schema version, so
-// a rolled-back older binary refuses it instead of silently dropping the new sections.
+// TestSave_StampsCurrentSchemaVersionOnUpgrade proves a pre-upgrade (v4) index file is
+// re-stamped to the current schema version on save, so a rolled-back older binary refuses it
+// instead of silently dropping newer sections/fields it cannot represent.
 func TestSave_StampsCurrentSchemaVersionOnUpgrade(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "vault-index.json")
@@ -229,8 +229,8 @@ func TestSave_StampsCurrentSchemaVersionOnUpgrade(t *testing.T) {
 	if err := json.Unmarshal(data, &f); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if f.SchemaVersion != 5 {
-		t.Fatalf("upgraded file schema_version = %d, want 5", f.SchemaVersion)
+	if f.SchemaVersion != 6 {
+		t.Fatalf("upgraded file schema_version = %d, want 6 (current)", f.SchemaVersion)
 	}
 }
 

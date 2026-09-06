@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nodevault.toolspec.raw_spec.v0",
+  "title": "NodeVault legacy ToolSpec raw_spec (v0 compatibility)",
+  "description": "Machine-checkable governance artifact for the historical first-image ToolSpec raw_spec shape produced by NodeKit's raw_spec generator (docs/TOOL_CONTRACT_V0_2.md). It is a COMPATIBILITY schema: it documents the fields NodeVault derives identity from and does NOT tighten historical acceptance. Runtime resolution preserves legacy-v0 digests byte-for-byte; this schema must never be used to re-derive or reject an already-resolved legacy record.",
+  "type": "object",
+  "properties": {
+    "image_uri": {
+      "type": "string",
+      "description": "Base image reference; a pinned @sha256:<64hex> suffix is extracted as the base image digest. Unpinned refs yield an empty digest under legacy rules."
+    }
+  },
+  "additionalProperties": true
+}

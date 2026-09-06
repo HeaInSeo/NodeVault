@@ -184,9 +184,6 @@ func (s *Service) recordBuildFailure(buildID string, startedAt time.Time, buildE
 }
 
 // recordBuildSuccess persists a successful ToolBuildRecord and the corresponding
-// ToolImageRecord to the index, if a Store is wired. Best-effort: a recording
-// failure is logged but never fails the RPC — the image has already been pushed.
-// recordBuildSuccess persists a successful ToolBuildRecord and the corresponding
 // ToolImageRecord (the authoritative digest->repository locator). It returns the
 // ToolImageRecord persistence error, if any: that record is the only durable
 // digest->locator mapping for a function build (which skips registration), so its

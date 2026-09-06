@@ -656,7 +656,15 @@ func (s *Store) AppendToolImageRecord(r ToolImageRecord) error {
 		r.PushedAt = time.Now().UTC()
 	}
 	s.idx.ToolImageRecords = append(s.idx.ToolImageRecords, r)
-	return s.save()
+	if err := s.save(); err != nil {
+		// Roll back the in-memory append so a failed durable write does not leave a
+		// phantom record that a later lookup (e.g. GetLatestToolImageRecordByDigest)
+		// could treat as an authoritative digest->locator mapping. save() writes
+		// atomically (tmp + rename), so the on-disk index is unchanged on failure.
+		s.idx.ToolImageRecords = s.idx.ToolImageRecords[:len(s.idx.ToolImageRecords)-1]
+		return err
+	}
+	return nil
 }
 
 // GetToolImageRecordByDigest returns the image record with the given ImageDigest.

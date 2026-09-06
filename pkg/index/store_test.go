@@ -1701,3 +1701,30 @@ func TestLoad_SchemaVersionNewerThanBinary_Rejected(t *testing.T) {
 		t.Fatal("expected NewAt to return an error for a schema_version newer than this binary supports")
 	}
 }
+
+// A ToolImageRecord whose durable write fails must not linger in the in-memory
+// slice, where a later lookup could treat its locator as authoritative even though
+// it never persisted.
+func TestAppendToolImageRecord_RollsBackOnPersistFailure(t *testing.T) {
+	dir := t.TempDir()
+	s, err := index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("NewAt: %v", err)
+	}
+	// Removing the directory makes the atomic (tmp + rename) save fail.
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+	appendErr := s.AppendToolImageRecord(index.ToolImageRecord{
+		ImageDigest: "sha256:deadbeef", ImageRef: "reg/repo:tag", BuildID: "b1",
+	})
+	if appendErr == nil {
+		t.Fatal("expected a persistence error when the index directory is gone")
+	}
+	if _, getErr := s.GetToolImageRecordByDigest("sha256:deadbeef"); getErr == nil {
+		t.Fatal("a record whose durable write failed must not be returned by lookups")
+	}
+	if _, getErr := s.GetLatestToolImageRecordByDigest("sha256:deadbeef"); getErr == nil {
+		t.Fatal("a record whose durable write failed must not be returned by the latest lookup")
+	}
+}

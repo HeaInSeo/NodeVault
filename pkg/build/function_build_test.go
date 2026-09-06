@@ -176,8 +176,12 @@ func TestFunctionDestination_NamespacedAndDeterministic(t *testing.T) {
 	if d1 != d2 {
 		t.Fatal("function destination must be deterministic")
 	}
-	if !strings.Contains(d1, ":toolfn-") {
-		t.Fatalf("function destination must use the :toolfn- tag namespace; got %q", d1)
+	// Function images live in a dedicated per-tool repository segment that no
+	// ToolSpec build can target (ToolSpec destinations are library/<name>:<tag> and
+	// sanitizeName never emits a "/"), so a user version tag can never overwrite a
+	// function image.
+	if !strings.Contains(d1, "/library/bwa-fn/toolfn:") {
+		t.Fatalf("function destination must use the dedicated library/<tool>/toolfn repository; got %q", d1)
 	}
 	if strings.HasSuffix(d1, ":latest") {
 		t.Fatalf("function destination must not collide with the base tool :latest tag; got %q", d1)
@@ -244,5 +248,41 @@ func TestRenderFunctionDockerfile_ByteDifferencesDistinctRecipe(t *testing.T) {
 	}
 	if !strings.Contains(lf, "io.nodevault.function.source-sha256=") {
 		t.Fatal("recipe must bind the exact source hash via a label")
+	}
+}
+
+// W3: when the same base image digest is recorded by multiple builds (the store
+// permits duplicates), the function build resolves the base via the MOST RECENTLY
+// pushed record's locator — an older record may point at a garbage-collected
+// repository while a newer one is live.
+func TestFunctionBuildRequestFromResolved_UsesLatestLocator(t *testing.T) {
+	s := newFunctionBuildService(t)
+	if err := s.indexStore.AppendToolImageRecord(index.ToolImageRecord{
+		ImageDigest: fnBaseDigest, ImageRef: "registry.example:5000/library/stale:latest",
+		BuildID: "old-build", PushedAt: time.Unix(100, 0).UTC(),
+	}); err != nil {
+		t.Fatalf("append old: %v", err)
+	}
+	if err := s.indexStore.AppendToolImageRecord(index.ToolImageRecord{
+		ImageDigest: fnBaseDigest, ImageRef: "registry.example:5000/library/live:latest",
+		BuildID: "new-build", PushedAt: time.Unix(200, 0).UTC(),
+	}); err != nil {
+		t.Fatalf("append new: %v", err)
+	}
+	seedV1Spec(t, s, "fnspec-latest", "echo hi")
+	spec, err := s.indexStore.GetResolvedToolSpecByDigest("fnspec-latest")
+	if err != nil {
+		t.Fatalf("get spec: %v", err)
+	}
+	req, err := s.functionBuildRequestFromResolved("build-latest", spec)
+	if err != nil {
+		t.Fatalf("functionBuildRequestFromResolved: %v", err)
+	}
+	df := req.GetDockerfileContent()
+	if !strings.Contains(df, "FROM registry.example:5000/library/live@"+fnBaseDigest) {
+		t.Fatalf("must resolve base from the most recent locator; got:\n%s", df)
+	}
+	if strings.Contains(df, "/library/stale@") {
+		t.Fatalf("must not use the stale (older) locator; got:\n%s", df)
 	}
 }

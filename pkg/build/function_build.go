@@ -40,7 +40,10 @@ func (s *Service) functionBuildRequestFromResolved(
 	if err != nil {
 		return nil, fmt.Errorf("parse v1 raw_spec: %w", err)
 	}
-	baseRec, err := s.indexStore.GetToolImageRecordByDigest(v1.BaseImageDigest)
+	// Prefer the most recently pushed record for this digest: the store permits
+	// duplicate digests across builds, and an older record can point at a locator
+	// whose manifest was since garbage-collected while a newer one is live.
+	baseRec, err := s.indexStore.GetLatestToolImageRecordByDigest(v1.BaseImageDigest)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"base image %s does not resolve to a registered NodeVault tool image: %w", v1.BaseImageDigest, err)
@@ -139,8 +142,15 @@ func baseImageByDigest(imageRef, digest string) string {
 // namespaced with a distinct :toolfn-<digest> tag so a function image can never
 // overwrite the base tool's :latest/:version tags; the authoritative identity is
 // the recorded function_image_digest, not this locator tag.
+// functionDestination places a function image in a dedicated per-tool repository
+// segment (library/<tool>/toolfn) that no ToolSpec build can ever target: ToolSpec
+// destinations are always library/<sanitized-name>:<tag> and sanitizeName never
+// emits a "/", so this two-segment repository is reachable only by function builds.
+// That isolates function image tags from user-chosen version tags — even a ToolSpec
+// whose version were literally "toolfn-<digest>" pushes to library/<tool>:toolfn-...
+// (a different repository), preserving the non-overwrite guarantee.
 func functionDestination(toolName, toolSpecDigest string) string {
-	return fmt.Sprintf("%s/library/%s:toolfn-%s",
+	return fmt.Sprintf("%s/library/%s/toolfn:%s",
 		registryAddr(), sanitizeName(toolName), sanitizeTag(shortDigest(toolSpecDigest)))
 }
 

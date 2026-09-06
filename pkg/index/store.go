@@ -655,13 +655,18 @@ func (s *Store) AppendToolImageRecord(r ToolImageRecord) error {
 	if r.PushedAt.IsZero() {
 		r.PushedAt = time.Now().UTC()
 	}
+	imgLen := len(s.idx.ToolImageRecords)
 	s.idx.ToolImageRecords = append(s.idx.ToolImageRecords, r)
 	if err := s.save(); err != nil {
-		// Roll back the in-memory append so a failed durable write does not leave a
-		// phantom record that a later lookup (e.g. GetLatestToolImageRecordByDigest)
-		// could treat as an authoritative digest->locator mapping. save() writes
-		// atomically (tmp + rename), so the on-disk index is unchanged on failure.
-		s.idx.ToolImageRecords = s.idx.ToolImageRecords[:len(s.idx.ToolImageRecords)-1]
+		// A failed PRE-RENAME persist must leave no in-memory trace: otherwise
+		// GetLatestToolImageRecordByDigest (or the other digest/ref lookups) could serve
+		// a never-persisted record as an authoritative digest->locator mapping. But a
+		// POST-RENAME durability failure already wrote the record to disk, so rolling
+		// memory back would diverge memory from disk and let a later save() overwrite the
+		// committed file with the stale index — keep it and only surface the error.
+		if !errors.Is(err, errIndexPersistedNotDurable) {
+			s.idx.ToolImageRecords = s.idx.ToolImageRecords[:imgLen]
+		}
 		return err
 	}
 	return nil

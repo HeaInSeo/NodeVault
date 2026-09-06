@@ -78,8 +78,14 @@ type RawSpecV1 struct {
 // first-image raw_specs never carry schema_version, so they are unaffected and resolve
 // byte-for-byte as before.
 func IsV1RawSpec(rawSpec string) bool {
+	// Decode only the first JSON value and tolerate trailing bytes here: a v1 candidate with
+	// trailing content must still be DETECTED as v1 so ParseRawSpecV1 can reject it with the
+	// strict v1 trailing-content check, rather than being misrouted to the legacy branch.
+	// (json.Unmarshal would reject the trailing bytes itself and hide such a document as
+	// "not v1".)
+	dec := json.NewDecoder(strings.NewReader(strings.TrimSpace(rawSpec)))
 	var probe map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(strings.TrimSpace(rawSpec)), &probe); err != nil {
+	if err := dec.Decode(&probe); err != nil {
 		return false
 	}
 	_, present := probe["schema_version"]

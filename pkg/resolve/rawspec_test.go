@@ -156,3 +156,20 @@ func TestEffectiveProvenance(t *testing.T) {
 		t.Fatal("unknown derivation version must fail closed")
 	}
 }
+
+// TestResolveRawSpec_TrailingV1RoutesToStrictV1 proves a v1-candidate with trailing content
+// is DETECTED as v1 and rejected by the strict v1 parser (trailing-content check) on the
+// production ResolveRawSpec path — not misrouted to the legacy branch (adversarial P2).
+func TestResolveRawSpec_TrailingV1RoutesToStrictV1(t *testing.T) {
+	raw := v1RawSpec(hex64, "x") + "{}"
+	if !IsV1RawSpec(raw) {
+		t.Fatal("a v1 document with trailing content must still be detected as a v1 candidate")
+	}
+	_, _, err := ResolveRawSpec(Request{ToolName: "fn", RawSpec: raw}, Context{})
+	if err == nil {
+		t.Fatal("trailing-content v1 must be rejected")
+	}
+	if !strings.Contains(err.Error(), "trailing content") {
+		t.Fatalf("trailing-content v1 must be rejected by the strict v1 parser, got: %v", err)
+	}
+}

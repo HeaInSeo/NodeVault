@@ -121,6 +121,7 @@ func TestParseRawSpecV1_Rejects(t *testing.T) {
 		"invalid base digest":    `{"schema_version":"nodevault.build.raw_spec.v1","kind":2,"base_image_digest":"notadigest","script":"x"}`,
 		"empty script":           `{"schema_version":"nodevault.build.raw_spec.v1","kind":2,"base_image_digest":"sha256:` + hex64 + `","script":""}`,
 		"whitespace-only script": `{"schema_version":"nodevault.build.raw_spec.v1","kind":2,"base_image_digest":"sha256:` + hex64 + `","script":"   "}`,
+		"whitespace base digest": `{"schema_version":"nodevault.build.raw_spec.v1","kind":2,"base_image_digest":" sha256:` + hex64 + ` ","script":"x"}`,
 		"trailing content":       `{"schema_version":"nodevault.build.raw_spec.v1","kind":2,"base_image_digest":"sha256:` + hex64 + `","script":"x"}{}`,
 		"missing script":         `{"schema_version":"nodevault.build.raw_spec.v1","kind":2,"base_image_digest":"sha256:` + hex64 + `"}`,
 	}
@@ -155,6 +156,13 @@ func TestEffectiveProvenance(t *testing.T) {
 	}
 	if _, err := EffectiveProvenance(SchemaBuildV1, "nodevault.resolve.v99"); err == nil {
 		t.Fatal("unknown derivation version must fail closed")
+	}
+	// Half-populated provenance (exactly one present) is anomalous → fail closed, not legacy.
+	if _, err := EffectiveProvenance(SchemaBuildV1, ""); err == nil {
+		t.Fatal("half-populated provenance (schema only) must fail closed")
+	}
+	if _, err := EffectiveProvenance("", DerivationV1); err == nil {
+		t.Fatal("half-populated provenance (derivation only) must fail closed")
 	}
 }
 

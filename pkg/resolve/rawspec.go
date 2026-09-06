@@ -122,15 +122,20 @@ func ParseRawSpecV1(rawSpec string) (RawSpecV1, error) {
 		return RawSpecV1{}, fmt.Errorf(
 			"v1 raw_spec kind must be %d (BUILD_KIND_TOOLFUNCTIONSPEC), got %d", buildKindToolFunctionSpec, v.Kind)
 	}
-	if !IsSHA256Digest(v.BaseImageDigest) {
-		return RawSpecV1{}, fmt.Errorf("v1 raw_spec base_image_digest must match sha256:<64 hex chars>")
+	// Reject surrounding whitespace: the schema pattern is exactly sha256:<64 hex> with no
+	// whitespace, so accept only that (IsSHA256Digest tolerates surrounding whitespace via its
+	// own TrimSpace, which would diverge from the machine-checkable schema).
+	if v.BaseImageDigest != strings.TrimSpace(v.BaseImageDigest) || !IsSHA256Digest(v.BaseImageDigest) {
+		return RawSpecV1{}, fmt.Errorf(
+			"v1 raw_spec base_image_digest must be exactly sha256:<64 hex chars> with no surrounding whitespace")
 	}
 	if strings.TrimSpace(v.Script) == "" {
 		return RawSpecV1{}, fmt.Errorf("v1 raw_spec script must not be empty")
 	}
 	// Normalize the accepted digest hex to canonical lowercase before identity derivation so
-	// upper/lower spellings of the same digest converge to one v1 identity.
-	v.BaseImageDigest = strings.ToLower(strings.TrimSpace(v.BaseImageDigest))
+	// upper/lower spellings of the same digest converge to one v1 identity (no surrounding
+	// whitespace remains — it was rejected above).
+	v.BaseImageDigest = strings.ToLower(v.BaseImageDigest)
 	return v, nil
 }
 
@@ -205,10 +210,12 @@ func ResolveRawSpec(req Request, ctx Context) (Resolved, Provenance, error) {
 }
 
 // EffectiveProvenance maps a resolved record's stored provenance to its effective identity,
-// failing closed. Records written before W3-PRE have no stored provenance: they map ONLY to
-// the historical legacy-v0 schema + resolve-v1 derivation (no latest-parser fallback). A
-// stored but UNKNOWN schema/derivation (e.g. a newer writer) fails closed rather than being
-// reinterpreted under the current parser.
+// failing closed. A record has provenance either BOTH-absent (a genuine pre-W3-PRE record,
+// mapping only to the historical legacy-v0 schema + resolve-v1 derivation — no latest-parser
+// fallback) or BOTH-present (validated below). A half-populated record (exactly one of
+// schema/derivation set) is anomalous/uninterpretable and fails closed rather than being
+// assumed legacy. A stored but UNKNOWN schema/derivation (e.g. a newer writer) also fails
+// closed.
 func EffectiveProvenance(storedSchemaVersion, storedDerivationVersion string) (Provenance, error) {
 	schema := strings.TrimSpace(storedSchemaVersion)
 	derivation := strings.TrimSpace(storedDerivationVersion)
@@ -216,8 +223,10 @@ func EffectiveProvenance(storedSchemaVersion, storedDerivationVersion string) (P
 		// pre-W3-PRE record: historical legacy-v0 + resolve-v1 only.
 		return Provenance{SchemaVersion: SchemaLegacyV0, DerivationVersion: DerivationV1}, nil
 	}
-	if schema == "" {
-		schema = SchemaLegacyV0
+	if schema == "" || derivation == "" {
+		return Provenance{}, fmt.Errorf(
+			"half-populated raw_spec provenance (schema=%q derivation=%q); refusing to interpret (fail-closed)",
+			storedSchemaVersion, storedDerivationVersion)
 	}
 	if schema != SchemaLegacyV0 && schema != SchemaBuildV1 {
 		return Provenance{}, fmt.Errorf("unknown raw_spec schema version %q; refusing to reinterpret (fail-closed)", schema)

@@ -18,6 +18,7 @@ import (
 	"github.com/HeaInSeo/NodeVault/pkg/buildstate"
 	"github.com/HeaInSeo/NodeVault/pkg/index"
 	"github.com/HeaInSeo/NodeVault/pkg/metrics"
+	"github.com/HeaInSeo/NodeVault/pkg/resolve"
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
 )
 
@@ -36,6 +37,12 @@ func (s *Service) SubmitToolBuild(
 	spec, err := s.indexStore.GetResolvedToolSpecByDigest(req.GetToolSpecDigest())
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "resolved tool spec not found: %v", err)
+	}
+	// W3-PRE: a stored resolved record is only buildable if its frozen raw_spec provenance is
+	// interpretable by this binary. Fail closed on an unknown/half-populated schema/derivation
+	// (e.g. written by a different binary) rather than building under the current parser.
+	if _, provErr := resolve.EffectiveProvenance(spec.RawSpecSchemaVersion, spec.DerivationVersion); provErr != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "resolved tool spec provenance: %v", provErr)
 	}
 	buildReq, err := buildRequestFromResolved(req.GetRequestId(), spec)
 	if err != nil {

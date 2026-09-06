@@ -72,7 +72,7 @@ func (s *Service) SubmitToolBuild(
 		return nil, status.Errorf(codes.AlreadyExists, "create build state: %v", err)
 	}
 	if created {
-		s.startSubmittedBuild(rec, buildReq)
+		s.startSubmittedBuild(rec, buildReq, spec.RawSpecSchemaVersion == resolve.SchemaBuildV1)
 	}
 	return &nfv1.SubmitToolBuildResponse{
 		BuildId:        rec.BuildID,
@@ -214,6 +214,17 @@ func buildRequestFromResolved(buildID string, spec index.ResolvedToolSpec) (*nfv
 	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("decode raw_spec JSON: unexpected trailing content after the first JSON value")
 	}
+	// The function-build execution path is entered ONLY for the frozen v1 build
+	// contract (SchemaBuildV1), keyed off effective provenance by the caller. A
+	// legacy/compatibility raw_spec that happens to carry "kind":2 must not be able
+	// to reach the function path (bypassing exact base resolution) nor be admitted
+	// as a caller-supplied Dockerfile that skips the ToolSpec Dockerfile policy —
+	// reject it here.
+	if req.GetKind() == nfv1.BuildKind_BUILD_KIND_TOOLFUNCTIONSPEC {
+		return nil, errors.New(
+			"legacy raw_spec must not declare BUILD_KIND_TOOLFUNCTIONSPEC; " +
+				"the function build path is entered only for the frozen v1 build contract")
+	}
 	if req.GetDockerfileContent() == "" {
 		return nil, errors.New("dockerfile_content is required")
 	}
@@ -231,7 +242,7 @@ func buildRequestFromResolved(buildID string, spec index.ResolvedToolSpec) (*nfv
 }
 
 //nolint:gocritic // hugeParam: by-value snapshot is intentional — goroutine-safe, no shared mutation.
-func (s *Service) startSubmittedBuild(rec buildstate.Record, req *nfv1.BuildRequest) {
+func (s *Service) startSubmittedBuild(rec buildstate.Record, req *nfv1.BuildRequest, isFunctionBuild bool) {
 	ctx, cancel := context.WithCancel(context.Background())
 	entry := &activeBuild{cancel: cancel, done: make(chan struct{})}
 	s.activeMu.Lock()
@@ -240,7 +251,7 @@ func (s *Service) startSubmittedBuild(rec buildstate.Record, req *nfv1.BuildRequ
 	}
 	s.active[rec.BuildID] = entry
 	s.activeMu.Unlock()
-	go s.runSubmittedBuild(ctx, cancel, rec, req)
+	go s.runSubmittedBuild(ctx, cancel, rec, req, isFunctionBuild)
 }
 
 func (s *Service) cancelSubmittedBuild(buildID string) {
@@ -254,7 +265,7 @@ func (s *Service) cancelSubmittedBuild(buildID string) {
 
 //nolint:gocritic // hugeParam: by-value snapshot is intentional — goroutine-safe, no shared mutation.
 func (s *Service) runSubmittedBuild(
-	ctx context.Context, cancel context.CancelFunc, rec buildstate.Record, req *nfv1.BuildRequest,
+	ctx context.Context, cancel context.CancelFunc, rec buildstate.Record, req *nfv1.BuildRequest, isFunctionBuild bool,
 ) {
 	defer cancel()
 	defer s.recoverSubmittedBuildPanic(rec)
@@ -270,7 +281,9 @@ func (s *Service) runSubmittedBuild(
 		s.failSubmittedBuild(rec, errors.New("build backend unavailable"))
 		return
 	}
-	isFunctionBuild := req.GetKind() == nfv1.BuildKind_BUILD_KIND_TOOLFUNCTIONSPEC
+	// isFunctionBuild is derived from the resolved record's effective provenance by
+	// the caller (SchemaBuildV1), never from a caller-supplied kind field, so a
+	// legacy record can never take the function execution path.
 	var destination string
 	var isVersioned bool
 	if isFunctionBuild {

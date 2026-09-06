@@ -74,11 +74,16 @@ func (s *Service) functionBuildRequestFromResolved(
 
 // renderFunctionDockerfile deterministically renders the internal Dockerfile for a
 // function-image build: FROM the base pinned by EXACT digest (tag-immune), then the
-// exact script source baked in via a heredoc COPY. The heredoc terminator is
-// derived from the script's own hash so it cannot collide with the script content.
-// The rendering is a pure function of (baseRef, baseDigest, script), so an
-// identical function spec yields an identical build recipe and a script change
-// changes the recipe.
+// script source baked in via a heredoc COPY. The heredoc terminator is derived from
+// the script's own hash so it cannot collide with the script content.
+//
+// The rendering is a pure function of (baseRef, baseDigest, script): an identical
+// function spec yields an identical build recipe and a script change changes the
+// recipe. The baked file is normalized to end with exactly one newline — Buildah's
+// heredoc COPY always writes a trailing newline, so the recipe honestly reflects
+// that rather than claiming byte-identical output for a script that lacks one.
+// (Reproducibility still holds; distinct v1 scripts still resolve to distinct
+// tool_spec_digests and therefore distinct :toolfn-<digest> destinations.)
 func renderFunctionDockerfile(baseRef, baseDigest, script string) (string, error) {
 	base := baseImageByDigest(baseRef, baseDigest)
 	sum := sha256.Sum256([]byte(script))
@@ -95,6 +100,9 @@ func renderFunctionDockerfile(baseRef, baseDigest, script string) (string, error
 	fmt.Fprintf(&b, "COPY <<'%s' %s\n", marker, functionScriptPath)
 	b.WriteString(script)
 	if !strings.HasSuffix(script, "\n") {
+		// Terminate the last script line and separate it from the heredoc marker.
+		// This normalizes the baked file to a single trailing newline (see the
+		// function doc) — Buildah's heredoc writes one regardless.
 		b.WriteByte('\n')
 	}
 	fmt.Fprintf(&b, "%s\n", marker)

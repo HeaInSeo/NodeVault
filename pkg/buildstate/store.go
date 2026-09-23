@@ -67,7 +67,16 @@ func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(cleanPath), 0o750); err != nil {
 		return nil, fmt.Errorf("buildstate mkdir: %w", err)
 	}
-	db, err := sql.Open("sqlite3", cleanPath+"?_busy_timeout=5000&_foreign_keys=on")
+	// _txlock=immediate makes BeginTx issue BEGIN IMMEDIATE, taking the write
+	// lock up front where _busy_timeout applies. Transition reads the current
+	// status and then writes. Under the default deferred BEGIN in WAL mode,
+	// two concurrent transitions both read, and the loser's read-to-write
+	// upgrade fails at once with SQLITE_BUSY ("database is locked") instead of
+	// waiting. The build goroutine would then take that for a storage failure
+	// and abandon a build that CancelToolBuild had simply finished first.
+	// Serialized, the loser reads the winner's terminal status and gets
+	// ErrAlreadyTerminal.
+	db, err := sql.Open("sqlite3", cleanPath+"?_busy_timeout=5000&_foreign_keys=on&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("buildstate open: %w", err)
 	}

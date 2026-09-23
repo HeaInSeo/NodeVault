@@ -106,7 +106,12 @@ func (s *Service) WatchToolBuild(
 
 	ticker := time.NewTicker(watchPollInterval)
 	defer ticker.Stop()
-	lastUpdated := rec.UpdatedAt
+	// A change is detected by (Status, UpdatedAt), not UpdatedAt alone:
+	// updated_at has millisecond resolution, so a transition written in the
+	// same millisecond as the last observed write keeps the same UpdatedAt.
+	// Comparing only UpdatedAt would miss that transition, including a
+	// terminal one, and the watch would never end.
+	lastStatus, lastUpdated := rec.Status, rec.UpdatedAt
 	for {
 		select {
 		case <-stream.Context().Done():
@@ -116,7 +121,7 @@ func (s *Service) WatchToolBuild(
 			if err != nil {
 				return status.Errorf(codes.Internal, "get build state: %v", err)
 			}
-			if rec.UpdatedAt.Equal(lastUpdated) {
+			if rec.Status == lastStatus && rec.UpdatedAt.Equal(lastUpdated) {
 				// Durable state hasn't moved. This is the normal case for a
 				// build that's still genuinely running, but it's also what
 				// a build stuck forever because its own buildstate write
@@ -133,7 +138,7 @@ func (s *Service) WatchToolBuild(
 			if sendErr := stream.Send(buildStateEvent(rec)); sendErr != nil {
 				return sendErr
 			}
-			lastUpdated = rec.UpdatedAt
+			lastStatus, lastUpdated = rec.Status, rec.UpdatedAt
 			if buildstate.Terminal(rec.Status) {
 				return nil
 			}

@@ -5,9 +5,64 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+// TestTransition_ConcurrentTerminal_ExactlyOneWins races terminal transitions
+// on one build, as CancelToolBuild and the build goroutine's finalize do.
+// Exactly one must succeed and every other must get ErrAlreadyTerminal. A
+// "database is locked" error here is what made the build goroutine abandon a
+// build that had simply been finished by the other caller.
+func TestTransition_ConcurrentTerminal_ExactlyOneWins(t *testing.T) {
+	store := newStore(t)
+	const racers = 8
+	terminals := []Status{StatusSucceeded, StatusFailed, StatusInterrupted}
+
+	for round := 0; round < 20; round++ {
+		buildID := "build-race-" + string(rune('a'+round))
+		now := time.Unix(100, 0).UTC()
+		if _, err := store.Create(buildID, "spec-1", now); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if _, err := store.Transition(buildID, StatusBuilding, "", now); err != nil {
+			t.Fatalf("Transition to Building: %v", err)
+		}
+
+		start := make(chan struct{})
+		errs := make([]error, racers)
+		var wg sync.WaitGroup
+		for i := 0; i < racers; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				<-start
+				_, errs[i] = store.Transition(buildID, terminals[i%len(terminals)], "race", time.Now().UTC())
+			}(i)
+		}
+		close(start)
+		wg.Wait()
+
+		wins := 0
+		for i, err := range errs {
+			switch {
+			case err == nil:
+				wins++
+			case errors.Is(err, ErrAlreadyTerminal):
+			default:
+				if strings.Contains(err.Error(), "locked") {
+					t.Fatalf("round %d racer %d: %v — the loser must wait for the lock, not fail", round, i, err)
+				}
+				t.Fatalf("round %d racer %d: unexpected error %v", round, i, err)
+			}
+		}
+		if wins != 1 {
+			t.Fatalf("round %d: %d terminal transitions succeeded, want exactly 1", round, wins)
+		}
+	}
+}
 
 func newStore(t *testing.T) *Store {
 	t.Helper()

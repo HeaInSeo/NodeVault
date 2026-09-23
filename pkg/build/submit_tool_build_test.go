@@ -539,7 +539,7 @@ func TestFinalizeRacingCancel_NoFakeAbandon(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Create: %v", err)
 		}
-		if _, err := state.Transition(buildID, buildstate.StatusBuilding, "", time.Now().UTC()); err != nil {
+		if _, err = state.Transition(buildID, buildstate.StatusBuilding, "", time.Now().UTC()); err != nil {
 			t.Fatalf("Transition to Building: %v", err)
 		}
 		entry := &activeBuild{cancel: func() {}, done: make(chan struct{})}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -130,15 +131,17 @@ func TestSanitizeName_PreservesAlphanumericAndDash(t *testing.T) {
 }
 
 // countCallBuilder wraps a Builder and counts Build invocations.
+// countCallBuilder counts Build calls. The count is atomic because Build runs
+// on the detached build goroutine while the test reads it.
 type countCallBuilder struct {
 	inner Builder
-	calls *int
+	calls *atomic.Int32
 }
 
 func (c *countCallBuilder) Build(
 	ctx context.Context, dockerfile, outputRef string,
 ) (imageID, digest string, layerCacheHit bool, err error) {
-	*c.calls++
+	c.calls.Add(1)
 	return c.inner.Build(ctx, dockerfile, outputRef)
 }
 

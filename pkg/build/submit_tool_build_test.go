@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -407,7 +409,7 @@ func TestBuildCancel_CleansUpSubprocess(t *testing.T) {
 
 func TestSubmitToolBuild_IdempotentRetry(t *testing.T) {
 	svc := newSubmitTestService(t)
-	buildCalls := 0
+	var buildCalls atomic.Int32
 	svc.builder = &countCallBuilder{inner: svc.builder, calls: &buildCalls}
 
 	first, err := svc.SubmitToolBuild(context.Background(), &nfv1.SubmitToolBuildRequest{RequestId: "build-retry", ToolSpecDigest: "spec-123"})
@@ -422,14 +424,170 @@ func TestSubmitToolBuild_IdempotentRetry(t *testing.T) {
 		t.Fatalf("build ids differ: %q vs %q", first.GetBuildId(), second.GetBuildId())
 	}
 
+	// A deadline turns a watch that never sees the terminal state into a test
+	// failure instead of a hang.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	if err := svc.WatchToolBuild(
 		&nfv1.WatchToolBuildRequest{BuildId: first.GetBuildId()},
-		newFakeStream(),
+		&fakeStream{ctx: ctx},
 	); err != nil {
 		t.Fatalf("WatchToolBuild: %v", err)
 	}
-	if buildCalls != 1 {
-		t.Fatalf("Build called %d times, want exactly 1 for an idempotent retry", buildCalls)
+	if got := buildCalls.Load(); got != 1 {
+		t.Fatalf("Build called %d times, want exactly 1 for an idempotent retry", got)
+	}
+}
+
+// signalStream is a fakeStream that is safe to read while WatchToolBuild
+// sends from another goroutine, and signals the first Send.
+type signalStream struct {
+	*fakeStream
+	mu        sync.Mutex
+	firstSent chan struct{}
+	once      sync.Once
+}
+
+func (s *signalStream) Send(ev *nfv1.BuildEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.once.Do(func() { close(s.firstSent) })
+	return s.fakeStream.Send(ev)
+}
+
+func (s *signalStream) statuses() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.events))
+	for _, ev := range s.events {
+		out = append(out, ev.GetStatus())
+	}
+	return out
+}
+
+// TestWatchToolBuild_SameMillisecondTerminalTransition: the build turns
+// terminal in the same millisecond as the state the watcher last saw, so
+// UpdatedAt does not change. The watcher must still see the status change,
+// send the terminal event and return.
+func TestWatchToolBuild_SameMillisecondTerminalTransition(t *testing.T) {
+	state, err := buildstate.Open(filepath.Join(t.TempDir(), "build-state.db"))
+	if err != nil {
+		t.Fatalf("buildstate.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = state.Close() })
+	svc := &Service{buildState: state}
+
+	at := time.UnixMilli(1_700_000_000_123).UTC()
+	if _, err := state.Create("build-same-ms", "spec-1", at); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := state.Transition("build-same-ms", buildstate.StatusBuilding, "", at); err != nil {
+		t.Fatalf("Transition to Building: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stream := &signalStream{fakeStream: &fakeStream{ctx: ctx}, firstSent: make(chan struct{})}
+	watchErr := make(chan error, 1)
+	go func() {
+		watchErr <- svc.WatchToolBuild(&nfv1.WatchToolBuildRequest{BuildId: "build-same-ms"}, stream)
+	}()
+
+	select {
+	case <-stream.firstSent:
+	case <-ctx.Done():
+		t.Fatal("watcher never sent the initial snapshot")
+	}
+	// Same millisecond as the Building write the watcher just saw.
+	if _, err := state.Transition("build-same-ms", buildstate.StatusSucceeded, "", at); err != nil {
+		t.Fatalf("Transition to Succeeded: %v", err)
+	}
+
+	select {
+	case err := <-watchErr:
+		if err != nil {
+			t.Fatalf("WatchToolBuild: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatalf("watcher missed the same-millisecond terminal transition; events = %v", stream.statuses())
+	}
+	got := stream.statuses()
+	if len(got) != 2 || got[0] != string(buildstate.StatusBuilding) || got[1] != string(buildstate.StatusSucceeded) {
+		t.Fatalf("events = %v, want [Building Succeeded]", got)
+	}
+}
+
+// TestFinalizeRacingCancel_NoFakeAbandon races the build goroutine's terminal
+// write against CancelToolBuild's. Whichever loses must see
+// ErrAlreadyTerminal, not a lock error. The finalize path must then neither
+// report the build abandoned nor leave its active entry behind.
+func TestFinalizeRacingCancel_NoFakeAbandon(t *testing.T) {
+	state, err := buildstate.Open(filepath.Join(t.TempDir(), "build-state.db"))
+	if err != nil {
+		t.Fatalf("buildstate.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = state.Close() })
+	idx, err := index.NewAt(t.TempDir())
+	if err != nil {
+		t.Fatalf("index.NewAt: %v", err)
+	}
+	svc := &Service{buildState: state, indexStore: idx}
+
+	for round := 0; round < 20; round++ {
+		buildID := fmt.Sprintf("build-finalize-race-%d", round)
+		rec, err := state.Create(buildID, "spec-1", time.Now().UTC())
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if _, err = state.Transition(buildID, buildstate.StatusBuilding, "", time.Now().UTC()); err != nil {
+			t.Fatalf("Transition to Building: %v", err)
+		}
+		entry := &activeBuild{cancel: func() {}, done: make(chan struct{})}
+		svc.activeMu.Lock()
+		if svc.active == nil {
+			svc.active = make(map[string]*activeBuild)
+		}
+		svc.active[buildID] = entry
+		svc.activeMu.Unlock()
+
+		start := make(chan struct{})
+		var cancelErr error
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			svc.finalizeSubmittedBuild(rec, "succeeding", buildstate.StatusSucceeded, "")
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_, cancelErr = state.Transition(buildID, buildstate.StatusInterrupted, "canceled", time.Now().UTC())
+		}()
+		close(start)
+		wg.Wait()
+
+		if cancelErr != nil && !errors.Is(cancelErr, buildstate.ErrAlreadyTerminal) {
+			t.Fatalf("round %d: cancel transition error %v, want nil or ErrAlreadyTerminal", round, cancelErr)
+		}
+		select {
+		case <-entry.done:
+			t.Fatalf("round %d: build reported abandoned: %v", round, entry.err)
+		default:
+		}
+		svc.activeMu.Lock()
+		_, leaked := svc.active[buildID]
+		svc.activeMu.Unlock()
+		if leaked {
+			t.Fatalf("round %d: active entry left behind after a terminal transition", round)
+		}
+		final, err := state.Get(buildID)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if !buildstate.Terminal(final.Status) {
+			t.Fatalf("round %d: final status %q, want terminal", round, final.Status)
+		}
 	}
 }
 
@@ -654,7 +812,7 @@ func TestActiveBuildFail_ClosesDoneAtMostOnce(t *testing.T) {
 // a Failed terminal state, never Succeeded.
 func TestSubmitToolBuild_BuilderErrorNoRetry_TransitionsToFailed(t *testing.T) {
 	svc := newSubmitTestService(t)
-	buildCalls := 0
+	var buildCalls atomic.Int32
 	rootlessErr := fmt.Errorf(
 		"build image: error building at STEP 2: error processing " +
 			"RUN mknod /dev/test c 1 3: exit status 1: mknod: /dev/test: Operation not permitted",
@@ -674,8 +832,8 @@ func TestSubmitToolBuild_BuilderErrorNoRetry_TransitionsToFailed(t *testing.T) {
 	if last.GetStatus() != string(buildstate.StatusFailed) {
 		t.Fatalf("final status = %q, want Failed", last.GetStatus())
 	}
-	if buildCalls != 1 {
-		t.Errorf("Build called %d times, want exactly 1 — no privileged retry", buildCalls)
+	if got := buildCalls.Load(); got != 1 {
+		t.Errorf("Build called %d times, want exactly 1 — no privileged retry", got)
 	}
 }
 

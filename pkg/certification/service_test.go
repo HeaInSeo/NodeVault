@@ -278,6 +278,8 @@ func TestEvaluateAfterScan_ExistingCheck(t *testing.T) {
 	scan := index.ToolScanRecord{
 		ScanID:       "scan-1",
 		ImageDigest:  "sha256:fff",
+		Stage:        "L5B",
+		Terminal:     true,
 		PolicyMode:   "gate_critical",
 		PolicyResult: "pass",
 		ScannedAt:    time.Now().UTC(),

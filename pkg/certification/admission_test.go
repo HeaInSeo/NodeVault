@@ -213,7 +213,8 @@ func TestEvaluateAfterScan_SkipsPlaceholderForLaterEvidence(t *testing.T) {
 		t.Fatalf("AppendToolCheckRecord evidence: %v", err)
 	}
 	scan := index.ToolScanRecord{
-		ScanID: "scan-mix", ImageDigest: "sha256:mix", PolicyResult: "pass", ScannedAt: time.Now().UTC(),
+		ScanID: "scan-mix", ImageDigest: "sha256:mix", Stage: "L5B", Terminal: true,
+		PolicyResult: "pass", ScannedAt: time.Now().UTC(),
 	}
 	if err := store.AppendToolScanRecord(scan); err != nil {
 		t.Fatalf("AppendToolScanRecord: %v", err)
@@ -234,5 +235,103 @@ func TestEvaluateAfterScan_SkipsPlaceholderForLaterEvidence(t *testing.T) {
 func TestCertifiesOnCheck_TerminalEvidenceL5A(t *testing.T) {
 	if !certification.CertifiesOnCheck(newCheckRecord("chk-ok", "sha256:ok", "bwa", "1.0", "succeeded")) {
 		t.Error("CertifiesOnCheck = false for a terminal evidence-bearing L5-a success; want true")
+	}
+}
+
+// TestEvaluateAfterCheck_CanonicalPassLiteralCertifies verifies the canonical
+// ContractCheck result literal "pass" (index.ContractCheck, proto) is accepted
+// alongside NodeSentinel REST's "passed".
+func TestEvaluateAfterCheck_CanonicalPassLiteralCertifies(t *testing.T) {
+	store := newStore(t)
+	svc := certification.New(store)
+	seedEntry(t, store, "cas-pass", "sha256:pass")
+
+	check := newCheckRecord("chk-pass", "sha256:pass", "bwa", "1.0", "succeeded")
+	check.ContractCheck = &index.ContractCheck{AllOutputsPresent: true, Result: "pass"}
+	if err := store.AppendToolCheckRecord(check); err != nil {
+		t.Fatalf("AppendToolCheckRecord: %v", err)
+	}
+	if !certification.CertifiesOnCheck(check) {
+		t.Error("CertifiesOnCheck = false for result \"pass\"; want true")
+	}
+	if err := svc.EvaluateAfterCheck(check); err != nil {
+		t.Fatalf("EvaluateAfterCheck: %v", err)
+	}
+	cert, err := store.GetCertifiedToolImageRecord("sha256:pass")
+	if err != nil {
+		t.Fatalf("GetCertifiedToolImageRecord: %v", err)
+	}
+	if cert.PromotionStatus != index.PromotionActive {
+		t.Errorf("PromotionStatus = %q; want active", cert.PromotionStatus)
+	}
+}
+
+// TestEvaluateAfterScan_NonTerminalL5BScanNeverPromotes is the Codex P1
+// regression: a deferred evidence-bearing L5-a check must be promoted only by
+// the terminal L5-b scan, not by a non-terminal, stage-less or wrong-stage one.
+func TestEvaluateAfterScan_NonTerminalL5BScanNeverPromotes(t *testing.T) {
+	cases := []struct {
+		name     string
+		stage    string
+		terminal bool
+	}{
+		{"non-terminal L5-b", "L5B", false},
+		{"terminal but no stage", "", true},
+		{"terminal wrong stage", "L5A", true},
+		{"terminal unknown stage literal", "l5b", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newStore(t)
+			svc := certification.New(store)
+			seedEntry(t, store, "cas-scan", "sha256:scan")
+
+			check := newCheckRecord("chk-scan", "sha256:scan", "bwa", "1.0", "succeeded")
+			check.Terminal = false
+			if err := store.AppendToolCheckRecord(check); err != nil {
+				t.Fatalf("AppendToolCheckRecord: %v", err)
+			}
+			scan := index.ToolScanRecord{
+				ScanID: "scan-x", ImageDigest: "sha256:scan", Stage: tc.stage, Terminal: tc.terminal,
+				PolicyMode: "record_only", PolicyResult: "passed", ScannedAt: time.Now().UTC(),
+			}
+			if err := store.AppendToolScanRecord(scan); err != nil {
+				t.Fatalf("AppendToolScanRecord: %v", err)
+			}
+			if err := svc.EvaluateAfterScan(scan); err != nil {
+				t.Fatalf("EvaluateAfterScan: %v", err)
+			}
+			assertNotCertified(t, store, "sha256:scan")
+		})
+	}
+}
+
+// TestEvaluateAfterScan_NonTerminalBlockedScanStillRetracts verifies the
+// terminal-L5-b gate only withholds promotion: a blocked scan of any stage
+// still records the certification as retracted (fail closed).
+func TestEvaluateAfterScan_NonTerminalBlockedScanStillRetracts(t *testing.T) {
+	store := newStore(t)
+	svc := certification.New(store)
+
+	check := newCheckRecord("chk-blk", "sha256:blk", "bwa", "1.0", "succeeded")
+	if err := store.AppendToolCheckRecord(check); err != nil {
+		t.Fatalf("AppendToolCheckRecord: %v", err)
+	}
+	scan := index.ToolScanRecord{
+		ScanID: "scan-blk", ImageDigest: "sha256:blk", Stage: "L5B", Terminal: false,
+		PolicyMode: "gate_critical", PolicyResult: "blocked", ScannedAt: time.Now().UTC(),
+	}
+	if err := store.AppendToolScanRecord(scan); err != nil {
+		t.Fatalf("AppendToolScanRecord: %v", err)
+	}
+	if err := svc.EvaluateAfterScan(scan); err != nil {
+		t.Fatalf("EvaluateAfterScan: %v", err)
+	}
+	cert, err := store.GetCertifiedToolImageRecord("sha256:blk")
+	if err != nil {
+		t.Fatalf("GetCertifiedToolImageRecord: %v", err)
+	}
+	if cert.PromotionStatus != index.PromotionRetracted {
+		t.Errorf("PromotionStatus = %q; want retracted", cert.PromotionStatus)
 	}
 }

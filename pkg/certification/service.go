@@ -24,9 +24,20 @@ func New(store *index.Store) *Service {
 	return &Service{store: store}
 }
 
-// stageL5A is the functional-validation stage literal NodeSentinel sets on
-// ToolCheckRecord.Stage (see index.ToolCheckRecord's Stage doc comment).
-const stageL5A = "L5A"
+// stageL5A and stageL5B are the functional-validation and security-scan stage
+// literals NodeSentinel sets on ToolCheckRecord.Stage / ToolScanRecord.Stage
+// (see index.ToolCheckRecord's Stage doc comment).
+const (
+	stageL5A = "L5A"
+	stageL5B = "L5B"
+)
+
+// contractPassed reports whether a ContractCheck result literal means passed.
+// "pass" is the canonical wire value (index.ContractCheck, the proto
+// ContractCheck.result comment); "passed" is what NodeSentinel REST sends today.
+func contractPassed(result string) bool {
+	return result == "pass" || result == "passed"
+}
 
 // evidenceIneligibility returns why check is not admissible as certification
 // input, or "" when it is (NodeVault #117). Only a succeeded L5-a record that
@@ -46,7 +57,8 @@ func evidenceIneligibility(check index.ToolCheckRecord) string {
 		return "check is not an L5-a functional validation record"
 	case check.ValidationHash == "":
 		return "no validation evidence hash"
-	case check.ContractCheck == nil || !check.ContractCheck.AllOutputsPresent || check.ContractCheck.Result != "passed":
+	case check.ContractCheck == nil || !check.ContractCheck.AllOutputsPresent ||
+		!contractPassed(check.ContractCheck.Result):
 		return "declared outputs not observed"
 	}
 	return ""
@@ -97,12 +109,28 @@ func (s *Service) EvaluateAfterCheck(check index.ToolCheckRecord) error {
 	return s.certify(check, latestScan)
 }
 
+// terminalL5B reports whether scan is the terminal L5-b record that closes a
+// validation request, i.e. the scan a non-terminal L5-a check waits for.
+//
+//nolint:gocritic // hugeParam: ToolScanRecord by value matches the certService interface contract.
+func terminalL5B(scan index.ToolScanRecord) bool {
+	return scan.Terminal && scan.Stage == stageL5B
+}
+
 // EvaluateAfterScan is called after a ToolScanRecord is stored.
 // Looks for an existing evidence-bearing L5-a success and re-evaluates
 // certification; a check that is not admissible never certifies here either.
+// Only a terminal L5-b scan can promote: a non-terminal, stage-less or
+// wrong-stage scan is deferred unless its policy result is "blocked", which
+// still retracts (fail closed).
 //
 //nolint:gocritic // hugeParam: ToolScanRecord by value matches the certService interface contract.
 func (s *Service) EvaluateAfterScan(scan index.ToolScanRecord) error {
+	if !terminalL5B(scan) && scan.PolicyResult != "blocked" {
+		slog.Info("certification deferred: scan is not a terminal L5-b record",
+			"scan_id", scan.ScanID, "stage", scan.Stage, "terminal", scan.Terminal)
+		return nil
+	}
 	checks, err := s.store.ListToolCheckRecordsByImageDigest(scan.ImageDigest)
 	if err != nil {
 		slog.Error("certification aborted: failed to list check records",
@@ -117,6 +145,88 @@ func (s *Service) EvaluateAfterScan(scan index.ToolScanRecord) error {
 	slog.Info("certification deferred: no admissible check record yet",
 		"scan_id", scan.ScanID, "image_digest", scan.ImageDigest)
 	return nil
+}
+
+// unprovenReason returns why an ACTIVE certification cannot be re-proven
+// from its stored driving records under the current admission rule, or ""
+// when it can: the driving check must be admissible and either terminal
+// itself or paired with a terminal L5-b scan.
+//
+//nolint:gocritic // hugeParam: by value is intentional — callers own their copy.
+func (s *Service) unprovenReason(cert index.CertifiedToolImageRecord) string {
+	if cert.CheckID == "" {
+		return "no driving check record"
+	}
+	check, err := s.store.GetToolCheckRecordByID(cert.CheckID)
+	if err != nil {
+		return "driving check record not found"
+	}
+	if reason := evidenceIneligibility(check); reason != "" {
+		return reason
+	}
+	if check.Terminal {
+		return ""
+	}
+	if cert.ScanID != "" {
+		if scan, err := s.store.GetToolScanRecordByID(cert.ScanID); err == nil && terminalL5B(scan) {
+			return ""
+		}
+	}
+	return "non-terminal check without a terminal L5-b scan"
+}
+
+// RetractUnprovenCertifications retracts every ACTIVE CertifiedToolImageRecord
+// (and its ACTIVE catalog entry) whose driving records no longer prove it
+// under the current admission rule — e.g. tools certified from placeholder
+// L5-a records before NodeVault #117. Records are not deleted; each
+// retraction is logged with its reason, and a later admissible check/scan
+// re-certifies through the normal path. Returns the number retracted.
+// Call it at startup before intake begins.
+func (s *Service) RetractUnprovenCertifications() (int, error) {
+	certs, err := s.store.ListCertifiedToolImageRecords(index.PromotionActive)
+	if err != nil {
+		return 0, fmt.Errorf("list active certifications: %w", err)
+	}
+	retractedCas := map[string]bool{}
+	n := 0
+	for i := range certs {
+		reason := s.unprovenReason(certs[i])
+		if reason == "" {
+			continue
+		}
+		cert := certs[i]
+		cert.PromotionStatus = index.PromotionRetracted
+		if err = s.store.UpsertCertifiedToolImageRecord(cert); err != nil {
+			return n, fmt.Errorf("retract certification %q: %w", cert.ImageDigest, err)
+		}
+		slog.Warn("certification retracted: not provable from stored evidence",
+			"image_digest", cert.ImageDigest, "tool_name", cert.ToolName, "version", cert.Version,
+			"check_id", cert.CheckID, "scan_id", cert.ScanID, "reason", reason)
+		if cert.CasHash != "" {
+			retractedCas[cert.CasHash] = true
+		}
+		n++
+	}
+	if len(retractedCas) == 0 {
+		return n, nil
+	}
+	entries, err := s.store.ListToolFunctionCatalogEntries(index.PromotionActive)
+	if err != nil {
+		return n, fmt.Errorf("list active catalog entries: %w", err)
+	}
+	for i := range entries {
+		if !retractedCas[entries[i].CasHash] {
+			continue
+		}
+		entry := entries[i]
+		entry.PromotionStatus = index.PromotionRetracted
+		if err = s.store.UpsertToolFunctionCatalogEntry(entry); err != nil {
+			return n, fmt.Errorf("retract catalog entry %q: %w", entry.CasHash, err)
+		}
+		slog.Warn("catalog entry retracted with its certification",
+			"cas_hash", entry.CasHash, "image_digest", entry.ImageDigest)
+	}
+	return n, nil
 }
 
 // certify creates or updates CertifiedToolImageRecord and ToolFunctionCatalogEntry.

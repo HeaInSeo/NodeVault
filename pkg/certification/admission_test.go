@@ -78,6 +78,11 @@ func TestEvaluateAfterCheck_InadmissibleRecordsNeverCertify(t *testing.T) {
 			r.ContractCheck = nil
 			return r
 		}()},
+		{"outputs observed but no evidence hash", func() index.ToolCheckRecord {
+			r := newCheckRecord("chk-nohash", "sha256:nohash", "bwa", "1.0", "succeeded")
+			r.ValidationHash = ""
+			return r
+		}()},
 		{"contract result not passed", func() index.ToolCheckRecord {
 			r := newCheckRecord("chk-ccfail", "sha256:ccfail", "bwa", "1.0", "succeeded")
 			r.ContractCheck = &index.ContractCheck{AllOutputsPresent: true, Result: "failed"}

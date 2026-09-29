@@ -579,15 +579,28 @@ func (s *Server) handleSubmitCheckRecord(w http.ResponseWriter, r *http.Request)
 
 	certStatus := "pending"
 	if s.certSvc != nil && succeeded {
-		if err := s.certSvc.EvaluateAfterCheck(rec); err != nil {
-			slog.Error("certification failed after check", "check_id", req.CheckID, "err", err)
-			certStatus = "failed"
-		} else if certification.CertifiesOnCheck(rec) {
-			certStatus = "certified"
-		}
+		certStatus = s.evaluateCheckCertification(rec)
 	}
 
 	writeJSON(w, SubmitRecordResponse{RecordID: req.CheckID, CertificationStatus: certStatus})
+}
+
+// evaluateCheckCertification runs certification for a stored succeeded check
+// record and returns the certification_status to report. "certified" is
+// reported only when the record is admissible for immediate certification
+// (certification.CertifiesOnCheck); an inadmissible or non-terminal record
+// stays "pending" (NodeVault #117).
+//
+//nolint:gocritic // hugeParam: ToolCheckRecord by value matches the certService interface contract.
+func (s *Server) evaluateCheckCertification(rec index.ToolCheckRecord) string {
+	if err := s.certSvc.EvaluateAfterCheck(rec); err != nil {
+		slog.Error("certification failed after check", "check_id", rec.CheckID, "err", err)
+		return "failed"
+	}
+	if certification.CertifiesOnCheck(rec) {
+		return "certified"
+	}
+	return "pending"
 }
 
 // checkValidationCorrelation resolves validationRequestID against this

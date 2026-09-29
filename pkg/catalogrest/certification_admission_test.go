@@ -12,6 +12,8 @@ import (
 	"github.com/HeaInSeo/NodeVault/pkg/index"
 )
 
+const certStatusPending = "pending"
+
 // newServerWithRealCert wires the production certification.Service so the
 // REST intake → certification path is exercised end to end (NodeVault #117).
 func newServerWithRealCert(t *testing.T) (*httptest.Server, *index.Store) {
@@ -24,7 +26,7 @@ func newServerWithRealCert(t *testing.T) (*httptest.Server, *index.Store) {
 	return ts, store
 }
 
-func postCheckRecord(t *testing.T, ts *httptest.Server, req catalogrest.SubmitCheckRecordRequest) string {
+func postCheckRecord(t *testing.T, ts *httptest.Server, req *catalogrest.SubmitCheckRecordRequest) string {
 	t.Helper()
 	body, _ := json.Marshal(req)
 	resp := doPost(t, ts, ts.URL+"/v1/validation/check-records", body)
@@ -64,12 +66,12 @@ func TestSubmitCheckRecord_PlaceholderL5A_LeavesToolNonActive(t *testing.T) {
 	seedRegisteredImage(t, store, "cas-ph", "sha256:ph")
 	seedQueuedValidationRequest(t, store, "vr-ph", "sha256:ph")
 
-	got := postCheckRecord(t, ts, catalogrest.SubmitCheckRecordRequest{
+	got := postCheckRecord(t, ts, &catalogrest.SubmitCheckRecordRequest{
 		CheckID: "chk-ph", ImageDigest: "sha256:ph", ToolName: "bwa", Version: "1.0",
 		ValidationRequestID: "vr-ph", SentinelJobID: "job-ph", Stage: "L5A", Terminal: true,
 		ValidationStatus: "succeeded", Command: "/bin/sh -c true", ContractResult: "passed",
 	})
-	if got != "pending" {
+	if got != certStatusPending {
 		t.Errorf("CertificationStatus = %q; want pending", got)
 	}
 	if cert, err := store.GetCertifiedToolImageRecord("sha256:ph"); err == nil {
@@ -83,7 +85,8 @@ func TestSubmitCheckRecord_PlaceholderL5A_LeavesToolNonActive(t *testing.T) {
 		t.Errorf("ACTIVE catalog entries = %d; want 0", len(entries))
 	}
 	// The record itself is still stored and still closes out the request.
-	if recs, err := store.ListToolCheckRecordsByImageDigest("sha256:ph"); err != nil || len(recs) != 1 {
+	recs, err := store.ListToolCheckRecordsByImageDigest("sha256:ph")
+	if err != nil || len(recs) != 1 {
 		t.Errorf("stored check records = %d (err %v); want 1", len(recs), err)
 	}
 	vr, err := store.GetValidationRequestRecord("vr-ph")
@@ -101,12 +104,12 @@ func TestSubmitCheckRecord_NonTerminalL5A_DoesNotCertifyAheadOfL5B(t *testing.T)
 	ts, store := newServerWithRealCert(t)
 	seedRegisteredImage(t, store, "cas-nt", "sha256:nt")
 
-	got := postCheckRecord(t, ts, catalogrest.SubmitCheckRecordRequest{
+	got := postCheckRecord(t, ts, &catalogrest.SubmitCheckRecordRequest{
 		CheckID: "chk-nt", ImageDigest: "sha256:nt", ToolName: "bwa", Version: "1.0",
 		Stage: "L5A", Terminal: false, ValidationStatus: "succeeded", ValidationHash: "vh-nt",
 		AllOutputsPresent: true, ContractResult: "passed",
 	})
-	if got != "pending" {
+	if got != certStatusPending {
 		t.Errorf("CertificationStatus = %q; want pending", got)
 	}
 	if _, err := store.GetCertifiedToolImageRecord("sha256:nt"); err == nil {
@@ -120,7 +123,7 @@ func TestSubmitCheckRecord_TerminalEvidenceL5A_Certifies(t *testing.T) {
 	ts, store := newServerWithRealCert(t)
 	seedRegisteredImage(t, store, "cas-ok", "sha256:ok")
 
-	got := postCheckRecord(t, ts, catalogrest.SubmitCheckRecordRequest{
+	got := postCheckRecord(t, ts, &catalogrest.SubmitCheckRecordRequest{
 		CheckID: "chk-ok", ImageDigest: "sha256:ok", ToolName: "bwa", Version: "1.0",
 		Stage: "L5A", Terminal: true, ValidationStatus: "succeeded", ValidationHash: "vh-ok",
 		AllOutputsPresent: true, ContractResult: "passed",

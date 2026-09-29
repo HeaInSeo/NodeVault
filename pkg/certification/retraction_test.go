@@ -121,6 +121,113 @@ func TestRetractUnprovenCertifications(t *testing.T) {
 	}
 }
 
+func activeCatalogEntry(t *testing.T, store *index.Store, casHash string) index.ToolFunctionCatalogEntry {
+	t.Helper()
+	entries, err := store.ListToolFunctionCatalogEntries(index.PromotionActive)
+	if err != nil {
+		t.Fatalf("ListToolFunctionCatalogEntries: %v", err)
+	}
+	for i := range entries {
+		if entries[i].CasHash == casHash {
+			return entries[i]
+		}
+	}
+	t.Fatalf("catalog entry %s is not ACTIVE; a valid certification still backs it", casHash)
+	return index.ToolFunctionCatalogEntry{}
+}
+
+func certStatus(t *testing.T, store *index.Store, imageDigest string) index.PromotionStatus {
+	t.Helper()
+	cert, err := store.GetCertifiedToolImageRecord(imageDigest)
+	if err != nil {
+		t.Fatalf("GetCertifiedToolImageRecord(%s): %v", imageDigest, err)
+	}
+	return cert.PromotionStatus
+}
+
+// TestRetractUnprovenCertifications_SharedCasKeptByValidSurvivor is the Codex
+// P2 regression (PR #118 thread 4138588064): two ACTIVE certifications share
+// one CAS hash, one unprovable and one provable. The unprovable one is
+// retracted, but the shared catalog entry stays ACTIVE. If the entry pointed
+// at the retracted image it is rebuilt from the survivor.
+func TestRetractUnprovenCertifications_SharedCasKeptByValidSurvivor(t *testing.T) {
+	cases := []struct {
+		name        string
+		invalidLast bool // catalog entry was last written by the invalid certification
+	}{
+		{name: "catalog points at survivor", invalidLast: false},
+		{name: "catalog points at retracted image", invalidLast: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newStore(t)
+			svc := certification.New(store)
+			if err := store.AppendToolCheckRecord(placeholderL5A("chk-sh-ph", "sha256:shph", true)); err != nil {
+				t.Fatalf("AppendToolCheckRecord: %v", err)
+			}
+			if err := store.AppendToolCheckRecord(newCheckRecord("chk-sh-ok", "sha256:shok", "bwa", "1.0", "succeeded")); err != nil {
+				t.Fatalf("AppendToolCheckRecord: %v", err)
+			}
+			if tc.invalidLast {
+				seedActiveCertification(t, store, "sha256:shok", "cas-shared", "chk-sh-ok", "")
+				seedActiveCertification(t, store, "sha256:shph", "cas-shared", "chk-sh-ph", "")
+			} else {
+				seedActiveCertification(t, store, "sha256:shph", "cas-shared", "chk-sh-ph", "")
+				seedActiveCertification(t, store, "sha256:shok", "cas-shared", "chk-sh-ok", "")
+			}
+
+			n, err := svc.RetractUnprovenCertifications()
+			if err != nil {
+				t.Fatalf("RetractUnprovenCertifications: %v", err)
+			}
+			if n != 1 {
+				t.Errorf("retracted = %d; want 1", n)
+			}
+			if got := certStatus(t, store, "sha256:shph"); got != index.PromotionRetracted {
+				t.Errorf("invalid cert status = %q; want retracted", got)
+			}
+			if got := certStatus(t, store, "sha256:shok"); got != index.PromotionActive {
+				t.Errorf("valid cert status = %q; want active", got)
+			}
+			entry := activeCatalogEntry(t, store, "cas-shared")
+			if entry.ImageDigest != "sha256:shok" {
+				t.Errorf("catalog image = %q; want survivor sha256:shok", entry.ImageDigest)
+			}
+			if tc.invalidLast && entry.ValidationHash != "hash-chk-sh-ok" {
+				t.Errorf("rebuilt catalog validation hash = %q; want survivor's hash-chk-sh-ok", entry.ValidationHash)
+			}
+
+			if n, err := svc.RetractUnprovenCertifications(); err != nil || n != 0 {
+				t.Errorf("second pass = (%d, %v); want (0, nil)", n, err)
+			}
+			activeCatalogEntry(t, store, "cas-shared")
+		})
+	}
+}
+
+// TestRetractUnprovenCertifications_SharedCasAllInvalidRetracts: when every
+// ACTIVE certification sharing a CAS hash is unprovable, the catalog entry is
+// retracted.
+func TestRetractUnprovenCertifications_SharedCasAllInvalidRetracts(t *testing.T) {
+	store := newStore(t)
+	svc := certification.New(store)
+	if err := store.AppendToolCheckRecord(placeholderL5A("chk-ai-1", "sha256:ai1", true)); err != nil {
+		t.Fatalf("AppendToolCheckRecord: %v", err)
+	}
+	seedActiveCertification(t, store, "sha256:ai1", "cas-allinv", "chk-ai-1", "")
+	seedActiveCertification(t, store, "sha256:ai2", "cas-allinv", "chk-ai-missing", "")
+
+	n, err := svc.RetractUnprovenCertifications()
+	if err != nil {
+		t.Fatalf("RetractUnprovenCertifications: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("retracted = %d; want 2", n)
+	}
+	assertPromotion(t, store, "sha256:ai1", "cas-allinv", index.PromotionRetracted)
+	assertPromotion(t, store, "sha256:ai2", "cas-allinv", index.PromotionRetracted)
+}
+
 // TestRetractUnprovenCertifications_RecertifiesOnNewEvidence verifies
 // retraction is not permanent: a later admissible terminal L5-a check
 // re-certifies the tool through the normal path.

@@ -182,16 +182,29 @@ func (s *Service) unprovenReason(cert index.CertifiedToolImageRecord) string {
 // retraction is logged with its reason, and a later admissible check/scan
 // re-certifies through the normal path. Returns the number retracted.
 // Call it at startup before intake begins.
+//
+// Several certifications can share one CasHash (certifications are keyed by
+// ToolSpecDigest+Platform, the catalog only by CasHash). A catalog entry is
+// retracted only when no provable ACTIVE certification for its CasHash
+// remains; otherwise it stays ACTIVE, rebuilt from a survivor if it pointed
+// at a retracted image.
 func (s *Service) RetractUnprovenCertifications() (int, error) {
 	certs, err := s.store.ListCertifiedToolImageRecords(index.PromotionActive)
 	if err != nil {
 		return 0, fmt.Errorf("list active certifications: %w", err)
 	}
 	retractedCas := map[string]bool{}
+	retractedImages := map[string]bool{}
+	survivors := map[string]index.CertifiedToolImageRecord{}
 	n := 0
 	for i := range certs {
 		reason := s.unprovenReason(certs[i])
 		if reason == "" {
+			if c := certs[i].CasHash; c != "" {
+				if _, ok := survivors[c]; !ok {
+					survivors[c] = certs[i]
+				}
+			}
 			continue
 		}
 		cert := certs[i]
@@ -205,6 +218,7 @@ func (s *Service) RetractUnprovenCertifications() (int, error) {
 		if cert.CasHash != "" {
 			retractedCas[cert.CasHash] = true
 		}
+		retractedImages[cert.ImageDigest] = true
 		n++
 	}
 	if len(retractedCas) == 0 {
@@ -219,6 +233,12 @@ func (s *Service) RetractUnprovenCertifications() (int, error) {
 			continue
 		}
 		entry := entries[i]
+		if survivor, ok := survivors[entry.CasHash]; ok {
+			if keepErr := s.keepCatalogForSurvivor(&entry, &survivor, retractedImages[entry.ImageDigest]); keepErr != nil {
+				return n, keepErr
+			}
+			continue
+		}
 		entry.PromotionStatus = index.PromotionRetracted
 		if err = s.store.UpsertToolFunctionCatalogEntry(entry); err != nil {
 			return n, fmt.Errorf("retract catalog entry %q: %w", entry.CasHash, err)
@@ -227,6 +247,41 @@ func (s *Service) RetractUnprovenCertifications() (int, error) {
 			"cas_hash", entry.CasHash, "image_digest", entry.ImageDigest)
 	}
 	return n, nil
+}
+
+// keepCatalogForSurvivor keeps entry ACTIVE because survivor, a provable ACTIVE
+// certification, still backs its CasHash. If entry pointed at a retracted
+// image (pointsAtRetracted), it is rebuilt from the survivor's image and
+// driving check so the catalog never exposes the unproven image.
+func (s *Service) keepCatalogForSurvivor(
+	entry *index.ToolFunctionCatalogEntry, survivor *index.CertifiedToolImageRecord, pointsAtRetracted bool,
+) error {
+	if !pointsAtRetracted {
+		slog.Info("catalog entry kept: another ACTIVE certification backs it",
+			"cas_hash", entry.CasHash, "image_digest", entry.ImageDigest)
+		return nil
+	}
+	check, err := s.store.GetToolCheckRecordByID(survivor.CheckID)
+	if err != nil {
+		return fmt.Errorf("rebuild catalog entry %q: read survivor check %q: %w", entry.CasHash, survivor.CheckID, err)
+	}
+	from := entry.ImageDigest
+	entry.ToolName = survivor.ToolName
+	entry.Version = survivor.Version
+	entry.StableRef = fmt.Sprintf("%s@%s", survivor.ToolName, survivor.Version)
+	entry.ImageDigest = survivor.ImageDigest
+	entry.ImageRef = ""
+	if imgRec, imgErr := s.store.GetToolImageRecordByDigest(survivor.ImageDigest); imgErr == nil {
+		entry.ImageRef = imgRec.ImageRef
+	}
+	entry.CertifiedAt = survivor.CertifiedAt
+	entry.ValidationHash = check.ValidationHash
+	if err = s.store.UpsertToolFunctionCatalogEntry(*entry); err != nil {
+		return fmt.Errorf("rebuild catalog entry %q: %w", entry.CasHash, err)
+	}
+	slog.Warn("catalog entry rebuilt from surviving certification",
+		"cas_hash", entry.CasHash, "from_image_digest", from, "image_digest", entry.ImageDigest)
+	return nil
 }
 
 // certify creates or updates CertifiedToolImageRecord and ToolFunctionCatalogEntry.

@@ -2,7 +2,7 @@ module github.com/HeaInSeo/NodeVault
 
 go 1.26.6
 
-require google.golang.org/grpc v1.82.1
+require google.golang.org/grpc v1.83.2
 
 require (
 	golang.org/x/net v0.58.0 // indirect

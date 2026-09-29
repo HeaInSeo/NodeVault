@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/HeaInSeo/NodeVault/pkg/catalog"
+	"github.com/HeaInSeo/NodeVault/pkg/certification"
 	"github.com/HeaInSeo/NodeVault/pkg/index"
 	"github.com/HeaInSeo/NodeVault/pkg/metrics"
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
@@ -581,7 +582,7 @@ func (s *Server) handleSubmitCheckRecord(w http.ResponseWriter, r *http.Request)
 		if err := s.certSvc.EvaluateAfterCheck(rec); err != nil {
 			slog.Error("certification failed after check", "check_id", req.CheckID, "err", err)
 			certStatus = "failed"
-		} else {
+		} else if certification.CertifiesOnCheck(rec) {
 			certStatus = "certified"
 		}
 	}

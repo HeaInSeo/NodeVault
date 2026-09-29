@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/HeaInSeo/NodeVault/pkg/certification"
 	"github.com/HeaInSeo/NodeVault/pkg/index"
 	"github.com/HeaInSeo/NodeVault/pkg/oras"
 	nfv1 "github.com/HeaInSeo/NodeVault/protos/nodevault/v1"
@@ -121,7 +122,7 @@ func (s *Service) SubmitToolCheckRecord(
 		if err := s.certSvc.EvaluateAfterCheck(rec); err != nil {
 			slog.Error("certification failed after check", "check_id", req.CheckId, "err", err)
 			certStatus = "failed"
-		} else if rec.ValidationStatus == "succeeded" {
+		} else if certification.CertifiesOnCheck(rec) {
 			certStatus = "certified"
 		}
 	}

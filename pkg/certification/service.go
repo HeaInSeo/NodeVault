@@ -24,15 +24,60 @@ func New(store *index.Store) *Service {
 	return &Service{store: store}
 }
 
+// stageL5A is the functional-validation stage literal NodeSentinel sets on
+// ToolCheckRecord.Stage (see index.ToolCheckRecord's Stage doc comment).
+const stageL5A = "L5A"
+
+// evidenceIneligibility returns why check is not admissible as certification
+// input, or "" when it is (NodeVault #117). Only a succeeded L5-a record that
+// carries observed evidence counts: a non-empty ValidationHash and a passed
+// contract check with all declared outputs present. A placeholder L5-a run
+// (image starts and exits 0, outputs not observed), a record with no or an
+// unknown stage (including every gRPC-submitted record, whose wire has no
+// stage), an L3/L4 success, and any unknown validation_status literal are all
+// rejected, so none of them can reach PromotionActive.
+//
+//nolint:gocritic // hugeParam: ToolCheckRecord by value matches the certService interface contract.
+func evidenceIneligibility(check index.ToolCheckRecord) string {
+	switch {
+	case check.ValidationStatus != "succeeded":
+		return "check not succeeded"
+	case check.Stage != stageL5A:
+		return "check is not an L5-a functional validation record"
+	case check.ValidationHash == "":
+		return "no validation evidence hash"
+	case check.ContractCheck == nil || !check.ContractCheck.AllOutputsPresent || check.ContractCheck.Result != "passed":
+		return "declared outputs not observed"
+	}
+	return ""
+}
+
+// CertifiesOnCheck reports whether EvaluateAfterCheck would certify check
+// right away: it must be evidence-bearing (see evidenceIneligibility) and
+// Terminal. A non-terminal L5-a record is followed by L5-b, so certification
+// waits for the scan (EvaluateAfterScan) instead of running ahead of it.
+// Intake handlers use this to report certification_status honestly.
+//
+//nolint:gocritic // hugeParam: ToolCheckRecord by value matches the certService interface contract.
+func CertifiesOnCheck(check index.ToolCheckRecord) bool {
+	return evidenceIneligibility(check) == "" && check.Terminal
+}
+
 // EvaluateAfterCheck is called after a ToolCheckRecord is stored.
-// If the check succeeded, it immediately attempts certification using any
-// existing scan record (or proceeds without one if scan is optional).
+// If the check is a terminal, evidence-bearing L5-a success, it immediately
+// attempts certification using any existing scan record. Every other record
+// is stored without certifying (NodeVault #117).
 //
 //nolint:gocritic // hugeParam: ToolCheckRecord by value matches the certService interface contract.
 func (s *Service) EvaluateAfterCheck(check index.ToolCheckRecord) error {
-	if check.ValidationStatus != "succeeded" {
-		slog.Info("certification skipped: check not succeeded",
-			"check_id", check.CheckID, "status", check.ValidationStatus)
+	if reason := evidenceIneligibility(check); reason != "" {
+		slog.Info("certification skipped: check not admissible",
+			"check_id", check.CheckID, "status", check.ValidationStatus, "stage", check.Stage, "reason", reason)
+		return nil
+	}
+	if !check.Terminal {
+		slog.Info("certification deferred: non-terminal L5-a check waits for L5-b",
+			"check_id", check.CheckID)
 		return nil
 	}
 
@@ -53,7 +98,8 @@ func (s *Service) EvaluateAfterCheck(check index.ToolCheckRecord) error {
 }
 
 // EvaluateAfterScan is called after a ToolScanRecord is stored.
-// Looks for an existing successful check and re-evaluates certification.
+// Looks for an existing evidence-bearing L5-a success and re-evaluates
+// certification; a check that is not admissible never certifies here either.
 //
 //nolint:gocritic // hugeParam: ToolScanRecord by value matches the certService interface contract.
 func (s *Service) EvaluateAfterScan(scan index.ToolScanRecord) error {
@@ -64,11 +110,11 @@ func (s *Service) EvaluateAfterScan(scan index.ToolScanRecord) error {
 		return fmt.Errorf("list check records: %w", err)
 	}
 	for i := range checks {
-		if checks[i].ValidationStatus == "succeeded" {
+		if evidenceIneligibility(checks[i]) == "" {
 			return s.certify(checks[i], &scan)
 		}
 	}
-	slog.Info("certification deferred: no successful check record yet",
+	slog.Info("certification deferred: no admissible check record yet",
 		"scan_id", scan.ScanID, "image_digest", scan.ImageDigest)
 	return nil
 }

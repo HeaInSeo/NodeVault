@@ -165,7 +165,7 @@ require (
 	go.podman.io/buildah v1.44.0 // indirect
 	go.podman.io/common v0.68.0 // indirect
 	go.podman.io/image/v5 v5.40.0 // indirect
-	go.podman.io/podman/v6 v6.0.0-rc1 // indirect
+	go.podman.io/podman/v6 v6.0.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/crypto v0.56.0 // indirect

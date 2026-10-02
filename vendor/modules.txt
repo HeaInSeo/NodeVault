@@ -778,7 +778,7 @@ go.podman.io/image/v5/transports
 go.podman.io/image/v5/transports/alltransports
 go.podman.io/image/v5/types
 go.podman.io/image/v5/version
-# go.podman.io/podman/v6 v6.0.0-rc1
+# go.podman.io/podman/v6 v6.0.0
 ## explicit; go 1.25.6
 go.podman.io/podman/v6/internal/remote_build_helpers
 go.podman.io/podman/v6/libpod/define

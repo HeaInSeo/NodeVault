@@ -224,6 +224,16 @@ func run() int {
 
 	// Certification service — shared between gRPC and REST validation paths.
 	certSvc := certification.New(indexStore)
+	// Retract certifications granted from records the current admission rule
+	// rejects (NodeVault #117) before any intake can observe them.
+	retracted, err := certSvc.RetractUnprovenCertifications()
+	if err != nil {
+		slog.Error("failed to retract unproven certifications", "err", err)
+		return 1
+	}
+	if retracted > 0 {
+		slog.Warn("retracted unproven certifications", "count", retracted)
+	}
 
 	rec, err := startBackground(ctx, indexStore, cat, dataCat, certSvc, rc.webhookAddr, fastInterval, slowInterval)
 	if err != nil {

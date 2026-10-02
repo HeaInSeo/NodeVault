@@ -73,7 +73,9 @@ func grpcCode(err error) codes.Code {
 
 // ── SubmitToolCheckRecord tests ───────────────────────────────────────────────
 
-// TestSubmitToolCheckRecord_HappyPath verifies a successful submission.
+// TestSubmitToolCheckRecord_HappyPath verifies a successful submission. The
+// gRPC wire carries no stage/terminal/evidence, so a succeeded record is
+// stored and handed to certification but never reported as certified (#117).
 func TestSubmitToolCheckRecord_HappyPath(t *testing.T) {
 	store := newStore(t)
 	certSvc := &fakeCertSvc{}
@@ -93,8 +95,8 @@ func TestSubmitToolCheckRecord_HappyPath(t *testing.T) {
 	if resp.RecordId != "chk-1" {
 		t.Errorf("RecordId: got %q want chk-1", resp.RecordId)
 	}
-	if resp.CertificationStatus != "certified" {
-		t.Errorf("CertificationStatus: got %q want certified", resp.CertificationStatus)
+	if resp.CertificationStatus != "pending" {
+		t.Errorf("CertificationStatus: got %q want pending", resp.CertificationStatus)
 	}
 	if !certSvc.called {
 		t.Error("expected certSvc.EvaluateAfterCheck to be called")

@@ -24,15 +24,72 @@ func New(store *index.Store) *Service {
 	return &Service{store: store}
 }
 
+// stageL5A and stageL5B are the functional-validation and security-scan stage
+// literals NodeSentinel sets on ToolCheckRecord.Stage / ToolScanRecord.Stage
+// (see index.ToolCheckRecord's Stage doc comment).
+const (
+	stageL5A = "L5A"
+	stageL5B = "L5B"
+)
+
+// contractPassed reports whether a ContractCheck result literal means passed.
+// "pass" is the canonical wire value (index.ContractCheck, the proto
+// ContractCheck.result comment); "passed" is what NodeSentinel REST sends today.
+func contractPassed(result string) bool {
+	return result == "pass" || result == "passed"
+}
+
+// evidenceIneligibility returns why check is not admissible as certification
+// input, or "" when it is (NodeVault #117). Only a succeeded L5-a record that
+// carries observed evidence counts: a non-empty ValidationHash and a passed
+// contract check with all declared outputs present. A placeholder L5-a run
+// (image starts and exits 0, outputs not observed), a record with no or an
+// unknown stage (including every gRPC-submitted record, whose wire has no
+// stage), an L3/L4 success, and any unknown validation_status literal are all
+// rejected, so none of them can reach PromotionActive.
+//
+//nolint:gocritic // hugeParam: ToolCheckRecord by value matches the certService interface contract.
+func evidenceIneligibility(check index.ToolCheckRecord) string {
+	switch {
+	case check.ValidationStatus != "succeeded":
+		return "check not succeeded"
+	case check.Stage != stageL5A:
+		return "check is not an L5-a functional validation record"
+	case check.ValidationHash == "":
+		return "no validation evidence hash"
+	case check.ContractCheck == nil || !check.ContractCheck.AllOutputsPresent ||
+		!contractPassed(check.ContractCheck.Result):
+		return "declared outputs not observed"
+	}
+	return ""
+}
+
+// CertifiesOnCheck reports whether EvaluateAfterCheck would certify check
+// right away: it must be evidence-bearing (see evidenceIneligibility) and
+// Terminal. A non-terminal L5-a record is followed by L5-b, so certification
+// waits for the scan (EvaluateAfterScan) instead of running ahead of it.
+// Intake handlers use this to report certification_status honestly.
+//
+//nolint:gocritic // hugeParam: ToolCheckRecord by value matches the certService interface contract.
+func CertifiesOnCheck(check index.ToolCheckRecord) bool {
+	return evidenceIneligibility(check) == "" && check.Terminal
+}
+
 // EvaluateAfterCheck is called after a ToolCheckRecord is stored.
-// If the check succeeded, it immediately attempts certification using any
-// existing scan record (or proceeds without one if scan is optional).
+// If the check is a terminal, evidence-bearing L5-a success, it immediately
+// attempts certification using any existing scan record. Every other record
+// is stored without certifying (NodeVault #117).
 //
 //nolint:gocritic // hugeParam: ToolCheckRecord by value matches the certService interface contract.
 func (s *Service) EvaluateAfterCheck(check index.ToolCheckRecord) error {
-	if check.ValidationStatus != "succeeded" {
-		slog.Info("certification skipped: check not succeeded",
-			"check_id", check.CheckID, "status", check.ValidationStatus)
+	if reason := evidenceIneligibility(check); reason != "" {
+		slog.Info("certification skipped: check not admissible",
+			"check_id", check.CheckID, "status", check.ValidationStatus, "stage", check.Stage, "reason", reason)
+		return nil
+	}
+	if !check.Terminal {
+		slog.Info("certification deferred: non-terminal L5-a check waits for L5-b",
+			"check_id", check.CheckID)
 		return nil
 	}
 
@@ -52,11 +109,28 @@ func (s *Service) EvaluateAfterCheck(check index.ToolCheckRecord) error {
 	return s.certify(check, latestScan)
 }
 
+// terminalL5B reports whether scan is the terminal L5-b record that closes a
+// validation request, i.e. the scan a non-terminal L5-a check waits for.
+//
+//nolint:gocritic // hugeParam: ToolScanRecord by value matches the certService interface contract.
+func terminalL5B(scan index.ToolScanRecord) bool {
+	return scan.Terminal && scan.Stage == stageL5B
+}
+
 // EvaluateAfterScan is called after a ToolScanRecord is stored.
-// Looks for an existing successful check and re-evaluates certification.
+// Looks for an existing evidence-bearing L5-a success and re-evaluates
+// certification; a check that is not admissible never certifies here either.
+// Only a terminal L5-b scan can promote: a non-terminal, stage-less or
+// wrong-stage scan is deferred unless its policy result is "blocked", which
+// still retracts (fail closed).
 //
 //nolint:gocritic // hugeParam: ToolScanRecord by value matches the certService interface contract.
 func (s *Service) EvaluateAfterScan(scan index.ToolScanRecord) error {
+	if !terminalL5B(scan) && scan.PolicyResult != "blocked" {
+		slog.Info("certification deferred: scan is not a terminal L5-b record",
+			"scan_id", scan.ScanID, "stage", scan.Stage, "terminal", scan.Terminal)
+		return nil
+	}
 	checks, err := s.store.ListToolCheckRecordsByImageDigest(scan.ImageDigest)
 	if err != nil {
 		slog.Error("certification aborted: failed to list check records",
@@ -64,12 +138,149 @@ func (s *Service) EvaluateAfterScan(scan index.ToolScanRecord) error {
 		return fmt.Errorf("list check records: %w", err)
 	}
 	for i := range checks {
-		if checks[i].ValidationStatus == "succeeded" {
+		if evidenceIneligibility(checks[i]) == "" {
 			return s.certify(checks[i], &scan)
 		}
 	}
-	slog.Info("certification deferred: no successful check record yet",
+	slog.Info("certification deferred: no admissible check record yet",
 		"scan_id", scan.ScanID, "image_digest", scan.ImageDigest)
+	return nil
+}
+
+// unprovenReason returns why an ACTIVE certification cannot be re-proven
+// from its stored driving records under the current admission rule, or ""
+// when it can: the driving check must be admissible and either terminal
+// itself or paired with a terminal L5-b scan.
+//
+//nolint:gocritic // hugeParam: by value is intentional — callers own their copy.
+func (s *Service) unprovenReason(cert index.CertifiedToolImageRecord) string {
+	if cert.CheckID == "" {
+		return "no driving check record"
+	}
+	check, err := s.store.GetToolCheckRecordByID(cert.CheckID)
+	if err != nil {
+		return "driving check record not found"
+	}
+	if reason := evidenceIneligibility(check); reason != "" {
+		return reason
+	}
+	if check.Terminal {
+		return ""
+	}
+	if cert.ScanID != "" {
+		if scan, err := s.store.GetToolScanRecordByID(cert.ScanID); err == nil && terminalL5B(scan) {
+			return ""
+		}
+	}
+	return "non-terminal check without a terminal L5-b scan"
+}
+
+// RetractUnprovenCertifications retracts every ACTIVE CertifiedToolImageRecord
+// (and its ACTIVE catalog entry) whose driving records no longer prove it
+// under the current admission rule — e.g. tools certified from placeholder
+// L5-a records before NodeVault #117. Records are not deleted; each
+// retraction is logged with its reason, and a later admissible check/scan
+// re-certifies through the normal path. Returns the number retracted.
+// Call it at startup before intake begins.
+//
+// Several certifications can share one CasHash (certifications are keyed by
+// ToolSpecDigest+Platform, the catalog only by CasHash). A catalog entry is
+// retracted only when no provable ACTIVE certification for its CasHash
+// remains; otherwise it stays ACTIVE, rebuilt from a survivor if it pointed
+// at a retracted image.
+func (s *Service) RetractUnprovenCertifications() (int, error) {
+	certs, err := s.store.ListCertifiedToolImageRecords(index.PromotionActive)
+	if err != nil {
+		return 0, fmt.Errorf("list active certifications: %w", err)
+	}
+	retractedCas := map[string]bool{}
+	retractedImages := map[string]bool{}
+	survivors := map[string]index.CertifiedToolImageRecord{}
+	n := 0
+	for i := range certs {
+		reason := s.unprovenReason(certs[i])
+		if reason == "" {
+			if c := certs[i].CasHash; c != "" {
+				if _, ok := survivors[c]; !ok {
+					survivors[c] = certs[i]
+				}
+			}
+			continue
+		}
+		cert := certs[i]
+		cert.PromotionStatus = index.PromotionRetracted
+		if err = s.store.UpsertCertifiedToolImageRecord(cert); err != nil {
+			return n, fmt.Errorf("retract certification %q: %w", cert.ImageDigest, err)
+		}
+		slog.Warn("certification retracted: not provable from stored evidence",
+			"image_digest", cert.ImageDigest, "tool_name", cert.ToolName, "version", cert.Version,
+			"check_id", cert.CheckID, "scan_id", cert.ScanID, "reason", reason)
+		if cert.CasHash != "" {
+			retractedCas[cert.CasHash] = true
+		}
+		retractedImages[cert.ImageDigest] = true
+		n++
+	}
+	if len(retractedCas) == 0 {
+		return n, nil
+	}
+	entries, err := s.store.ListToolFunctionCatalogEntries(index.PromotionActive)
+	if err != nil {
+		return n, fmt.Errorf("list active catalog entries: %w", err)
+	}
+	for i := range entries {
+		if !retractedCas[entries[i].CasHash] {
+			continue
+		}
+		entry := entries[i]
+		if survivor, ok := survivors[entry.CasHash]; ok {
+			if keepErr := s.keepCatalogForSurvivor(&entry, &survivor, retractedImages[entry.ImageDigest]); keepErr != nil {
+				return n, keepErr
+			}
+			continue
+		}
+		entry.PromotionStatus = index.PromotionRetracted
+		if err = s.store.UpsertToolFunctionCatalogEntry(entry); err != nil {
+			return n, fmt.Errorf("retract catalog entry %q: %w", entry.CasHash, err)
+		}
+		slog.Warn("catalog entry retracted with its certification",
+			"cas_hash", entry.CasHash, "image_digest", entry.ImageDigest)
+	}
+	return n, nil
+}
+
+// keepCatalogForSurvivor keeps entry ACTIVE because survivor, a provable ACTIVE
+// certification, still backs its CasHash. If entry pointed at a retracted
+// image (pointsAtRetracted), it is rebuilt from the survivor's image and
+// driving check so the catalog never exposes the unproven image.
+func (s *Service) keepCatalogForSurvivor(
+	entry *index.ToolFunctionCatalogEntry, survivor *index.CertifiedToolImageRecord, pointsAtRetracted bool,
+) error {
+	if !pointsAtRetracted {
+		slog.Info("catalog entry kept: another ACTIVE certification backs it",
+			"cas_hash", entry.CasHash, "image_digest", entry.ImageDigest)
+		return nil
+	}
+	check, err := s.store.GetToolCheckRecordByID(survivor.CheckID)
+	if err != nil {
+		return fmt.Errorf("rebuild catalog entry %q: read survivor check %q: %w", entry.CasHash, survivor.CheckID, err)
+	}
+	from := entry.ImageDigest
+	entry.ToolName = survivor.ToolName
+	entry.Version = survivor.Version
+	entry.StableRef = fmt.Sprintf("%s@%s", survivor.ToolName, survivor.Version)
+	entry.ImageDigest = survivor.ImageDigest
+	entry.ImageRef = ""
+	if imgRec, imgErr := s.store.GetToolImageRecordByDigest(survivor.ImageDigest); imgErr == nil {
+		entry.ImageRef = imgRec.ImageRef
+	}
+	entry.CertifiedAt = survivor.CertifiedAt
+	entry.ValidationHash = check.ValidationHash
+	if err = s.store.UpsertToolFunctionCatalogEntry(*entry); err != nil {
+		return fmt.Errorf("rebuild catalog entry %q: %w", entry.CasHash, err)
+	}
+	slog.Warn("catalog entry rebuilt from surviving certification",
+		"cas_hash", entry.CasHash, "from_image_digest", from, "image_digest", entry.ImageDigest)
 	return nil
 }
 

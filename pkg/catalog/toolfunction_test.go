@@ -621,14 +621,17 @@ func TestRegisterToolFunction_UnknownPresentationFieldRejected(t *testing.T) {
 // explicitly-present-but-empty nested message (command: {}) must produce a different
 // tool_function_digest than an absent one, so distinct authored specs cannot collide.
 func TestRegisterToolFunction_PresentEmptyMessageDistinctDigest(t *testing.T) {
+	// No command arguments → no parameter can be consumed (O-1), so neither variant declares one.
 	svcAbsent, _ := newTFService(t)
 	reqAbsent := validTFReq()
 	reqAbsent.Spec.Command = nil // absent
+	reqAbsent.Spec.Parameters = nil
 	respAbsent := mustRegisterTF(t, svcAbsent, reqAbsent)
 
 	svcEmpty, _ := newTFService(t)
 	reqEmpty := validTFReq()
 	reqEmpty.Spec.Command = &nfv1.CommandContract{} // present but empty
+	reqEmpty.Spec.Parameters = nil
 	respEmpty := mustRegisterTF(t, svcEmpty, reqEmpty)
 
 	if respAbsent.GetToolFunctionDigest() == respEmpty.GetToolFunctionDigest() {

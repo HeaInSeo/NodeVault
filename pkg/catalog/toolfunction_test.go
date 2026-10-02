@@ -52,14 +52,15 @@ const (
 	portAligned = "aligned"
 )
 
-// validTFReq returns a structurally valid RegisterToolFunctionRequest.
+// validTFReq returns a structurally valid RegisterToolFunctionRequest. Its declared
+// parameter is consumed by a whole-element {param.threads} argument (O-1).
 func validTFReq() *nfv1.RegisterToolFunctionRequest {
 	return &nfv1.RegisterToolFunctionRequest{
 		RequestId:          "req-1",
 		BaseToolSpecDigest: baseDigest,
 		ImageDigest:        imgDigest('a'),
 		Spec: &nfv1.ToolFunctionSpec{
-			Command: &nfv1.CommandContract{Executable: "bwa", Arguments: []string{"mem", "-t"}},
+			Command: &nfv1.CommandContract{Executable: "bwa", Arguments: []string{"mem", "-t", "{param.threads}"}},
 			Inputs: []*nfv1.FunctionPortSpec{
 				{Name: "reads", DataFormat: fmtFastq, Cardinality: nfv1.Cardinality_CARDINALITY_SINGLE, Required: true},
 			},

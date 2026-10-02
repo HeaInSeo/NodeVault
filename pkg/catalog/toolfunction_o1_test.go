@@ -143,8 +143,8 @@ func TestRegisterToolFunction_O1ValidationOrdering(t *testing.T) {
 		}
 		replay := validTFReq()
 		replay.Spec.Command.Arguments = []string{"mem", "-t", "--t={param.threads}"}
-		if _, err := svc.RegisterToolFunction(context.Background(), replay); status.Code(err) != codes.InvalidArgument {
-			t.Fatalf("want InvalidArgument for invalid replay (not AlreadyExists), got %v", err)
+		if _, rerr := svc.RegisterToolFunction(context.Background(), replay); status.Code(rerr) != codes.InvalidArgument {
+			t.Fatalf("want InvalidArgument for invalid replay (not AlreadyExists), got %v", rerr)
 		}
 		after, err := store.GetToolFunctionRequestRecord("req-1")
 		if err != nil {

@@ -46,6 +46,17 @@ const jsonKeyName = "name"
 // prevent permanently malformed/dangling lineage.
 var baseToolSpecDigestRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
+// O-1 authoring binding bridge (CLOSED MINIMUM): a logical reference occupies one complete
+// CommandContract.arguments element in an exact namespace, with the name grammar
+// [A-Za-z][A-Za-z0-9._-]*. argumentReferenceLikeRE detects a reference attempt anywhere in an
+// element (same word-token detector as the NodeKit client gate); an element that matches it
+// but is not a whole-element reference is malformed or embedded and is rejected. Elements
+// such as `{}`, `{foo}` or `{1.5}` stay literal (boundary not decided by the canon).
+var (
+	argumentReferenceRE     = regexp.MustCompile(`\A\{(param|input|output)\.([A-Za-z][A-Za-z0-9._-]*)\}\z`)
+	argumentReferenceLikeRE = regexp.MustCompile(`\{[A-Za-z_][A-Za-z0-9_]*\.`)
+)
+
 // RegisterToolFunction validates a typed ToolFunctionSpec declaration, computes the
 // NodeVault-owned tool_function_digest and cas_hash over its own canonical JSON,
 // durably registers the runnable record (+ optional presentation revision) atomically,
@@ -269,7 +280,60 @@ func validateToolFunctionSpec(spec *nfv1.ToolFunctionSpec) error {
 	if err := validateParameterTypes(spec.GetParameters()); err != nil {
 		return err
 	}
+	if err := validateArgumentReferences(spec); err != nil {
+		return err
+	}
 	return validateIntermediateFilePolicyKinds(spec.GetIntermediateFilePolicies())
+}
+
+// validateArgumentReferences enforces the O-1 authoring binding bridge on
+// CommandContract.arguments before any digest or persistent mutation:
+//   - a reference is a whole element `{param|input|output.<name>}`; malformed or embedded
+//     reference attempts are rejected;
+//   - `{param.<name>}` must resolve to exactly one declared parameter (names are already
+//     unique); repeated references are allowed;
+//   - `{input.*}` / `{output.*}` are valid authoring intent but not runnable until an approved
+//     Runtime Invocation Finalization (B) profile exists, so registration rejects them;
+//   - every declared parameter must be consumed by at least one reference
+//     (cli_argument_mapping renders a referenced parameter; it never inserts one).
+//
+// Only new registrations and replays are affected: stored records keep no spec and are never
+// re-validated or rehashed.
+func validateArgumentReferences(spec *nfv1.ToolFunctionSpec) error {
+	declared := make(map[string]struct{}, len(spec.GetParameters()))
+	for _, p := range spec.GetParameters() {
+		declared[p.GetName()] = struct{}{}
+	}
+	consumed := make(map[string]struct{}, len(declared))
+	for i, arg := range spec.GetCommand().GetArguments() {
+		m := argumentReferenceRE.FindStringSubmatch(arg)
+		if m == nil {
+			if argumentReferenceLikeRE.MatchString(arg) {
+				return status.Errorf(codes.InvalidArgument,
+					"command argument %d %q is a malformed or embedded reference; a reference must be a whole "+
+						"element {param|input|output.<name>}", i, arg)
+			}
+			continue // literal element
+		}
+		namespace, name := m[1], m[2]
+		if namespace != "param" {
+			return status.Errorf(codes.InvalidArgument,
+				"command argument %d %q: direct {%s.*} references are not runnable before an approved "+
+					"runtime invocation finalization profile", i, arg, namespace)
+		}
+		if _, ok := declared[name]; !ok {
+			return status.Errorf(codes.InvalidArgument,
+				"command argument %d %q references undeclared parameter %q", i, arg, name)
+		}
+		consumed[name] = struct{}{}
+	}
+	for _, p := range spec.GetParameters() {
+		if _, ok := consumed[p.GetName()]; !ok {
+			return status.Errorf(codes.InvalidArgument,
+				"parameter %q is declared but not referenced by any {param.%s} command argument", p.GetName(), p.GetName())
+		}
+	}
+	return nil
 }
 
 // validateParameterTypes rejects any ParameterSpec.type whose numeric value is not a

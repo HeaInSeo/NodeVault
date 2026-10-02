@@ -52,14 +52,15 @@ const (
 	portAligned = "aligned"
 )
 
-// validTFReq returns a structurally valid RegisterToolFunctionRequest.
+// validTFReq returns a structurally valid RegisterToolFunctionRequest. Its declared
+// parameter is consumed by a whole-element {param.threads} argument (O-1).
 func validTFReq() *nfv1.RegisterToolFunctionRequest {
 	return &nfv1.RegisterToolFunctionRequest{
 		RequestId:          "req-1",
 		BaseToolSpecDigest: baseDigest,
 		ImageDigest:        imgDigest('a'),
 		Spec: &nfv1.ToolFunctionSpec{
-			Command: &nfv1.CommandContract{Executable: "bwa", Arguments: []string{"mem", "-t"}},
+			Command: &nfv1.CommandContract{Executable: "bwa", Arguments: []string{"mem", "-t", "{param.threads}"}},
 			Inputs: []*nfv1.FunctionPortSpec{
 				{Name: "reads", DataFormat: fmtFastq, Cardinality: nfv1.Cardinality_CARDINALITY_SINGLE, Required: true},
 			},
@@ -620,14 +621,17 @@ func TestRegisterToolFunction_UnknownPresentationFieldRejected(t *testing.T) {
 // explicitly-present-but-empty nested message (command: {}) must produce a different
 // tool_function_digest than an absent one, so distinct authored specs cannot collide.
 func TestRegisterToolFunction_PresentEmptyMessageDistinctDigest(t *testing.T) {
+	// No command arguments → no parameter can be consumed (O-1), so neither variant declares one.
 	svcAbsent, _ := newTFService(t)
 	reqAbsent := validTFReq()
 	reqAbsent.Spec.Command = nil // absent
+	reqAbsent.Spec.Parameters = nil
 	respAbsent := mustRegisterTF(t, svcAbsent, reqAbsent)
 
 	svcEmpty, _ := newTFService(t)
 	reqEmpty := validTFReq()
 	reqEmpty.Spec.Command = &nfv1.CommandContract{} // present but empty
+	reqEmpty.Spec.Parameters = nil
 	respEmpty := mustRegisterTF(t, svcEmpty, reqEmpty)
 
 	if respAbsent.GetToolFunctionDigest() == respEmpty.GetToolFunctionDigest() {

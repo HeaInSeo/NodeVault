@@ -311,6 +311,108 @@ func TestToolFunctionCutover_FencedWriterRefusesNonToolFunctionWrites(t *testing
 	}
 }
 
+// M18/N7 epoch-0 residual (GR 5b9e2ddf): a Store that never claimed an epoch and loaded before
+// another Store registered casB must not save its stale view and erase casB. Its write is
+// refused, it reloads, and a retry succeeds without losing casB.
+func TestToolFunctionCutover_EpochZeroStaleStoreCannotEraseRegistration(t *testing.T) {
+	dir := t.TempDir()
+	s1, err := index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("NewAt s1: %v", err)
+	}
+	s2, err := index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("NewAt s2: %v", err)
+	}
+	if _, _, err = s2.RegisterToolFunctionAtomic(tfOp("r2"), tfRecord(casB, tfd1, imgB), nil); err != nil {
+		t.Fatalf("s2 r2: %v", err)
+	}
+
+	if err = s1.Append(index.Entry{CasHash: "entry-1"}); !errors.Is(err, index.ErrToolFunctionWriterFenced) {
+		t.Fatalf("stale epoch-0 Append: want ErrToolFunctionWriterFenced, got %v", err)
+	}
+	reopened, err := index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if _, err = reopened.GetToolFunctionByCasHash(casB); err != nil {
+		t.Fatalf("casB erased by stale epoch-0 save: %v", err)
+	}
+	if _, err = reopened.GetByCasHash("entry-1"); !errors.Is(err, index.ErrNotFound) {
+		t.Fatalf("refused Append persisted: %v", err)
+	}
+
+	// The refusal reloaded s1: the retry sees casB and keeps it.
+	if _, err = s1.GetToolFunctionByCasHash(casB); err != nil {
+		t.Fatalf("refused Store did not reload: %v", err)
+	}
+	if err = s1.Append(index.Entry{CasHash: "entry-1"}); err != nil {
+		t.Fatalf("retry after reload: %v", err)
+	}
+	reopened, err = index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("reopen after retry: %v", err)
+	}
+	if _, err = reopened.GetToolFunctionByCasHash(casB); err != nil {
+		t.Fatalf("casB lost after retry: %v", err)
+	}
+	if _, err = reopened.GetByCasHash("entry-1"); err != nil {
+		t.Fatalf("retried Append lost: %v", err)
+	}
+}
+
+// The reverse direction: the current epoch writer must not erase a write that a fresh epoch-0
+// Store committed after the writer last loaded. Its plain save is refused and reloads; its next
+// registration refreshes from disk before mutating.
+func TestToolFunctionCutover_EpochWriterDoesNotEraseEpochZeroWrite(t *testing.T) {
+	dir := t.TempDir()
+	w, err := index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("NewAt writer: %v", err)
+	}
+	if _, _, err = w.RegisterToolFunctionAtomic(tfOp("r1"), tfRecord(casA, tfd1, imgA), nil); err != nil {
+		t.Fatalf("writer r1: %v", err)
+	}
+	other, err := index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("NewAt other: %v", err)
+	}
+	if err = other.Append(index.Entry{CasHash: "entry-x"}); err != nil {
+		t.Fatalf("fresh epoch-0 append: %v", err)
+	}
+
+	if err = w.Append(index.Entry{CasHash: "entry-y"}); !errors.Is(err, index.ErrToolFunctionWriterFenced) {
+		t.Fatalf("stale epoch writer Append: want ErrToolFunctionWriterFenced, got %v", err)
+	}
+	if err = w.Append(index.Entry{CasHash: "entry-y"}); err != nil {
+		t.Fatalf("epoch writer retry after reload: %v", err)
+	}
+	if err = other.Append(index.Entry{CasHash: "entry-z"}); !errors.Is(err, index.ErrToolFunctionWriterFenced) {
+		t.Fatalf("now-stale epoch-0 Append: want ErrToolFunctionWriterFenced, got %v", err)
+	}
+	if err = other.Append(index.Entry{CasHash: "entry-z"}); err != nil {
+		t.Fatalf("epoch-0 retry after reload: %v", err)
+	}
+	if _, _, err = w.RegisterToolFunctionAtomic(tfOp("r2"), tfRecord(casB, tfd1, imgB), nil); err != nil {
+		t.Fatalf("writer r2 after another Store's write: %v", err)
+	}
+
+	reopened, err := index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	for _, cas := range []string{"entry-x", "entry-y", "entry-z"} {
+		if _, err := reopened.GetByCasHash(cas); err != nil {
+			t.Fatalf("%s lost: %v", cas, err)
+		}
+	}
+	for _, cas := range []string{casA, casB} {
+		if _, err := reopened.GetToolFunctionByCasHash(cas); err != nil {
+			t.Fatalf("%s lost: %v", cas, err)
+		}
+	}
+}
+
 // W2-OUTSIDE-DIGEST-REREG-01: a new request_id for an existing tool_function_digest under a
 // different casHash must carry the same validation_policy and environment_hints. Each axis is
 // diagnosed separately, absent and explicitly-empty are distinct, and a conflict leaves no

@@ -1,6 +1,8 @@
 package index
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,9 +32,10 @@ const (
 // persistent Store write once this Store has claimed a write epoch, when this Store is not the
 // current ToolFunction writer: another writer claimed a newer write epoch, the durable fence was
 // written by an unknown/newer profile, or the index was rewritten by an older (v1-unaware) binary
-// after this writer committed. The write is refused before the index file is touched so old and
-// new writers never both acknowledge writes to the same authority store (DC-R1-NV-C1 cutover
-// step 2 / N7).
+// after this writer committed. Every Store's save() also returns it when the index file changed
+// on disk since that Store loaded it (a stale whole-index view, e.g. a Store that never claimed
+// an epoch). The write is refused before the index file is touched so old and new writers never
+// both acknowledge writes to the same authority store (DC-R1-NV-C1 cutover step 2 / N7).
 var ErrToolFunctionWriterFenced = errors.New("index: tool function writer fenced")
 
 // toolFunctionWriterFence is the durable activation marker and single serialized write epoch of
@@ -143,6 +146,43 @@ func (s *Store) readToolFunctionWriterFence() (*toolFunctionWriterFence, error) 
 		return nil, fmt.Errorf("index: parse tool function writer fence %s: %w", path, err)
 	}
 	return &f, nil
+}
+
+// indexGenerationAbsent is the indexGeneration of a Store that loaded no index file.
+const indexGenerationAbsent = "absent"
+
+func indexGenerationOf(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// checkIndexGenerationLocked reports whether the index file on disk differs from the bytes this
+// Store last loaded or persisted. Must be called with s.mu and the writer lock held.
+func (s *Store) checkIndexGenerationLocked() (moved bool, err error) {
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return s.indexGeneration != indexGenerationAbsent, nil
+		}
+		return false, fmt.Errorf("index: read %s: %w", s.path, err)
+	}
+	return indexGenerationOf(data) != s.indexGeneration, nil
+}
+
+// beginToolFunctionWriteLocked verifies or claims the write epoch, then refreshes the in-memory
+// index if another Store (e.g. one that never claims an epoch) saved since this one last loaded
+// or persisted it. Nothing is mutated yet at this point, so reloading cannot drop a pending
+// write; it keeps the registration's save from erasing the other Store's writes. Must be called
+// with s.mu and the writer lock held.
+func (s *Store) beginToolFunctionWriteLocked(now time.Time) error {
+	if err := s.ensureToolFunctionWriterLocked(now); err != nil {
+		return err
+	}
+	moved, err := s.checkIndexGenerationLocked()
+	if err != nil || !moved {
+		return err
+	}
+	return s.load()
 }
 
 // readOnDiskSchemaVersion returns the schema_version currently stamped on the index file.

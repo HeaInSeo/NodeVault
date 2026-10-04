@@ -69,6 +69,11 @@ type Store struct {
 	// Guarded by mu.
 	toolFunctionWriterEpoch     int64
 	toolFunctionWriterCommitted bool
+	// indexGeneration is the SHA-256 of the index file bytes this Store last loaded or
+	// persisted (indexGenerationAbsent when there was no file). A whole-index save over a file
+	// that no longer matches it would erase another Store's committed writes, so save() refuses
+	// it (see checkIndexGenerationLocked). Guarded by mu.
+	indexGeneration string
 }
 
 // ErrNotFound is returned when a requested entry does not exist.
@@ -1582,7 +1587,7 @@ func (s *Store) RegisterToolFunctionAtomic(
 	defer unlock()
 
 	now := time.Now().UTC()
-	if ferr := s.ensureToolFunctionWriterLocked(now); ferr != nil {
+	if ferr := s.beginToolFunctionWriteLocked(now); ferr != nil {
 		return RegisteredToolFunction{}, false, ferr
 	}
 
@@ -1944,6 +1949,7 @@ func (s *Store) load() error {
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			s.idx = &indexFile{SchemaVersion: schemaVersion}
+			s.indexGeneration = indexGenerationAbsent
 			return nil
 		}
 		return fmt.Errorf("index: read %s: %w", s.path, err)
@@ -1965,6 +1971,7 @@ func (s *Store) load() error {
 			s.path, f.SchemaVersion, schemaVersion)
 	}
 	s.idx = &f
+	s.indexGeneration = indexGenerationOf(data)
 	return nil
 }
 
@@ -1974,6 +1981,13 @@ func (s *Store) load() error {
 // ErrToolFunctionWriterFenced for EVERY persistent write, not only registrations, so its stale
 // in-memory index never overwrites what the current writer committed. The refusal happens
 // before any file is touched, so callers treat it like any other pre-rename failure.
+//
+// Any Store, including one that never claimed an epoch (e.g. NodePalette), is also refused
+// when the index file changed on disk since this Store last loaded or persisted it: its
+// whole-index save would otherwise erase what the other Store committed (e.g. a ToolFunction
+// registered under the current epoch). The refused Store reloads from disk under the lock,
+// dropping the unsaved mutation, so a retry runs against the current index.
+//
 // RegisterToolFunctionAtomic already holds the lock and verified the epoch, so it calls
 // persistLocked directly (flock is per open file: re-locking here would self-deadlock).
 func (s *Store) save() error {
@@ -1986,6 +2000,17 @@ func (s *Store) save() error {
 		if ferr := s.ensureToolFunctionWriterLocked(time.Now().UTC()); ferr != nil {
 			return ferr
 		}
+	}
+	moved, err := s.checkIndexGenerationLocked()
+	if err != nil {
+		return err
+	}
+	if moved {
+		if lerr := s.load(); lerr != nil {
+			return lerr
+		}
+		return fmt.Errorf("%w: %s changed on disk since this Store loaded it; reloaded, retry the write",
+			ErrToolFunctionWriterFenced, s.path)
 	}
 	return s.persistLocked()
 }
@@ -2040,6 +2065,8 @@ func (s *Store) persistLocked() error {
 	if err := os.Rename(tmpPath, s.path); err != nil {
 		return fmt.Errorf("index: rename %s to %s: %w", tmpPath, s.path, err)
 	}
+	// The file now holds exactly these bytes, whatever durability error follows.
+	s.indexGeneration = indexGenerationOf(data)
 	// Test-only seam: simulate a post-rename durability failure (nil in production). It runs
 	// only after the rename has already swapped the file, exactly where a real parent-dir
 	// fsync error would occur, so it exercises the errIndexPersistedNotDurable path.

@@ -25,6 +25,10 @@ const (
 	// this durable provenance actually durable: a rolled-back schema-5 binary refuses the file
 	// via load()'s version guard instead of silently dropping the provenance fields on its
 	// next save (which would defeat the frozen-derivation guarantee).
+	// schemaVersion 7 adds the versioned ToolFunction receipt (CanonicalizationVersion,
+	// RequestFingerprint, RequestBasisJSON) and RegisteredToolFunction.CanonicalizationVersion
+	// (DC-R1-NV-C1). The bump is the downgrade refusal: a v1-unaware schema-6 binary refuses the
+	// file instead of dropping the receipt basis and accepting writes under the old canonicalizer.
 	// Older files omit these fields; load() treats absent fields as empty slices.
 	//
 	// Every bump so far has been purely additive (new optional fields/sections
@@ -33,7 +37,7 @@ const (
 	// removes/renames/reinterprets a field instead of only adding one, this
 	// assumption breaks and load() must gain real per-version migration
 	// logic, not just a version check.
-	schemaVersion   = 6
+	schemaVersion   = 7
 	defaultIndexDir = "assets/index"
 	indexFileName   = "vault-index.json"
 )
@@ -57,6 +61,12 @@ type Store struct {
 	// result (including an idempotent replay) while this is set, so no success is returned
 	// on an un-fsync'd rename. Guarded by mu.
 	toolFunctionDurabilityUncertain bool
+	// toolFunctionWriterEpoch is the ToolFunction write epoch this Store claimed in the durable
+	// writer fence (0 = not yet claimed); toolFunctionWriterCommitted is set once this writer
+	// has persisted a registration under that epoch. See ensureToolFunctionWriterLocked.
+	// Guarded by mu.
+	toolFunctionWriterEpoch     int64
+	toolFunctionWriterCommitted bool
 }
 
 // ErrNotFound is returned when a requested entry does not exist.
@@ -108,6 +118,19 @@ var ErrInvalidTransition = errors.New("index: invalid validation status transiti
 // — the store rejects it fail-closed with no mutation rather than silently
 // overwriting or forking the earlier request's result.
 var ErrToolFunctionRequestConflict = errors.New("index: tool function request id content conflict")
+
+// ErrToolFunctionRequestUnknownLegacy is returned by RegisterToolFunctionAtomic when a
+// request_id replays an UNKNOWN_LEGACY receipt (no stored canonicalizer version / full request
+// basis): replay equality cannot be proven, so it is refused with zero mutation and nothing is
+// backfilled or rehashed (DC-R1-NV-C1 N5).
+var ErrToolFunctionRequestUnknownLegacy = errors.New("index: tool function request receipt is UNKNOWN_LEGACY")
+
+// ErrToolFunctionIdentityAmbiguous is returned by RegisterToolFunctionAtomic when a new
+// request_id resolves to an existing runnable CasHash whose originating receipt cannot prove
+// the same full request basis (an UNKNOWN_LEGACY record, or a different version /
+// presentation / validation_policy / environment_hints). The existing identity is not reused,
+// relabeled or merged; the registration is held with zero mutation (DC-R1-NV-C1 N6).
+var ErrToolFunctionIdentityAmbiguous = errors.New("index: tool function identity reuse not provable")
 
 // ErrInvalidLifecycleTransition is returned by SetLifecyclePhase when the
 // entry's current lifecycle_phase has no allowed edge to the requested one
@@ -1512,28 +1535,47 @@ func (s *Store) applyValidationCorrelationLocked(
 // ── RegisteredToolFunction (issue #19 W2) ─────────────────────────────────────
 
 // RegisterToolFunctionAtomic durably registers a runnable ToolFunction, its
-// optional presentation revision, and (when reqID != "") its request-id record in
-// a single atomic save(). It is idempotent along two independent axes and never
-// overwrites an existing runnable record:
+// optional presentation revision, and its operation receipt in a single atomic save().
+// It first verifies (or claims) the single ToolFunction write epoch — a fenced writer is
+// refused with ErrToolFunctionWriterFenced and zero mutation. It is idempotent along two
+// independent axes and never overwrites an existing runnable record:
 //
-//   - request_id: if reqID was already used, a replay resolving to the SAME CasHash
-//     returns the existing record unchanged; a replay resolving to a DIFFERENT
-//     CasHash is rejected with ErrToolFunctionRequestConflict (no mutation).
-//   - content (CasHash): if the CasHash already exists (same content via a prior
-//     request), the existing record is returned as-is — its authoritative
-//     LifecyclePhase is preserved, never resurrected to Active and never
-//     overwritten — and no new presentation revision is created. A new reqID that
-//     first observes existing content is still recorded so its later replays are
-//     idempotent.
+//   - request_id: if op.RequestID was already used, the replay is compared on the stored
+//     receipt's canonicalizer version + full request fingerprint. An identical replay
+//     returns the existing record unchanged; any difference is rejected with
+//     ErrToolFunctionRequestConflict, and a receipt without a stored version/basis is
+//     rejected with ErrToolFunctionRequestUnknownLegacy (both with no mutation).
+//   - content (CasHash): if the CasHash already exists via a prior request, it is reused
+//     only when that record's originating receipt proves the same version and full request
+//     basis; the existing record is returned as-is — its authoritative LifecyclePhase is
+//     preserved, never resurrected to Active and never overwritten — and only the new
+//     receipt is recorded. Otherwise the reuse is ambiguous and rejected with
+//     ErrToolFunctionIdentityAmbiguous (no mutation, no relabeling).
 //
 // created is true only when a brand-new runnable record was appended.
 //
 //nolint:gocritic // hugeParam: RegisteredToolFunction by value is intentional — callers own their copy.
 func (s *Store) RegisterToolFunctionAtomic(
-	reqID string, rec RegisteredToolFunction, rev *ToolFunctionPresentationRevision,
+	op ToolFunctionOperation, rec RegisteredToolFunction, rev *ToolFunctionPresentationRevision,
 ) (stored RegisteredToolFunction, created bool, err error) {
+	if !op.complete() {
+		return RegisteredToolFunction{}, false, errors.New(
+			"index: tool function operation requires request_id, canonicalization version and request basis")
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	unlock, err := s.lockToolFunctionWriter()
+	if err != nil {
+		return RegisteredToolFunction{}, false, err
+	}
+	defer unlock()
+
+	now := time.Now().UTC()
+	if ferr := s.ensureToolFunctionWriterLocked(now); ferr != nil {
+		return RegisteredToolFunction{}, false, ferr
+	}
 
 	// Durability repair: if a prior registration reached os.Rename but its parent-dir fsync
 	// failed, the record is on disk/in memory but the rename may not survive a crash. Re-save
@@ -1553,41 +1595,29 @@ func (s *Store) RegisterToolFunctionAtomic(
 	}
 
 	// Axis 1: request_id idempotency / conflict.
-	if existing, done, rerr := s.resolveToolFunctionRequestLocked(reqID, rec.CasHash); done {
+	if existing, done, rerr := s.resolveToolFunctionRequestLocked(&op, rec.CasHash); done {
 		return existing, false, rerr
 	}
 
-	now := time.Now().UTC()
-
 	// Axis 2: content idempotency by CasHash. An already-registered runnable record
-	// is authoritative: return it unchanged (never resurrect/overwrite), and only
-	// record the fresh request-id mapping so its later replays reconcile.
+	// is authoritative: reuse it unchanged (never resurrect/overwrite/relabel) only when its
+	// originating receipt proves the same version and full request basis, and then only
+	// record the fresh receipt so its later replays reconcile.
 	if existing, ferr := s.findToolFunctionLocked(rec.CasHash); ferr == nil {
-		if reqID == "" {
-			return existing, false, nil
-		}
-		reqLen := len(s.idx.ToolFunctionRequestRecords)
-		s.appendToolFunctionRequestRecordLocked(reqID, existing, now)
-		if serr := s.save(); serr != nil {
-			// Roll the in-memory append back so a failed persist is not masked by
-			// the request ledger on a later retry (which would return success
-			// without ever writing the mapping to disk) — but ONLY for a pre-rename
-			// failure (disk unchanged). A post-rename durability failure already wrote
-			// the mapping to disk, so keep memory consistent with disk and just surface
-			// the durability error.
-			if !errors.Is(serr, errIndexPersistedNotDurable) {
-				s.idx.ToolFunctionRequestRecords = s.idx.ToolFunctionRequestRecords[:reqLen]
-			} else {
-				// Rename succeeded but the dir fsync did not: the append is on disk/in memory
-				// but the rename may not be durable. Force a re-save before the next ack.
-				s.toolFunctionDurabilityUncertain = true
-			}
-			return RegisteredToolFunction{}, false, serr
+		if rerr := s.reuseToolFunctionLocked(&op, &existing, now); rerr != nil {
+			return RegisteredToolFunction{}, false, rerr
 		}
 		return existing, false, nil
 	}
 
-	// New registration.
+	// New registration. The record's originating request and derivation version are the
+	// operation's: a later reuse proves its basis against exactly this receipt.
+	if rec.RequestID == "" {
+		rec.RequestID = op.RequestID
+	}
+	if rec.CanonicalizationVersion == "" {
+		rec.CanonicalizationVersion = op.CanonicalizationVersion
+	}
 	if rec.RegisteredAt.IsZero() {
 		rec.RegisteredAt = now
 	}
@@ -1605,9 +1635,7 @@ func (s *Store) RegisterToolFunctionAtomic(
 	reqLen := len(s.idx.ToolFunctionRequestRecords)
 	s.idx.RegisteredToolFunctions = append(s.idx.RegisteredToolFunctions, rec)
 	s.appendPresentationRevisionLocked(rev, now)
-	if reqID != "" {
-		s.appendToolFunctionRequestRecordLocked(reqID, rec, now)
-	}
+	s.appendToolFunctionRequestRecordLocked(&op, &rec, now)
 
 	if serr := s.save(); serr != nil {
 		// A failed PRE-RENAME persist must leave no in-memory trace: otherwise the
@@ -1625,48 +1653,119 @@ func (s *Store) RegisterToolFunctionAtomic(
 			// the rename may not be durable. Force a re-save before the next ack (including an
 			// idempotent replay).
 			s.toolFunctionDurabilityUncertain = true
+			s.toolFunctionWriterCommitted = true
 		}
 		return RegisteredToolFunction{}, false, serr
 	}
+	s.toolFunctionWriterCommitted = true
 	return rec, true, nil
 }
 
 // resolveToolFunctionRequestLocked applies the request_id idempotency axis. done is
-// true when the caller should return immediately: either an idempotent replay of the
-// same content (existing record, nil error) or a conflict — the same request_id
-// resolving to a different CasHash — returned fail-closed with no mutation. An empty
-// reqID or an unseen reqID yields done=false so the content axis proceeds.
-func (s *Store) resolveToolFunctionRequestLocked(reqID, casHash string) (RegisteredToolFunction, bool, error) {
-	if reqID == "" {
+// true when the caller should return immediately: either an idempotent replay (stored
+// receipt with the same version and full request fingerprint → existing record, nil
+// error), a conflict (different version, basis or CasHash), or an UNKNOWN_LEGACY receipt
+// whose replay equality cannot be proven — the last two fail-closed with no mutation. An
+// unseen request_id yields done=false so the content axis proceeds.
+func (s *Store) resolveToolFunctionRequestLocked(
+	op *ToolFunctionOperation, casHash string,
+) (RegisteredToolFunction, bool, error) {
+	prior, ok := s.findToolFunctionRequestLocked(op.RequestID)
+	if !ok {
 		return RegisteredToolFunction{}, false, nil
 	}
-	for i := range s.idx.ToolFunctionRequestRecords {
-		if s.idx.ToolFunctionRequestRecords[i].RequestID != reqID {
-			continue
-		}
-		if s.idx.ToolFunctionRequestRecords[i].CasHash != casHash {
-			return RegisteredToolFunction{}, true, fmt.Errorf("%w: request_id=%q", ErrToolFunctionRequestConflict, reqID)
-		}
-		existing, ferr := s.findToolFunctionLocked(casHash)
-		if ferr != nil {
-			return RegisteredToolFunction{}, true, fmt.Errorf(
-				"index inconsistency: request %q maps to missing tool function %q: %w", reqID, casHash, ferr)
-		}
-		return existing, true, nil
+	if !prior.BasisKnown() {
+		return RegisteredToolFunction{}, true, fmt.Errorf("%w: request_id=%q",
+			ErrToolFunctionRequestUnknownLegacy, op.RequestID)
 	}
-	return RegisteredToolFunction{}, false, nil
+	if prior.CanonicalizationVersion != op.CanonicalizationVersion ||
+		prior.RequestFingerprint != op.RequestFingerprint || prior.CasHash != casHash {
+		return RegisteredToolFunction{}, true, fmt.Errorf("%w: request_id=%q", ErrToolFunctionRequestConflict, op.RequestID)
+	}
+	existing, ferr := s.findToolFunctionLocked(prior.CasHash)
+	if ferr != nil {
+		return RegisteredToolFunction{}, true, fmt.Errorf(
+			"index inconsistency: request %q maps to missing tool function %q: %w", op.RequestID, prior.CasHash, ferr)
+	}
+	return existing, true, nil
 }
 
-// appendToolFunctionRequestRecordLocked records a request_id -> runnable mapping.
-//
-//nolint:gocritic // hugeParam: RegisteredToolFunction by value is intentional — callers own their copy.
-func (s *Store) appendToolFunctionRequestRecordLocked(reqID string, rec RegisteredToolFunction, now time.Time) {
+// reuseToolFunctionLocked records a new request_id's receipt against an existing runnable
+// record after proving the reuse; the record itself is never touched.
+func (s *Store) reuseToolFunctionLocked(
+	op *ToolFunctionOperation, existing *RegisteredToolFunction, now time.Time,
+) error {
+	if perr := s.proveToolFunctionReuseLocked(op, existing); perr != nil {
+		return perr
+	}
+	reqLen := len(s.idx.ToolFunctionRequestRecords)
+	s.appendToolFunctionRequestRecordLocked(op, existing, now)
+	if serr := s.save(); serr != nil {
+		// Roll the in-memory append back so a failed persist is not masked by
+		// the request ledger on a later retry (which would return success
+		// without ever writing the mapping to disk) — but ONLY for a pre-rename
+		// failure (disk unchanged). A post-rename durability failure already wrote
+		// the mapping to disk, so keep memory consistent with disk and just surface
+		// the durability error.
+		if !errors.Is(serr, errIndexPersistedNotDurable) {
+			s.idx.ToolFunctionRequestRecords = s.idx.ToolFunctionRequestRecords[:reqLen]
+		} else {
+			// Rename succeeded but the dir fsync did not: the append is on disk/in memory
+			// but the rename may not be durable. Force a re-save before the next ack.
+			s.toolFunctionDurabilityUncertain = true
+			s.toolFunctionWriterCommitted = true
+		}
+		return serr
+	}
+	s.toolFunctionWriterCommitted = true
+	return nil
+}
+
+// proveToolFunctionReuseLocked allows a new request_id to reuse an existing runnable record
+// only when the record has a known derivation version and its originating receipt carries the
+// same canonicalizer version and full request fingerprint (canonical preimage, base/image
+// relation, presentation, validation_policy, environment_hints). Anything less is an identity
+// ambiguity: the existing record is neither reused nor relabeled.
+func (s *Store) proveToolFunctionReuseLocked(op *ToolFunctionOperation, existing *RegisteredToolFunction) error {
+	origin, ok := s.findToolFunctionRequestLocked(existing.RequestID)
+	switch {
+	case existing.CanonicalizationVersion == "" || !ok || !origin.BasisKnown():
+		return fmt.Errorf("%w: cas_hash=%q has no provable originating request basis (UNKNOWN_LEGACY)",
+			ErrToolFunctionIdentityAmbiguous, existing.CasHash)
+	case origin.CanonicalizationVersion != op.CanonicalizationVersion ||
+		origin.RequestFingerprint != op.RequestFingerprint:
+		return fmt.Errorf("%w: cas_hash=%q was registered with a different canonicalizer version or request envelope",
+			ErrToolFunctionIdentityAmbiguous, existing.CasHash)
+	}
+	return nil
+}
+
+func (s *Store) findToolFunctionRequestLocked(requestID string) (*ToolFunctionRequestRecord, bool) {
+	if requestID == "" {
+		return nil, false
+	}
+	for i := range s.idx.ToolFunctionRequestRecords {
+		if s.idx.ToolFunctionRequestRecords[i].RequestID == requestID {
+			return &s.idx.ToolFunctionRequestRecords[i], true
+		}
+	}
+	return nil, false
+}
+
+// appendToolFunctionRequestRecordLocked records the operation receipt: request_id ->
+// runnable result plus the selected canonicalizer version and full request basis/fingerprint.
+func (s *Store) appendToolFunctionRequestRecordLocked(
+	op *ToolFunctionOperation, rec *RegisteredToolFunction, now time.Time,
+) {
 	s.idx.ToolFunctionRequestRecords = append(s.idx.ToolFunctionRequestRecords, ToolFunctionRequestRecord{
-		RequestID:              reqID,
-		CasHash:                rec.CasHash,
-		ToolFunctionDigest:     rec.ToolFunctionDigest,
-		PresentationRevisionID: rec.PresentationRevisionID,
-		CreatedAt:              now,
+		RequestID:               op.RequestID,
+		CasHash:                 rec.CasHash,
+		ToolFunctionDigest:      rec.ToolFunctionDigest,
+		PresentationRevisionID:  rec.PresentationRevisionID,
+		CanonicalizationVersion: op.CanonicalizationVersion,
+		RequestFingerprint:      op.RequestFingerprint,
+		RequestBasisJSON:        op.RequestBasisJSON,
+		CreatedAt:               now,
 	})
 }
 

@@ -21,6 +21,17 @@ const (
 	missing = "nope"
 )
 
+// tfOp is a complete w2-set-v1 operation. All operations share one request basis, so the
+// same content under any request_id is a provable reuse.
+func tfOp(reqID string) index.ToolFunctionOperation {
+	return index.ToolFunctionOperation{
+		RequestID:               reqID,
+		CanonicalizationVersion: index.CanonicalizationW2SetV1,
+		RequestFingerprint:      "fp",
+		RequestBasisJSON:        `{"basis":"fp"}`,
+	}
+}
+
 func tfRecord(casHash, toolFunctionDigest, imageDigest string) index.RegisteredToolFunction {
 	return index.RegisteredToolFunction{
 		CasHash:             casHash,
@@ -34,7 +45,7 @@ func tfRecord(casHash, toolFunctionDigest, imageDigest string) index.RegisteredT
 
 func TestRegisterToolFunctionAtomic_NewActive(t *testing.T) {
 	s := newStore(t)
-	stored, created, err := s.RegisterToolFunctionAtomic(reqID1, tfRecord(casA, tfd1, imgA), nil)
+	stored, created, err := s.RegisterToolFunctionAtomic(tfOp(reqID1), tfRecord(casA, tfd1, imgA), nil)
 	if err != nil || !created {
 		t.Fatalf("new registration: created=%v err=%v", created, err)
 	}
@@ -52,19 +63,19 @@ func TestRegisterToolFunctionAtomic_NewActive(t *testing.T) {
 
 func TestRegisterToolFunctionAtomic_EmptyCasHash(t *testing.T) {
 	s := newStore(t)
-	if _, _, err := s.RegisterToolFunctionAtomic("r", tfRecord("", "tfd", "img"), nil); err == nil {
+	if _, _, err := s.RegisterToolFunctionAtomic(tfOp("r"), tfRecord("", "tfd", "img"), nil); err == nil {
 		t.Fatal("expected error for empty CasHash")
 	}
 }
 
 func TestRegisterToolFunctionAtomic_ContentIdempotent(t *testing.T) {
 	s := newStore(t)
-	first, _, err := s.RegisterToolFunctionAtomic(reqID1, tfRecord(casA, tfd1, imgA), nil)
+	first, _, err := s.RegisterToolFunctionAtomic(tfOp(reqID1), tfRecord(casA, tfd1, imgA), nil)
 	if err != nil {
 		t.Fatalf("first: %v", err)
 	}
 	// Same content, same request id → idempotent replay, no new record, phase preserved.
-	second, created, err := s.RegisterToolFunctionAtomic(reqID1, tfRecord(casA, tfd1, imgA), nil)
+	second, created, err := s.RegisterToolFunctionAtomic(tfOp(reqID1), tfRecord(casA, tfd1, imgA), nil)
 	if err != nil || created {
 		t.Fatalf("replay: created=%v err=%v", created, err)
 	}
@@ -75,11 +86,11 @@ func TestRegisterToolFunctionAtomic_ContentIdempotent(t *testing.T) {
 
 func TestRegisterToolFunctionAtomic_RequestIDConflict(t *testing.T) {
 	s := newStore(t)
-	if _, _, err := s.RegisterToolFunctionAtomic(reqID1, tfRecord(casA, tfd1, imgA), nil); err != nil {
+	if _, _, err := s.RegisterToolFunctionAtomic(tfOp(reqID1), tfRecord(casA, tfd1, imgA), nil); err != nil {
 		t.Fatalf("first: %v", err)
 	}
 	// Same request id, different resulting cas hash → conflict, no mutation.
-	_, _, err := s.RegisterToolFunctionAtomic(reqID1, tfRecord(casB, tfd1, imgB), nil)
+	_, _, err := s.RegisterToolFunctionAtomic(tfOp(reqID1), tfRecord(casB, tfd1, imgB), nil)
 	if !errors.Is(err, index.ErrToolFunctionRequestConflict) {
 		t.Fatalf("expected ErrToolFunctionRequestConflict, got %v", err)
 	}
@@ -90,11 +101,11 @@ func TestRegisterToolFunctionAtomic_RequestIDConflict(t *testing.T) {
 
 func TestRegisterToolFunctionAtomic_ContentIdempotentAcrossRequestIDs(t *testing.T) {
 	s := newStore(t)
-	if _, _, err := s.RegisterToolFunctionAtomic("reqA", tfRecord(casA, tfd1, imgA), nil); err != nil {
+	if _, _, err := s.RegisterToolFunctionAtomic(tfOp("reqA"), tfRecord(casA, tfd1, imgA), nil); err != nil {
 		t.Fatalf("reqA: %v", err)
 	}
 	// Different request id, same content → returns existing record, records the mapping.
-	out, created, err := s.RegisterToolFunctionAtomic("reqB", tfRecord(casA, tfd1, imgA), nil)
+	out, created, err := s.RegisterToolFunctionAtomic(tfOp("reqB"), tfRecord(casA, tfd1, imgA), nil)
 	if err != nil || created {
 		t.Fatalf("reqB: created=%v err=%v", created, err)
 	}
@@ -112,10 +123,10 @@ func TestRegisterToolFunctionAtomic_ContentIdempotentAcrossRequestIDs(t *testing
 func TestRegisterToolFunctionAtomic_MultiplicityInvariant(t *testing.T) {
 	s := newStore(t)
 	// Same tool_function_digest, different function image → distinct cas records coexist.
-	if _, created, err := s.RegisterToolFunctionAtomic("r1", tfRecord(casA, tfd1, imgA), nil); err != nil || !created {
+	if _, created, err := s.RegisterToolFunctionAtomic(tfOp("r1"), tfRecord(casA, tfd1, imgA), nil); err != nil || !created {
 		t.Fatalf("r1: created=%v err=%v", created, err)
 	}
-	if _, created, err := s.RegisterToolFunctionAtomic("r2", tfRecord(casB, tfd1, imgB), nil); err != nil || !created {
+	if _, created, err := s.RegisterToolFunctionAtomic(tfOp("r2"), tfRecord(casB, tfd1, imgB), nil); err != nil || !created {
 		t.Fatalf("r2: created=%v err=%v", created, err)
 	}
 	a, errA := s.GetToolFunctionByCasHash(casA)
@@ -138,7 +149,7 @@ func TestRegisterToolFunctionAtomic_PresentationRevision(t *testing.T) {
 		CasHash:          casA,
 		PresentationJSON: `{"label":"X"}`,
 	}
-	if _, _, err := s.RegisterToolFunctionAtomic("r1", tfRecordWithRev(casA, tfd1, imgA, revX), rev); err != nil {
+	if _, _, err := s.RegisterToolFunctionAtomic(tfOp("r1"), tfRecordWithRev(casA, tfd1, imgA, revX), rev); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	got, err := s.GetToolFunctionPresentationRevision(revX)
@@ -147,7 +158,7 @@ func TestRegisterToolFunctionAtomic_PresentationRevision(t *testing.T) {
 	}
 	// A second record sharing the same revision id does not duplicate the revision.
 	sameRev := &index.ToolFunctionPresentationRevision{RevisionID: revX, CasHash: casB, PresentationJSON: `{"label":"X"}`}
-	if _, _, rerr := s.RegisterToolFunctionAtomic("r2", tfRecordWithRev(casB, tfd1, imgB, revX), sameRev); rerr != nil {
+	if _, _, rerr := s.RegisterToolFunctionAtomic(tfOp("r2"), tfRecordWithRev(casB, tfd1, imgB, revX), sameRev); rerr != nil {
 		t.Fatalf("register 2: %v", rerr)
 	}
 	got2, err := s.GetToolFunctionPresentationRevision(revX)
@@ -178,7 +189,7 @@ func TestRegisterToolFunctionAtomic_PersistAndReload(t *testing.T) {
 		t.Fatalf("NewAt: %v", err)
 	}
 	rev := &index.ToolFunctionPresentationRevision{RevisionID: revX, CasHash: casA, PresentationJSON: `{"label":"X"}`}
-	if _, _, rerr := s1.RegisterToolFunctionAtomic(reqID1, tfRecordWithRev(casA, tfd1, imgA, revX), rev); rerr != nil {
+	if _, _, rerr := s1.RegisterToolFunctionAtomic(tfOp(reqID1), tfRecordWithRev(casA, tfd1, imgA, revX), rev); rerr != nil {
 		t.Fatalf("register: %v", rerr)
 	}
 	// Reopen from disk.
@@ -216,7 +227,7 @@ func TestSave_StampsCurrentSchemaVersionOnUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAt: %v", err)
 	}
-	if _, _, rerr := s.RegisterToolFunctionAtomic(reqID1, tfRecord(casA, tfd1, imgA), nil); rerr != nil {
+	if _, _, rerr := s.RegisterToolFunctionAtomic(tfOp(reqID1), tfRecord(casA, tfd1, imgA), nil); rerr != nil {
 		t.Fatalf("register: %v", rerr)
 	}
 	data, err := os.ReadFile(path) //nolint:gosec // G304: path is under t.TempDir(), not user input
@@ -229,8 +240,8 @@ func TestSave_StampsCurrentSchemaVersionOnUpgrade(t *testing.T) {
 	if err := json.Unmarshal(data, &f); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if f.SchemaVersion != 6 {
-		t.Fatalf("upgraded file schema_version = %d, want 6 (current)", f.SchemaVersion)
+	if f.SchemaVersion != 7 {
+		t.Fatalf("upgraded file schema_version = %d, want 7 (current)", f.SchemaVersion)
 	}
 }
 
@@ -249,7 +260,7 @@ func TestRegisterToolFunctionAtomic_SaveFailureRollsBack(t *testing.T) {
 	if err := os.RemoveAll(dir); err != nil {
 		t.Fatalf("remove index dir: %v", err)
 	}
-	_, _, ferr := s.RegisterToolFunctionAtomic(reqID1, tfRecord(casA, tfd1, imgA), nil)
+	_, _, ferr := s.RegisterToolFunctionAtomic(tfOp(reqID1), tfRecord(casA, tfd1, imgA), nil)
 	if ferr == nil {
 		t.Fatal("expected save failure with a missing index dir")
 	}
@@ -264,7 +275,7 @@ func TestRegisterToolFunctionAtomic_SaveFailureRollsBack(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatalf("recreate index dir: %v", err)
 	}
-	_, created, rerr := s.RegisterToolFunctionAtomic(reqID1, tfRecord(casA, tfd1, imgA), nil)
+	_, created, rerr := s.RegisterToolFunctionAtomic(tfOp(reqID1), tfRecord(casA, tfd1, imgA), nil)
 	if rerr != nil || !created {
 		t.Fatalf("retry after rollback: created=%v err=%v", created, rerr)
 	}

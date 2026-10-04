@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -243,6 +244,157 @@ func TestToolFunctionCutover_WriterEpochFence(t *testing.T) {
 		if _, err := s3.GetToolFunctionByCasHash(cas); err != nil {
 			t.Fatalf("committed %s lost: %v", cas, err)
 		}
+	}
+}
+
+// M18/N7: the fence covers every persistent write, not only registrations. After a takeover the
+// superseded Store's non-ToolFunction writes (Append, lifecycle, build records) are refused
+// before the file is touched, so its stale in-memory index cannot erase the record the newer
+// epoch committed; the current writer keeps writing normally.
+func TestToolFunctionCutover_FencedWriterRefusesNonToolFunctionWrites(t *testing.T) {
+	dir := t.TempDir()
+	s1, err := index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("NewAt s1: %v", err)
+	}
+	s2, err := index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("NewAt s2: %v", err)
+	}
+	if err = s1.Append(index.Entry{CasHash: "entry-0", LifecyclePhase: index.PhaseActive}); err != nil {
+		t.Fatalf("s1 append before claiming an epoch: %v", err)
+	}
+	if _, _, err = s1.RegisterToolFunctionAtomic(tfOp("r1"), tfRecord(casA, tfd1, imgA), nil); err != nil {
+		t.Fatalf("s1 r1: %v", err)
+	}
+	if _, _, err = s2.RegisterToolFunctionAtomic(tfOp("r2"), tfRecord(casB, tfd1, imgB), nil); err != nil {
+		t.Fatalf("s2 r2: %v", err)
+	}
+
+	for name, write := range map[string]func() error{
+		"Append": func() error { return s1.Append(index.Entry{CasHash: "entry-1"}) },
+		"SetLifecyclePhase": func() error {
+			return s1.SetLifecyclePhase("entry-0", index.PhaseRetracted)
+		},
+		"AppendToolBuildRecord": func() error {
+			return s1.AppendToolBuildRecord(index.ToolBuildRecord{BuildID: "build-1"})
+		},
+	} {
+		if werr := write(); !errors.Is(werr, index.ErrToolFunctionWriterFenced) {
+			t.Fatalf("superseded writer %s: want ErrToolFunctionWriterFenced, got %v", name, werr)
+		}
+	}
+
+	if err = s2.Append(index.Entry{CasHash: "entry-2"}); err != nil {
+		t.Fatalf("current writer append: %v", err)
+	}
+	s3, err := index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	for _, cas := range []string{casA, casB} {
+		if _, err := s3.GetToolFunctionByCasHash(cas); err != nil {
+			t.Fatalf("committed %s lost after fenced writes: %v", cas, err)
+		}
+	}
+	if _, err := s3.GetByCasHash("entry-1"); !errors.Is(err, index.ErrNotFound) {
+		t.Fatalf("fenced Append persisted: %v", err)
+	}
+	if e, err := s3.GetByCasHash("entry-0"); err != nil || e.LifecyclePhase == index.PhaseRetracted {
+		t.Fatalf("fenced lifecycle write persisted or entry lost: %+v err=%v", e, err)
+	}
+	if _, err := s3.GetToolBuildRecordByBuildID("build-1"); !errors.Is(err, index.ErrNotFound) {
+		t.Fatalf("fenced build record persisted: %v", err)
+	}
+	if _, err := s3.GetByCasHash("entry-2"); err != nil {
+		t.Fatalf("current writer append lost: %v", err)
+	}
+}
+
+// W2-OUTSIDE-DIGEST-REREG-01: a new request_id for an existing tool_function_digest under a
+// different casHash must carry the same validation_policy and environment_hints. Each axis is
+// diagnosed separately, absent and explicitly-empty are distinct, and a conflict leaves no
+// record or receipt behind.
+func TestToolFunctionCutover_DigestLevelEnvelope(t *testing.T) {
+	const firstBasis = `{"spec":"s","validation_policy":{"p":1},"environment_hints":{"h":1}}`
+	for _, tc := range []struct {
+		name  string
+		basis string
+		axes  []string
+	}{
+		{"policy", `{"spec":"s","validation_policy":{"p":2},"environment_hints":{"h":1}}`, []string{"validation_policy"}},
+		{"hints", `{"spec":"s","validation_policy":{"p":1},"environment_hints":{"h":2}}`, []string{"environment_hints"}},
+		{"both", `{"spec":"s","validation_policy":{},"environment_hints":{"h":2}}`,
+			[]string{"validation_policy", "environment_hints"}},
+		{"absent vs empty", `{"spec":"s","validation_policy":{"p":1},"environment_hints":{}}`, []string{"environment_hints"}},
+		{"absent", `{"spec":"s","validation_policy":{"p":1}}`, []string{"environment_hints"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			s, err := index.NewAt(dir)
+			if err != nil {
+				t.Fatalf("NewAt: %v", err)
+			}
+			first := tfOp("r1")
+			first.RequestBasisJSON = firstBasis
+			if _, _, err = s.RegisterToolFunctionAtomic(first, tfRecord(casA, tfd1, imgA), nil); err != nil {
+				t.Fatalf("r1: %v", err)
+			}
+			other := tfOp("r2")
+			other.RequestFingerprint = "fp-r2"
+			other.RequestBasisJSON = tc.basis
+			_, _, err = s.RegisterToolFunctionAtomic(other, tfRecord(casB, tfd1, imgB), nil)
+			if !errors.Is(err, index.ErrToolFunctionEnvelopeConflict) {
+				t.Fatalf("want ErrToolFunctionEnvelopeConflict, got %v", err)
+			}
+			for _, axis := range []string{"validation_policy", "environment_hints"} {
+				want := false
+				for _, a := range tc.axes {
+					want = want || a == axis
+				}
+				if got := strings.Contains(err.Error(), axis); got != want {
+					t.Fatalf("axis %s named=%v, want %v: %v", axis, got, want, err)
+				}
+			}
+			if _, gerr := s.GetToolFunctionByCasHash(casB); !errors.Is(gerr, index.ErrNotFound) {
+				t.Fatalf("conflict persisted a record: %v", gerr)
+			}
+			if n := countRequestRecords(t, dir); n != 1 {
+				t.Fatalf("conflict mutated receipts: %d records", n)
+			}
+		})
+	}
+
+	t.Run("same envelope", func(t *testing.T) {
+		s := newStore(t)
+		first := tfOp("r1")
+		first.RequestBasisJSON = firstBasis
+		if _, _, err := s.RegisterToolFunctionAtomic(first, tfRecord(casA, tfd1, imgA), nil); err != nil {
+			t.Fatalf("r1: %v", err)
+		}
+		other := tfOp("r2")
+		other.RequestFingerprint = "fp-r2"
+		other.RequestBasisJSON = `{"environment_hints":{"h":1},"image":"b","spec":"s","validation_policy":{"p":1}}`
+		if _, created, err := s.RegisterToolFunctionAtomic(other, tfRecord(casB, tfd1, imgB), nil); err != nil || !created {
+			t.Fatalf("same envelope, other image: created=%v err=%v", created, err)
+		}
+	})
+}
+
+// A new request_id for a tool_function_digest backed by an UNKNOWN_LEGACY record cannot prove the
+// envelope, so it is held fail-closed (identity ambiguity, not a conflict) with zero mutation,
+// even though its casHash differs from the legacy record's.
+func TestToolFunctionCutover_DigestBackedByLegacyHeld(t *testing.T) {
+	dir, s := seedLegacyIndex(t)
+	_, _, err := s.RegisterToolFunctionAtomic(tfOp("new-req"), tfRecord("casNew", "tfdLegacy", "imgNew"), nil)
+	if !errors.Is(err, index.ErrToolFunctionIdentityAmbiguous) {
+		t.Fatalf("want ErrToolFunctionIdentityAmbiguous, got %v", err)
+	}
+	if _, gerr := s.GetToolFunctionByCasHash("casNew"); !errors.Is(gerr, index.ErrNotFound) {
+		t.Fatalf("held registration persisted a record: %v", gerr)
+	}
+	if n := countRequestRecords(t, dir); n != 1 {
+		t.Fatalf("held registration mutated receipts: %d records", n)
 	}
 }
 

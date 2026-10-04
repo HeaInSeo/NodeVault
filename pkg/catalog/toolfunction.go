@@ -240,6 +240,11 @@ func toolFunctionStoreError(requestID string, err error) error {
 	case errors.Is(err, index.ErrToolFunctionRequestConflict):
 		return status.Errorf(codes.AlreadyExists,
 			"request_id %q was already used for different content", requestID)
+	case errors.Is(err, index.ErrToolFunctionEnvelopeConflict):
+		// W2-OUTSIDE-DIGEST-REREG-01: a provable validation_policy/environment_hints mismatch for
+		// an existing tool_function_digest is an explicit conflict. An unprovable (UNKNOWN_LEGACY)
+		// envelope stays FailedPrecondition below.
+		return status.Errorf(codes.AlreadyExists, "register tool function: %v", err)
 	case errors.Is(err, index.ErrToolFunctionRequestUnknownLegacy),
 		errors.Is(err, index.ErrToolFunctionIdentityAmbiguous),
 		errors.Is(err, index.ErrToolFunctionWriterFenced):

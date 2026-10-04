@@ -26,10 +26,11 @@ const (
 	toolFunctionWriterFenceFileName = "vault-index.toolfunction-writer-fence.json"
 )
 
-// ErrToolFunctionWriterFenced is returned by RegisterToolFunctionAtomic when this Store is not
-// the current ToolFunction writer: another writer claimed a newer write epoch, the durable fence
-// was written by an unknown/newer profile, or the index was rewritten by an older (v1-unaware)
-// binary after this writer committed. The registration is refused with zero mutation so old and
+// ErrToolFunctionWriterFenced is returned by RegisterToolFunctionAtomic, and by every other
+// persistent Store write once this Store has claimed a write epoch, when this Store is not the
+// current ToolFunction writer: another writer claimed a newer write epoch, the durable fence was
+// written by an unknown/newer profile, or the index was rewritten by an older (v1-unaware) binary
+// after this writer committed. The write is refused before the index file is touched so old and
 // new writers never both acknowledge writes to the same authority store (DC-R1-NV-C1 cutover
 // step 2 / N7).
 var ErrToolFunctionWriterFenced = errors.New("index: tool function writer fenced")

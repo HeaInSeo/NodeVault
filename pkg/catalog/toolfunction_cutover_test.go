@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -375,8 +376,10 @@ func TestW2SetV1_HashCoincidesWithLegacyHeld(t *testing.T) {
 	}
 }
 
-// N6: a new request_id with identical content and envelope reuses a v1 identity; a different
-// envelope (presentation/policy/hints) cannot silently reuse it.
+// N6: a new request_id with identical content and envelope reuses a v1 identity. A provable
+// validation_policy/environment_hints mismatch is an AlreadyExists conflict
+// (W2-OUTSIDE-DIGEST-REREG-01); a presentation-only difference stays held fail-closed with
+// FailedPrecondition (the D-19-4 presentation-revision path is not opened).
 func TestW2SetV1_NewRequestIDReuseNeedsSameEnvelope(t *testing.T) {
 	svc, _ := newTFService(t)
 	first := mustRegisterTF(t, svc, validTFReq())
@@ -387,11 +390,76 @@ func TestW2SetV1_NewRequestIDReuseNeedsSameEnvelope(t *testing.T) {
 		t.Fatal("identical content+envelope must reuse the identity")
 	}
 
-	diff := validTFReq()
-	diff.RequestId = "req-diff"
-	diff.EnvironmentHints = &nfv1.ToolFunctionEnvironmentHints{SupportedPlatforms: []string{"linux/arm64"}}
-	if _, err := svc.RegisterToolFunction(context.Background(), diff); status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("different envelope reuse: want FailedPrecondition, got %v", err)
+	for _, tc := range []struct {
+		name string
+		mut  func(*nfv1.RegisterToolFunctionRequest)
+		want codes.Code
+	}{
+		{"hints", func(r *nfv1.RegisterToolFunctionRequest) {
+			r.EnvironmentHints = &nfv1.ToolFunctionEnvironmentHints{SupportedPlatforms: []string{"linux/arm64"}}
+		}, codes.AlreadyExists},
+		{"policy", func(r *nfv1.RegisterToolFunctionRequest) {
+			r.ValidationPolicy = &nfv1.ToolFunctionValidationPolicy{
+				ExpectedResults: []*nfv1.ExpectedResult{{OutputPortName: portAligned, ExpectedValueOrRule: "x>0"}},
+			}
+		}, codes.AlreadyExists},
+		{"presentation only", func(r *nfv1.RegisterToolFunctionRequest) {
+			r.Presentation.Label = "BWA-MEM"
+		}, codes.FailedPrecondition},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			diff := validTFReq()
+			diff.RequestId = "req-diff-" + tc.name
+			tc.mut(diff)
+			if _, err := svc.RegisterToolFunction(context.Background(), diff); status.Code(err) != tc.want {
+				t.Fatalf("%s mismatch on the same cas_hash: want %v, got %v", tc.name, tc.want, err)
+			}
+		})
+	}
+}
+
+// W2-OUTSIDE-DIGEST-REREG-01: the envelope is compared per tool_function_digest, not only on the
+// casHash duplicate path. The same spec/base with a different image (so a different cas_hash)
+// and different hints or policy is a conflict with zero mutation; with the same envelope it is a
+// new runnable record.
+func TestW2SetV1_DigestLevelEnvelopeConflict(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mut  func(*nfv1.RegisterToolFunctionRequest)
+	}{
+		{"hints", func(r *nfv1.RegisterToolFunctionRequest) {
+			r.EnvironmentHints = &nfv1.ToolFunctionEnvironmentHints{SupportedPlatforms: []string{"linux/arm64"}}
+		}},
+		{"policy", func(r *nfv1.RegisterToolFunctionRequest) {
+			r.ValidationPolicy = &nfv1.ToolFunctionValidationPolicy{
+				ExpectedResults: []*nfv1.ExpectedResult{{OutputPortName: portAligned, ExpectedValueOrRule: "x>0"}},
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, store := newTFService(t)
+			first := mustRegisterTF(t, svc, validTFReq())
+
+			other := validTFReq()
+			other.RequestId = "req-other-image"
+			other.ImageDigest = imgDigest('b')
+			tc.mut(other)
+			_, err := svc.RegisterToolFunction(context.Background(), other)
+			if status.Code(err) != codes.AlreadyExists || !strings.Contains(err.Error(), tc.name) {
+				t.Fatalf("same digest, other image, different %s: want AlreadyExists naming the axis, got %v", tc.name, err)
+			}
+			if _, rerr := store.GetToolFunctionRequestRecord("req-other-image"); !errors.Is(rerr, index.ErrNotFound) {
+				t.Fatalf("conflict recorded a receipt: %v", rerr)
+			}
+
+			okReq := validTFReq()
+			okReq.RequestId = "req-same-envelope"
+			okReq.ImageDigest = imgDigest('b')
+			got := mustRegisterTF(t, svc, okReq)
+			if got.GetCasHash() == first.GetCasHash() || got.GetToolFunctionDigest() != first.GetToolFunctionDigest() {
+				t.Fatalf("same envelope, other image: want a new cas_hash under the same digest, got %+v", got)
+			}
+		})
 	}
 }
 

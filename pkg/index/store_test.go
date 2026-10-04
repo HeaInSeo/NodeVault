@@ -1566,8 +1566,9 @@ func TestGetActiveToolFunctionCatalogEntry_PromotionUnfiltered(t *testing.T) {
 
 // TestSave_NoLeftoverTempFiles verifies save()'s temp-file-then-rename
 // sequence cleans up after itself: after a series of successful saves, the
-// index directory contains only vault-index.json (no stray *.tmp-* files
-// left behind), and the final file is fully valid, complete JSON.
+// index directory contains only vault-index.json and the persistent writer lock file
+// every save() takes (no stray *.tmp-* files left behind), and the final file is fully
+// valid, complete JSON.
 func TestSave_NoLeftoverTempFiles(t *testing.T) {
 	dir := t.TempDir()
 	s, err := index.NewAt(dir)
@@ -1587,8 +1588,9 @@ func TestSave_NoLeftoverTempFiles(t *testing.T) {
 		t.Fatalf("ReadDir: %v", err)
 	}
 	for _, ent := range entries {
-		if ent.Name() != "vault-index.json" {
-			t.Errorf("unexpected leftover file in index dir: %q (expected only vault-index.json)", ent.Name())
+		if ent.Name() != "vault-index.json" && ent.Name() != "vault-index.toolfunction-writer.lock" {
+			t.Errorf("unexpected leftover file in index dir: %q (expected only vault-index.json and the writer lock)",
+				ent.Name())
 		}
 		if strings.Contains(ent.Name(), ".tmp-") {
 			t.Errorf("leftover temp file not cleaned up: %q", ent.Name())

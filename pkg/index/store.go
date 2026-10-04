@@ -1,6 +1,7 @@
 package index
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -131,6 +133,13 @@ var ErrToolFunctionRequestUnknownLegacy = errors.New("index: tool function reque
 // presentation / validation_policy / environment_hints). The existing identity is not reused,
 // relabeled or merged; the registration is held with zero mutation (DC-R1-NV-C1 N6).
 var ErrToolFunctionIdentityAmbiguous = errors.New("index: tool function identity reuse not provable")
+
+// ErrToolFunctionEnvelopeConflict is returned by RegisterToolFunctionAtomic when a new request_id
+// registers a tool_function_digest that already backs a runnable record whose originating receipt
+// carries a different validation_policy or environment_hints (W2-OUTSIDE-DIGEST-REREG-01). The
+// digest-out envelope is compared per axis before the casHash axis, whatever the request's
+// function_image_digest/casHash, and the whole registration is refused with zero mutation.
+var ErrToolFunctionEnvelopeConflict = errors.New("index: tool function digest-out envelope conflict")
 
 // ErrInvalidLifecycleTransition is returned by SetLifecyclePhase when the
 // entry's current lifecycle_phase has no allowed edge to the requested one
@@ -1583,11 +1592,8 @@ func (s *Store) RegisterToolFunctionAtomic(
 	// idempotent replay that would otherwise return success without touching disk — so no
 	// success is ever returned on an un-fsync'd rename. A still-failing re-save keeps the
 	// flag set and surfaces the durability error for another retry.
-	if s.toolFunctionDurabilityUncertain {
-		if serr := s.save(); serr != nil {
-			return RegisteredToolFunction{}, false, serr
-		}
-		s.toolFunctionDurabilityUncertain = false
+	if serr := s.repairToolFunctionDurabilityLocked(); serr != nil {
+		return RegisteredToolFunction{}, false, serr
 	}
 
 	if rec.CasHash == "" {
@@ -1597,6 +1603,14 @@ func (s *Store) RegisterToolFunctionAtomic(
 	// Axis 1: request_id idempotency / conflict.
 	if existing, done, rerr := s.resolveToolFunctionRequestLocked(&op, rec.CasHash); done {
 		return existing, false, rerr
+	}
+
+	// Digest-out envelope (W2-OUTSIDE-DIGEST-REREG-01): a new request_id for a
+	// tool_function_digest that already backs runnable records must carry a canonical-equivalent
+	// validation_policy and environment_hints, whatever its image/casHash. Checked before the
+	// casHash axis and before any presentation revision is appended.
+	if eerr := s.checkToolFunctionEnvelopeLocked(&op, rec.ToolFunctionDigest); eerr != nil {
+		return RegisteredToolFunction{}, false, eerr
 	}
 
 	// Axis 2: content idempotency by CasHash. An already-registered runnable record
@@ -1637,7 +1651,7 @@ func (s *Store) RegisterToolFunctionAtomic(
 	s.appendPresentationRevisionLocked(rev, now)
 	s.appendToolFunctionRequestRecordLocked(&op, &rec, now)
 
-	if serr := s.save(); serr != nil {
+	if serr := s.persistLocked(); serr != nil {
 		// A failed PRE-RENAME persist must leave no in-memory trace: otherwise the
 		// request ledger would make a retry with the same request id return success
 		// without the record ever reaching disk, losing it on restart. But a POST-RENAME
@@ -1659,6 +1673,19 @@ func (s *Store) RegisterToolFunctionAtomic(
 	}
 	s.toolFunctionWriterCommitted = true
 	return rec, true, nil
+}
+
+// repairToolFunctionDurabilityLocked re-saves the index while toolFunctionDurabilityUncertain is
+// set (see RegisterToolFunctionAtomic) and clears the flag only on a fully-successful save.
+func (s *Store) repairToolFunctionDurabilityLocked() error {
+	if !s.toolFunctionDurabilityUncertain {
+		return nil
+	}
+	if err := s.persistLocked(); err != nil {
+		return err
+	}
+	s.toolFunctionDurabilityUncertain = false
+	return nil
 }
 
 // resolveToolFunctionRequestLocked applies the request_id idempotency axis. done is
@@ -1700,7 +1727,7 @@ func (s *Store) reuseToolFunctionLocked(
 	}
 	reqLen := len(s.idx.ToolFunctionRequestRecords)
 	s.appendToolFunctionRequestRecordLocked(op, existing, now)
-	if serr := s.save(); serr != nil {
+	if serr := s.persistLocked(); serr != nil {
 		// Roll the in-memory append back so a failed persist is not masked by
 		// the request ledger on a later retry (which would return success
 		// without ever writing the mapping to disk) — but ONLY for a pre-rename
@@ -1738,6 +1765,66 @@ func (s *Store) proveToolFunctionReuseLocked(op *ToolFunctionOperation, existing
 			ErrToolFunctionIdentityAmbiguous, existing.CasHash)
 	}
 	return nil
+}
+
+// checkToolFunctionEnvelopeLocked applies W2-OUTSIDE-DIGEST-REREG-01 to a new request_id: every
+// runnable record already backed by toolFunctionDigest (any image/casHash) must have been
+// registered with the same canonical validation_policy and environment_hints. Each axis is
+// compared separately so the error names what differs; any difference is
+// ErrToolFunctionEnvelopeConflict. A record whose originating receipt has no provable basis
+// (UNKNOWN_LEGACY) cannot be compared and is refused fail-closed as an identity ambiguity.
+func (s *Store) checkToolFunctionEnvelopeLocked(op *ToolFunctionOperation, toolFunctionDigest string) error {
+	if toolFunctionDigest == "" {
+		return nil
+	}
+	want, err := toolFunctionEnvelopeOf(op.RequestBasisJSON)
+	if err != nil {
+		return err
+	}
+	for i := range s.idx.RegisteredToolFunctions {
+		existing := &s.idx.RegisteredToolFunctions[i]
+		if existing.ToolFunctionDigest != toolFunctionDigest {
+			continue
+		}
+		origin, ok := s.findToolFunctionRequestLocked(existing.RequestID)
+		if existing.CanonicalizationVersion == "" || !ok || !origin.BasisKnown() {
+			return fmt.Errorf(
+				"%w: tool_function_digest=%q is backed by cas_hash=%q without a provable request envelope (UNKNOWN_LEGACY)",
+				ErrToolFunctionIdentityAmbiguous, toolFunctionDigest, existing.CasHash)
+		}
+		have, herr := toolFunctionEnvelopeOf(origin.RequestBasisJSON)
+		if herr != nil {
+			return herr
+		}
+		var axes []string
+		if !bytes.Equal(have.ValidationPolicy, want.ValidationPolicy) {
+			axes = append(axes, "validation_policy")
+		}
+		if !bytes.Equal(have.EnvironmentHints, want.EnvironmentHints) {
+			axes = append(axes, "environment_hints")
+		}
+		if len(axes) > 0 {
+			return fmt.Errorf("%w: tool_function_digest=%q was registered as cas_hash=%q with a different %s",
+				ErrToolFunctionEnvelopeConflict, toolFunctionDigest, existing.CasHash, strings.Join(axes, " and "))
+		}
+	}
+	return nil
+}
+
+// toolFunctionEnvelope is the digest-out envelope of a request basis. Both fields keep the
+// basis's canonical JSON bytes verbatim; an absent field stays nil, so absent and explicitly
+// empty are not folded together.
+type toolFunctionEnvelope struct {
+	ValidationPolicy json.RawMessage `json:"validation_policy"`
+	EnvironmentHints json.RawMessage `json:"environment_hints"`
+}
+
+func toolFunctionEnvelopeOf(basisJSON string) (toolFunctionEnvelope, error) {
+	var e toolFunctionEnvelope
+	if err := json.Unmarshal([]byte(basisJSON), &e); err != nil {
+		return toolFunctionEnvelope{}, fmt.Errorf("index: parse tool function request basis: %w", err)
+	}
+	return e, nil
 }
 
 func (s *Store) findToolFunctionRequestLocked(requestID string) (*ToolFunctionRequestRecord, bool) {
@@ -1881,7 +1968,29 @@ func (s *Store) load() error {
 	return nil
 }
 
-// save persists the in-memory index to disk via a temp-file-then-rename
+// save is the persist step of every Store write outside RegisterToolFunctionAtomic. It runs
+// under the cross-process ToolFunction writer lock, and once this Store has claimed a write
+// epoch it re-verifies that epoch first (DC-R1-NV-C1 N7): a superseded writer is refused with
+// ErrToolFunctionWriterFenced for EVERY persistent write, not only registrations, so its stale
+// in-memory index never overwrites what the current writer committed. The refusal happens
+// before any file is touched, so callers treat it like any other pre-rename failure.
+// RegisterToolFunctionAtomic already holds the lock and verified the epoch, so it calls
+// persistLocked directly (flock is per open file: re-locking here would self-deadlock).
+func (s *Store) save() error {
+	unlock, err := s.lockToolFunctionWriter()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if s.toolFunctionWriterEpoch != 0 {
+		if ferr := s.ensureToolFunctionWriterLocked(time.Now().UTC()); ferr != nil {
+			return ferr
+		}
+	}
+	return s.persistLocked()
+}
+
+// persistLocked writes the in-memory index to disk via a temp-file-then-rename
 // sequence so a mid-write process kill (OOM-kill, pod eviction) can never
 // leave s.path truncated or half-written: os.WriteFile truncates the
 // existing file in place before writing, so a kill mid-write would
@@ -1890,8 +1999,8 @@ func (s *Store) load() error {
 // is same-filesystem and atomic, fsync'd before the rename so its content is
 // durable on disk first, and cleaned up on any error path before the rename
 // happens. The parent directory is fsync'd after the rename so the rename
-// itself survives a crash.
-func (s *Store) save() error {
+// itself survives a crash. Callers must hold s.mu and the writer lock (see save).
+func (s *Store) persistLocked() error {
 	// Stamp the current schema version. Once this binary writes any section, the file
 	// carries this version's shape (e.g. schema 5 ToolFunction sections), so it must be
 	// labeled as such: a rolled-back older binary then refuses it via load()'s version

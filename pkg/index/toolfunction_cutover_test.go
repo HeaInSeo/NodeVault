@@ -361,6 +361,92 @@ func TestToolFunctionCutover_EpochZeroStaleStoreCannotEraseRegistration(t *testi
 	}
 }
 
+// M18/N7 rollback-after-reload (GR 7e3ec653): when save() refuses a stale Store and reloads it,
+// AppendToolImageRecord must not apply its pre-rename rollback to the reloaded index. Otherwise
+// the other Store's committed image record is dropped from memory and the next write persists
+// the loss.
+func TestToolFunctionCutover_RefusedImageAppendKeepsOtherStoresRecord(t *testing.T) {
+	dir := t.TempDir()
+	s1, err := index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("NewAt s1: %v", err)
+	}
+	s2, err := index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("NewAt s2: %v", err)
+	}
+	if err = s2.AppendToolImageRecord(index.ToolImageRecord{ImageDigest: "sha256:x"}); err != nil {
+		t.Fatalf("s2 image x: %v", err)
+	}
+
+	if err = s1.AppendToolImageRecord(index.ToolImageRecord{ImageDigest: "sha256:y"}); !errors.Is(err, index.ErrToolFunctionWriterFenced) {
+		t.Fatalf("stale image append: want ErrToolFunctionWriterFenced, got %v", err)
+	}
+	if _, err = s1.GetToolImageRecordByDigest("sha256:x"); err != nil {
+		t.Fatalf("refused Store lost image x from memory: %v", err)
+	}
+	if _, err = s1.GetToolImageRecordByDigest("sha256:y"); !errors.Is(err, index.ErrNotFound) {
+		t.Fatalf("refused image y left in memory: %v", err)
+	}
+	if err = s1.Append(index.Entry{CasHash: "entry-1"}); err != nil {
+		t.Fatalf("s1 next write: %v", err)
+	}
+	reopened, err := index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if _, err = reopened.GetToolImageRecordByDigest("sha256:x"); err != nil {
+		t.Fatalf("image x erased by the refused Store's next write: %v", err)
+	}
+	if _, err = reopened.GetByCasHash("entry-1"); err != nil {
+		t.Fatalf("s1 next write lost: %v", err)
+	}
+	if _, err = reopened.GetToolImageRecordByDigest("sha256:y"); !errors.Is(err, index.ErrNotFound) {
+		t.Fatalf("refused image y persisted: %v", err)
+	}
+
+	if err = s1.AppendToolImageRecord(index.ToolImageRecord{ImageDigest: "sha256:y"}); err != nil {
+		t.Fatalf("retry image y: %v", err)
+	}
+	reopened, err = index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("reopen after retry: %v", err)
+	}
+	for _, d := range []string{"sha256:x", "sha256:y"} {
+		if _, err := reopened.GetToolImageRecordByDigest(d); err != nil {
+			t.Fatalf("%s lost after retry: %v", d, err)
+		}
+	}
+}
+
+// A reloaded index can hold fewer image records than the stale view did (here the file was
+// removed). The refused AppendToolImageRecord must neither panic on a reslice past the reloaded
+// slice's capacity nor keep the stale records.
+func TestToolFunctionCutover_RefusedImageAppendOnShorterReloadDoesNotPanic(t *testing.T) {
+	dir := t.TempDir()
+	s1, err := index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("NewAt: %v", err)
+	}
+	for _, d := range []string{"sha256:a", "sha256:b"} {
+		if err = s1.AppendToolImageRecord(index.ToolImageRecord{ImageDigest: d}); err != nil {
+			t.Fatalf("append %s: %v", d, err)
+		}
+	}
+	if err = os.Remove(filepath.Join(dir, "vault-index.json")); err != nil {
+		t.Fatalf("remove index: %v", err)
+	}
+
+	if err = s1.AppendToolImageRecord(index.ToolImageRecord{ImageDigest: "sha256:c"}); !errors.Is(err, index.ErrToolFunctionWriterFenced) {
+		t.Fatalf("append over shorter reload: want ErrToolFunctionWriterFenced, got %v", err)
+	}
+	for _, d := range []string{"sha256:a", "sha256:b", "sha256:c"} {
+		if _, err := s1.GetToolImageRecordByDigest(d); !errors.Is(err, index.ErrNotFound) {
+			t.Fatalf("%s survived the reload: %v", d, err)
+		}
+	}
+}
+
 // The reverse direction: the current epoch writer must not erase a write that a fresh epoch-0
 // Store committed after the writer last loaded. Its plain save is refused and reloads; its next
 // registration refreshes from disk before mutating.

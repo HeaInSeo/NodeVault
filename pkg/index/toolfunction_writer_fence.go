@@ -38,6 +38,13 @@ const (
 // both acknowledge writes to the same authority store (DC-R1-NV-C1 cutover step 2 / N7).
 var ErrToolFunctionWriterFenced = errors.New("index: tool function writer fenced")
 
+// errIndexReloaded marks the ErrToolFunctionWriterFenced refusal that save() returns after it
+// replaced the in-memory index with the current file because the file changed on disk. The
+// caller's pending mutation is already gone and the in-memory index now holds other Stores'
+// committed writes, so a caller must NOT apply its pre-rename rollback (e.g. reslicing to a
+// pre-append length): that would drop those writes and the next save would persist the loss.
+var errIndexReloaded = errors.New("index: reloaded from disk")
+
 // toolFunctionWriterFence is the durable activation marker and single serialized write epoch of
 // the versioned ToolFunction writer. It lives in its own file next to the index so writers that
 // never register ToolFunctions (e.g. NodePalette health updates) cannot regress it.

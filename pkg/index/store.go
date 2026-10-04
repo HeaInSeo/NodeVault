@@ -701,7 +701,9 @@ func (s *Store) AppendToolImageRecord(r ToolImageRecord) error {
 		// POST-RENAME durability failure already wrote the record to disk, so rolling
 		// memory back would diverge memory from disk and let a later save() overwrite the
 		// committed file with the stale index — keep it and only surface the error.
-		if !errors.Is(err, errIndexPersistedNotDurable) {
+		// A reloaded refusal already dropped the pending record with the rest of the stale
+		// view: memory now mirrors disk, so reslicing would erase other Stores' records.
+		if !errors.Is(err, errIndexPersistedNotDurable) && !errors.Is(err, errIndexReloaded) {
 			s.idx.ToolImageRecords = s.idx.ToolImageRecords[:imgLen]
 		}
 		return err
@@ -1986,7 +1988,8 @@ func (s *Store) load() error {
 // when the index file changed on disk since this Store last loaded or persisted it: its
 // whole-index save would otherwise erase what the other Store committed (e.g. a ToolFunction
 // registered under the current epoch). The refused Store reloads from disk under the lock,
-// dropping the unsaved mutation, so a retry runs against the current index.
+// dropping the unsaved mutation, so a retry runs against the current index. That refusal also
+// wraps errIndexReloaded so callers skip their pre-rename rollback on the reloaded index.
 //
 // RegisterToolFunctionAtomic already holds the lock and verified the epoch, so it calls
 // persistLocked directly (flock is per open file: re-locking here would self-deadlock).
@@ -2009,8 +2012,8 @@ func (s *Store) save() error {
 		if lerr := s.load(); lerr != nil {
 			return lerr
 		}
-		return fmt.Errorf("%w: %s changed on disk since this Store loaded it; reloaded, retry the write",
-			ErrToolFunctionWriterFenced, s.path)
+		return fmt.Errorf("%w: %s changed on disk since this Store loaded it; %w, retry the write",
+			ErrToolFunctionWriterFenced, s.path, errIndexReloaded)
 	}
 	return s.persistLocked()
 }

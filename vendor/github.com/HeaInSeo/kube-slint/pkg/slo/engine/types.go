@@ -3,6 +3,7 @@ package engine
 import (
 	"time"
 
+	"github.com/HeaInSeo/kube-slint/pkg/slo/fetch"
 	"github.com/HeaInSeo/kube-slint/pkg/slo/spec"
 	"github.com/HeaInSeo/kube-slint/pkg/slo/summary"
 )
@@ -31,6 +32,9 @@ type ExecuteRequest struct {
 	Specs       []spec.SLISpec // core input: 직접 주입
 	OutPath     string
 	Reliability *summary.Reliability
+	// WindowFetcher is optional. It is used only by specs whose Compute.Mode
+	// is a window mode (window_min/window_max/window_avg/window_p95/window_p99).
+	WindowFetcher fetch.WindowFetcher
 	// 호환성/편의용: 레지스트리를 쓰는 호출자를 위해 남길 수 있음, 일단 주석처리함.
 	// OutputPath는 요약 파일이 기록되는 경로임.
 }

@@ -8,14 +8,22 @@ import (
 )
 
 // MetricRef 는 SLI에 대한 메트릭 입력을 식별함.
-// v3: 가장 단순한 형태는 정규 프로메테우스 "텍스트 키" 문자열을 사용함.
-// 예: controller_runtime_reconcile_total{result="success"}
+// The Key value is source-neutral: fetchers and SLISpec.Inputs only need to
+// agree on the same string. Prometheus helpers are conveniences for one source
+// type, not a requirement of the engine.
 type MetricRef struct {
 	Key   string
 	Alias string // 선택 사항
 }
 
-// UnsafePromKey 는 원시 문자열 키로부터 MetricRef를 생성함.
+// InputKey creates a MetricRef from a source-neutral input key. Use this for
+// JSON/expvar/custom fetchers, mock fetchers, or any source where the key is
+// already the canonical input name.
+func InputKey(key string) MetricRef { return MetricRef{Key: key} }
+
+// UnsafePromKey creates a MetricRef from a raw Prometheus text key or PromQL
+// expression. Prefer PromMetric(name, labels) for ordinary Prometheus metrics
+// and InputKey(key) for non-Prometheus inputs.
 func UnsafePromKey(key string) MetricRef { return MetricRef{Key: key} }
 
 // Labels 는 프로메테우스 레이블 집합을 나타냄.
@@ -39,6 +47,19 @@ const (
 	ComputeStart ComputeMode = "start"
 	// ComputeEnd 는 종료 값을 사용함.
 	ComputeEnd ComputeMode = "end"
+
+	// ComputeWindowMin uses the minimum input value observed across a window.
+	ComputeWindowMin ComputeMode = "window_min"
+	// ComputeWindowMax uses the maximum input value observed across a window.
+	ComputeWindowMax ComputeMode = "window_max"
+	// ComputeWindowAvg uses the arithmetic mean of input values observed across a window.
+	ComputeWindowAvg ComputeMode = "window_avg"
+	// ComputeWindowP95 uses the nearest-rank p95 over input values observed across a window.
+	ComputeWindowP95 ComputeMode = "window_p95"
+	// ComputeWindowP99 uses the nearest-rank p99 over input values observed across a window.
+	ComputeWindowP99 ComputeMode = "window_p99"
+	// ComputeWindowRatio uses sum(input[0]) / sum(input[1]) over a window.
+	ComputeWindowRatio ComputeMode = "window_ratio"
 )
 
 // CounterResetPolicy defines how ComputeDelta handles delta < 0 (suspected counter reset).

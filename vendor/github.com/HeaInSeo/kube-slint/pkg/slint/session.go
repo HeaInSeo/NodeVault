@@ -39,7 +39,10 @@ type SessionConfig struct {
 	// Optional overrides
 	Specs   []spec.SLISpec
 	Fetcher fetch.MetricsFetcher
-	Writer  summary.Writer
+	// WindowFetcher is optional and used only by window compute modes
+	// (window_min/window_max/window_avg/window_p95/window_p99/window_ratio).
+	WindowFetcher fetch.WindowFetcher
+	Writer        summary.Writer
 
 	// Real-cluster Integration Knobs
 	CurlImage string // overrides default curl image
@@ -104,9 +107,10 @@ type sessionImpl struct {
 
 	Warnings []string
 
-	specs   []spec.SLISpec
-	fetcher fetch.MetricsFetcher
-	writer  summary.Writer
+	specs         []spec.SLISpec
+	fetcher       fetch.MetricsFetcher
+	windowFetcher fetch.WindowFetcher
+	writer        summary.Writer
 
 	// ownsFetcher is true when the session itself constructs the fetcher
 	// (SessionConfig.Fetcher was nil). Only a session-owned fetcher's Stop()
@@ -156,10 +160,11 @@ func NewSession(cfg SessionConfig) *Session {
 		RunID: cfg.RunID,
 		Tags:  mergedTags,
 
-		specs:       resolvedSpecs,
-		fetcher:     cfg.Fetcher,
-		ownsFetcher: cfg.Fetcher == nil,
-		writer:      w,
+		specs:         resolvedSpecs,
+		fetcher:       cfg.Fetcher,
+		windowFetcher: cfg.WindowFetcher,
+		ownsFetcher:   cfg.Fetcher == nil,
+		writer:        w,
 	}
 
 	if cfg.CurlImage != "" {
@@ -413,8 +418,9 @@ func (s *Session) Start() {
 
 	// If fetcher is nil (default curlpod path), construct it now so End()
 	// shares the same instance — startCache lives on the instance, so it
-	// must be the same one for PreFetch's result to reach Fetch().
-	if s.impl.fetcher == nil {
+	// must be the same one for PreFetch's result to reach Fetch(). Window-only
+	// specs do not need the point fetcher.
+	if s.impl.fetcher == nil && specsNeedPointFetcher(s.impl.specs) {
 		s.impl.fetcher = newCurlPodFetcher(s.impl)
 	}
 
@@ -468,7 +474,7 @@ func (s *Session) End(ctx context.Context) (*summary.Summary, error) {
 	}
 
 	fetcher := s.impl.fetcher
-	if fetcher == nil {
+	if fetcher == nil && specsNeedPointFetcher(s.impl.specs) {
 		fetcher = newCurlPodFetcher(s.impl)
 	}
 	// Only stop a fetcher the session itself created. A caller-supplied
@@ -514,9 +520,10 @@ func (s *Session) End(ctx context.Context) (*summary.Summary, error) {
 			Format:     "v4.4",
 			Tags:       s.impl.Tags,
 		},
-		Specs:       s.impl.specs,
-		OutPath:     uniquePath,
-		Reliability: rel,
+		Specs:         s.impl.specs,
+		OutPath:       uniquePath,
+		Reliability:   rel,
+		WindowFetcher: s.impl.windowFetcher,
 	})
 
 	if err != nil {
@@ -545,6 +552,21 @@ func (s *Session) End(ctx context.Context) (*summary.Summary, error) {
 	}
 
 	return sum, nil
+}
+
+func specsNeedPointFetcher(specs []spec.SLISpec) bool {
+	if len(specs) == 0 {
+		return true
+	}
+	for _, s := range specs {
+		switch s.Compute.Mode {
+		case spec.ComputeWindowMin, spec.ComputeWindowMax, spec.ComputeWindowAvg, spec.ComputeWindowP95, spec.ComputeWindowP99, spec.ComputeWindowRatio:
+			continue
+		default:
+			return true
+		}
+	}
+	return false
 }
 
 func defaultSpecs(specs []spec.SLISpec) []spec.SLISpec {

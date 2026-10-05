@@ -47,8 +47,10 @@ var ErrArtifactConflict = errors.New("buildstate: artifact reference already rec
 var ErrUnfencedRecovery = errors.New("buildstate: unfenced recovery is unsupported by the J2 store")
 
 // ErrCommitOutcomeUnknown is returned when COMMIT returned but the server warned while it was
-// in flight, e.g. a canceled synchronous-replication wait. The transaction may be committed
-// locally without the required standby acknowledgement; callers must re-read with Get before
+// in flight, e.g. a canceled synchronous-replication wait, or when COMMIT failed in a way that
+// can follow a durable commit, e.g. the connection or context was lost before the reply. The
+// transaction may be committed (locally, or without the required standby acknowledgement);
+// callers must re-read with Get before
 // retrying and must not treat it as success (TX1-03). It is not retried automatically.
 var ErrCommitOutcomeUnknown = errors.New("buildstate: postgres commit outcome unknown")
 
@@ -534,7 +536,8 @@ func (s *PostgresStore) SetReferrer(
 
 // RenewLease extends the lease of the owner that holds fence f to leaseTTL from now by the
 // database clock. It works on an expired lease as long as nobody reclaimed the build. The
-// version does not change.
+// version does not change, and f must carry the current version: a fence from before a later
+// mutation is refused with ErrVersionConflict rather than renewed and handed the newer version.
 func (s *PostgresStore) RenewLease(
 	ctx context.Context, buildID string, f Fence, leaseTTL time.Duration,
 ) (Fence, error) {
@@ -549,6 +552,10 @@ func (s *PostgresStore) RenewLease(
 		}
 		if r.fence.Owner != f.Owner || r.fence.Generation != f.Generation {
 			return fmt.Errorf("buildstate: build %q: %w", buildID, ErrStaleFence)
+		}
+		if r.fence.Version != f.Version {
+			return fmt.Errorf("buildstate: build %q is at version %d, expected %d: %w",
+				buildID, r.fence.Version, f.Version, ErrVersionConflict)
 		}
 		if terminal(r.rec.Status) {
 			return fmt.Errorf("buildstate: build %q already terminal (%s): %w", buildID, r.rec.Status, ErrAlreadyTerminal)
@@ -636,7 +643,8 @@ func (s *PostgresStore) inTx(ctx context.Context, fn func(tx *sql.Tx) error) err
 
 // retryTx runs fn in one SERIALIZABLE transaction. On a serialization failure or deadlock the
 // whole transaction is retried with the same frozen input, bounded by maxSerializationRetries
-// and ctx. Any other error, including a failed COMMIT, is returned as is.
+// and ctx. Any other error, including a failed COMMIT, is returned as is; an ambiguous COMMIT
+// (ErrCommitOutcomeUnknown) is never retried.
 func (s *PostgresStore) retryTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
 	var err error
 	for range maxSerializationRetries {
@@ -644,7 +652,7 @@ func (s *PostgresStore) retryTx(ctx context.Context, fn func(tx *sql.Tx) error) 
 			return cerr
 		}
 		err = s.tryTx(ctx, fn)
-		if !isRetryableSerialization(err) {
+		if errors.Is(err, ErrCommitOutcomeUnknown) || !isRetryableSerialization(err) {
 			return err
 		}
 	}
@@ -654,7 +662,8 @@ func (s *PostgresStore) retryTx(ctx context.Context, fn func(tx *sql.Tx) error) 
 // tryTx runs one attempt on one pinned connection so that a WARNING the server sends while
 // COMMIT is in flight is attributed to this transaction. PostgreSQL answers a canceled
 // synchronous-replication wait with "COMMIT" plus a WARNING; that is not a durable
-// acknowledgement, so it is reported as ErrCommitOutcomeUnknown.
+// acknowledgement, so it is reported as ErrCommitOutcomeUnknown. A COMMIT error that does not
+// prove the transaction was rolled back (see commitOutcomeKnown) is reported the same way.
 func (s *PostgresStore) tryTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -676,19 +685,41 @@ func (s *PostgresStore) tryTx(ctx context.Context, fn func(tx *sql.Tx) error) er
 	if err != nil {
 		return err
 	}
-	if err := fn(tx); err != nil {
+	if err = fn(tx); err != nil {
 		_ = tx.Rollback()
 		return err
 	}
 	w := s.watch(pg)
 	defer s.unwatch(pg)
-	if err := tx.Commit(); err != nil {
-		return err
-	}
+	err = tx.Commit()
 	if n := w.warning(); n != nil {
 		return fmt.Errorf("%w: server warning during COMMIT: %s (%s)", ErrCommitOutcomeUnknown, n.Message, n.Detail)
 	}
-	return nil
+	if err != nil && !commitOutcomeKnown(err) {
+		return fmt.Errorf("%w: COMMIT: %w", ErrCommitOutcomeUnknown, err)
+	}
+	return err
+}
+
+// commitOutcomeKnown reports whether a COMMIT error proves the transaction did not commit: the
+// server rolled the transaction back or rejected the COMMIT with an ordinary SQL error, or pgx
+// refused a closed transaction before any I/O. A lost connection, a canceled context or a
+// server-side connection/shutdown/internal error can follow a durable commit, so those are
+// ambiguous. pgconn.SafeToRetry is not used: pgconn reports "conn closed" as safe to retry
+// even when the connection died after COMMIT was sent.
+func commitOutcomeKnown(err error) bool {
+	if errors.Is(err, pgx.ErrTxCommitRollback) || errors.Is(err, pgx.ErrTxClosed) {
+		return true
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || len(pgErr.Code) < 2 {
+		return false
+	}
+	switch pgErr.Code[:2] {
+	case "08", "53", "57", "58", "XX": // connection, resources, operator intervention, system, internal
+		return false
+	}
+	return true
 }
 
 // commitWatch records the first WARNING notice a connection receives while it is watched.

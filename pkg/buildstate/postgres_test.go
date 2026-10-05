@@ -365,6 +365,33 @@ func TestPostgres_RenewExpiredBeforeReclaim(t *testing.T) {
 	}
 }
 
+// A fence from before a later mutation cannot renew the lease: it is refused with
+// ErrVersionConflict instead of being handed the newer version, and a stale heartbeat does not
+// keep an expired lease from being reclaimed.
+func TestPostgres_RenewRejectsStaleVersion(t *testing.T) {
+	dsn := pgSchemaDSN(t)
+	ctx := context.Background()
+	s := openPG(t, dsn)
+	_, f1 := mustCreate(t, s, "b1", "replica-a")
+	rec, f2, err := s.Transition(ctx, "b1", f1, StatusBuilding, "")
+	if err != nil {
+		t.Fatalf("Transition: %v", err)
+	}
+	if f, err := s.RenewLease(ctx, "b1", f1, liveTTL); !errors.Is(err, ErrVersionConflict) || f != (Fence{}) {
+		t.Fatalf("stale-version RenewLease = %+v, %v; want ErrVersionConflict", f, err)
+	}
+	expire(t, s, "b1", f2)
+	if _, err := s.RenewLease(ctx, "b1", f1, liveTTL); !errors.Is(err, ErrVersionConflict) {
+		t.Fatalf("stale-version heartbeat on expired lease: want ErrVersionConflict, got %v", err)
+	}
+	if got, gotFence := mustGet(t, s, "b1"); got != rec || gotFence != f2 {
+		t.Fatalf("refused renew changed the record: %+v %+v", got, gotFence)
+	}
+	if _, _, err := s.Reclaim(ctx, "b1", "replica-b", liveTTL); err != nil {
+		t.Fatalf("stale heartbeat must not keep the lease live: Reclaim: %v", err)
+	}
+}
+
 // TX1-07 (3): closing and reopening keeps ID, digest, status, artifact refs, owner, generation
 // and version, and the owner's fence keeps working.
 func TestPostgres_ReopenPreserves(t *testing.T) {

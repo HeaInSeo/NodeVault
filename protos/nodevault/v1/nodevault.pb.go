@@ -4034,8 +4034,16 @@ type RegisterToolFunctionRequest struct {
 	Presentation       *ToolFunctionPresentation     `protobuf:"bytes,5,opt,name=presentation,proto3" json:"presentation,omitempty"`
 	ValidationPolicy   *ToolFunctionValidationPolicy `protobuf:"bytes,6,opt,name=validation_policy,json=validationPolicy,proto3" json:"validation_policy,omitempty"`
 	EnvironmentHints   *ToolFunctionEnvironmentHints `protobuf:"bytes,7,opt,name=environment_hints,json=environmentHints,proto3" json:"environment_hints,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// canonicalization_version — 이 registration operation이 선택한 canonicalizer
+	// (issue #19 DC-R1-NV-C1 W2 ordering no-rehash 전환 계약). additive 필드이며
+	// artifact digest preimage가 아니다(derivation provenance). 신규 request_id는
+	// "w2-set-v1"을 명시해야 한다: 미지정/"legacy-order-v0"은 거절하며 default를
+	// 추정하지 않는다. 같은 request_id의 replay는 receipt에 저장된 version·전체
+	// request basis로 비교한다. 지원하지 않는 값은 fail-closed로 거절한다.
+	// field number 8: 이 메시지의 사용 번호 1–7 다음 미사용·미예약 번호(재사용 아님).
+	CanonicalizationVersion string `protobuf:"bytes,8,opt,name=canonicalization_version,json=canonicalizationVersion,proto3" json:"canonicalization_version,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *RegisterToolFunctionRequest) Reset() {
@@ -4117,6 +4125,13 @@ func (x *RegisterToolFunctionRequest) GetEnvironmentHints() *ToolFunctionEnviron
 	return nil
 }
 
+func (x *RegisterToolFunctionRequest) GetCanonicalizationVersion() string {
+	if x != nil {
+		return x.CanonicalizationVersion
+	}
+	return ""
+}
+
 type RegisterToolFunctionResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// tool_function_digest — NodeVault가 canonical JSON 위에서 계산한다(W2):
@@ -4134,9 +4149,14 @@ type RegisterToolFunctionResponse struct {
 	// 를 계산한다. 소비자는 이 값을 그대로 pin으로 쓰고 identity를 재계산하지 않는다(N3).
 	// tool_function_digest 또는 function_image_digest 변경은 cas_hash 변경, presentation/
 	// validation/lifecycle/integrity/timestamp 변경은 cas_hash 비변경이다.
-	CasHash       string `protobuf:"bytes,3,opt,name=cas_hash,json=casHash,proto3" json:"cas_hash,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	CasHash string `protobuf:"bytes,3,opt,name=cas_hash,json=casHash,proto3" json:"cas_hash,omitempty"`
+	// canonicalization_version — receipt projection: 이 operation receipt에 기록된
+	// canonicalizer version. 이 값을 반환하지 않는 server는 version을 모르는 server이며,
+	// client는 그 응답을 versioned write 성공으로 취급하지 않는다(DC-R1-NV-C1 N7).
+	// field number 4: 이 메시지의 사용 번호 1–3 다음 미사용·미예약 번호(재사용 아님).
+	CanonicalizationVersion string `protobuf:"bytes,4,opt,name=canonicalization_version,json=canonicalizationVersion,proto3" json:"canonicalization_version,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *RegisterToolFunctionResponse) Reset() {
@@ -4186,6 +4206,13 @@ func (x *RegisterToolFunctionResponse) GetPresentationRevisionId() string {
 func (x *RegisterToolFunctionResponse) GetCasHash() string {
 	if x != nil {
 		return x.CasHash
+	}
+	return ""
+}
+
+func (x *RegisterToolFunctionResponse) GetCanonicalizationVersion() string {
+	if x != nil {
+		return x.CanonicalizationVersion
 	}
 	return ""
 }
@@ -5854,7 +5881,7 @@ const file_nodevault_v1_nodevault_proto_rawDesc = "" +
 	"\vparallelism\x18\b \x01(\x05R\vparallelism\"\x80\x01\n" +
 	"\x18ToolFunctionArtifactSpec\x120\n" +
 	"\x14tool_function_digest\x18\x01 \x01(\tR\x12toolFunctionDigest\x122\n" +
-	"\x15function_image_digest\x18\x02 \x01(\tR\x13functionImageDigest\"\xc4\x03\n" +
+	"\x15function_image_digest\x18\x02 \x01(\tR\x13functionImageDigest\"\xff\x03\n" +
 	"\x1bRegisterToolFunctionRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x121\n" +
@@ -5863,11 +5890,13 @@ const file_nodevault_v1_nodevault_proto_rawDesc = "" +
 	"\x04spec\x18\x04 \x01(\v2\x1e.nodevault.v1.ToolFunctionSpecR\x04spec\x12J\n" +
 	"\fpresentation\x18\x05 \x01(\v2&.nodevault.v1.ToolFunctionPresentationR\fpresentation\x12W\n" +
 	"\x11validation_policy\x18\x06 \x01(\v2*.nodevault.v1.ToolFunctionValidationPolicyR\x10validationPolicy\x12W\n" +
-	"\x11environment_hints\x18\a \x01(\v2*.nodevault.v1.ToolFunctionEnvironmentHintsR\x10environmentHints\"\xa5\x01\n" +
+	"\x11environment_hints\x18\a \x01(\v2*.nodevault.v1.ToolFunctionEnvironmentHintsR\x10environmentHints\x129\n" +
+	"\x18canonicalization_version\x18\b \x01(\tR\x17canonicalizationVersion\"\xe0\x01\n" +
 	"\x1cRegisterToolFunctionResponse\x120\n" +
 	"\x14tool_function_digest\x18\x01 \x01(\tR\x12toolFunctionDigest\x128\n" +
 	"\x18presentation_revision_id\x18\x02 \x01(\tR\x16presentationRevisionId\x12\x19\n" +
-	"\bcas_hash\x18\x03 \x01(\tR\acasHash\"\xd5\x02\n" +
+	"\bcas_hash\x18\x03 \x01(\tR\acasHash\x129\n" +
+	"\x18canonicalization_version\x18\x04 \x01(\tR\x17canonicalizationVersion\"\xd5\x02\n" +
 	"\x13DataRegisterRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1b\n" +

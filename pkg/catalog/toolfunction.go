@@ -18,12 +18,14 @@
 package catalog
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"regexp"
+	"sort"
 	"strings"
 
 	"google.golang.org/grpc/codes"
@@ -57,12 +59,19 @@ var (
 	argumentReferenceLikeRE = regexp.MustCompile(`\{[A-Za-z_][A-Za-z0-9_]*\.`)
 )
 
+// capabilityRE is the canonical Linux capability form required of a w2-set-v1
+// required_capabilities entry (W2 FINAL: validated, never normalized).
+var capabilityRE = regexp.MustCompile(`\ACAP_[A-Z][A-Z0-9_]*\z`)
+
 // RegisterToolFunction validates a typed ToolFunctionSpec declaration, computes the
 // NodeVault-owned tool_function_digest and cas_hash over its own canonical JSON,
-// durably registers the runnable record (+ optional presentation revision) atomically,
-// and returns the identity. It is idempotent by request_id and by content (cas_hash);
-// a new successful runnable record starts lifecycle Active and re-registration never
-// resurrects a Retracted/Deleted record.
+// durably registers the runnable record (+ optional presentation revision + operation
+// receipt) atomically, and returns the identity. The canonicalizer is selected per
+// operation (issue #19 DC-R1-NV-C1): a new request_id must name w2-set-v1, while a replay
+// is compared under the version and full request basis stored in its receipt. It is
+// idempotent by request_id and by provable content (cas_hash); a new successful runnable
+// record starts lifecycle Active and re-registration never resurrects a Retracted/Deleted
+// record.
 func (s *ToolRegistryService) RegisterToolFunction(
 	_ context.Context, req *nfv1.RegisterToolFunctionRequest,
 ) (*nfv1.RegisterToolFunctionResponse, error) {
@@ -79,6 +88,7 @@ func (s *ToolRegistryService) RegisterToolFunction(
 	if req.GetRequestId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "request_id is required (idempotency key)")
 	}
+	version := req.GetCanonicalizationVersion()
 	// Canonicalize the two identity-bearing digest inputs before they enter any
 	// preimage (N2/N3, NodeVault owns identity): trim surrounding whitespace and
 	// lowercase, so case- or whitespace-variant spellings of the same digest converge
@@ -104,13 +114,16 @@ func (s *ToolRegistryService) RegisterToolFunction(
 	// omitted from the digest, so two semantically different specs would collide on one
 	// identity. Reject unknown fields anywhere in the spec subtree before hashing, fail-closed
 	// (same spirit as the cardinality/enum gates: no uninterpretable content enters identity).
-	if err := rejectUnknownSpecFields(req.GetSpec()); err != nil {
+	// The presentation and the digest-out envelope get the same gate for the request basis.
+	if err := rejectUnknownRequestFields(req); err != nil {
 		return nil, err
 	}
-	if err := validateToolFunctionSpec(req.GetSpec()); err != nil {
+	// Select the canonicalizer from the durable receipt BEFORE any canonicalization: an
+	// existing operation is never re-read through the new v1 canonicalizer.
+	if err := s.checkCanonicalizationSelection(req.GetRequestId(), version); err != nil {
 		return nil, err
 	}
-	if err := rejectUnknownPresentationFields(req.GetPresentation()); err != nil {
+	if err := validateToolFunctionSpec(req.GetSpec(), version); err != nil {
 		return nil, err
 	}
 	if err := validateToolFunctionPresentation(req.GetPresentation(), req.GetSpec()); err != nil {
@@ -145,39 +158,100 @@ func (s *ToolRegistryService) RegisterToolFunction(
 		return nil, status.Errorf(codes.FailedPrecondition, "base tool spec provenance: %v", provErr)
 	}
 
-	// NodeVault-owned identity (N3): canonical JSON + SHA256, over frozen preimages.
-	toolFunctionDigest := computeToolFunctionDigest(baseToolSpecDigest, req.GetSpec())
-	casHash := computeToolFunctionCasHash(toolFunctionDigest, imageDigest)
-
-	// Presentation is digest-out; persist it as a content-addressed revision.
-	presentationRevID, rev := buildPresentationRevision(req.GetPresentation(), casHash)
-
-	rec := index.RegisteredToolFunction{
-		CasHash:                casHash,
-		ToolFunctionDigest:     toolFunctionDigest,
-		FunctionImageDigest:    imageDigest,
-		BaseToolSpecDigest:     baseToolSpecDigest,
-		ArtifactKind:           index.KindToolFunction,
-		PresentationRevisionID: presentationRevID,
-		RequestID:              req.GetRequestId(),
-		LifecyclePhase:         index.PhaseActive,
-		IntegrityHealth:        index.HealthPartial, // Partial until reconcile observes Harbor
+	// NodeVault-owned identity (N3): canonical JSON + SHA256, over frozen preimages, plus the
+	// full request basis/fingerprint the operation receipt records. Encoding failures are
+	// errors, never a sentinel identity.
+	d, err := deriveToolFunction(version, baseToolSpecDigest, imageDigest, req)
+	if err != nil {
+		return nil, err
 	}
 
-	stored, _, err := s.store.RegisterToolFunctionAtomic(req.GetRequestId(), rec, rev)
+	rec := index.RegisteredToolFunction{
+		CasHash:                 d.casHash,
+		ToolFunctionDigest:      d.toolFunctionDigest,
+		FunctionImageDigest:     imageDigest,
+		BaseToolSpecDigest:      baseToolSpecDigest,
+		ArtifactKind:            index.KindToolFunction,
+		PresentationRevisionID:  d.presentationRevID,
+		RequestID:               req.GetRequestId(),
+		CanonicalizationVersion: version,
+		LifecyclePhase:          index.PhaseActive,
+		IntegrityHealth:         index.HealthPartial, // Partial until reconcile observes Harbor
+	}
+
+	stored, _, err := s.store.RegisterToolFunctionAtomic(d.op, rec, d.presentationRev)
 	if err != nil {
-		if errors.Is(err, index.ErrToolFunctionRequestConflict) {
-			return nil, status.Errorf(codes.AlreadyExists,
-				"request_id %q was already used for different content", req.GetRequestId())
-		}
-		return nil, status.Errorf(codes.Internal, "register tool function: %v", err)
+		return nil, toolFunctionStoreError(req.GetRequestId(), err)
 	}
 
 	return &nfv1.RegisterToolFunctionResponse{
-		ToolFunctionDigest:     stored.ToolFunctionDigest,
-		PresentationRevisionId: stored.PresentationRevisionID,
-		CasHash:                stored.CasHash,
+		ToolFunctionDigest:      stored.ToolFunctionDigest,
+		PresentationRevisionId:  stored.PresentationRevisionID,
+		CasHash:                 stored.CasHash,
+		CanonicalizationVersion: version,
 	}, nil
+}
+
+// checkCanonicalizationSelection applies the DC-R1-NV-C1 version selection: an unsupported
+// version is rejected fail-closed, then the durable receipt of request_id is looked up (a
+// lookup failure is never treated as absence). A replay must carry the receipt's version
+// (else conflict) and an UNKNOWN_LEGACY receipt cannot be replayed; a new request_id must
+// explicitly name w2-set-v1 — no default is assumed and legacy-order-v0 is replay-only.
+func (s *ToolRegistryService) checkCanonicalizationSelection(requestID, version string) error {
+	switch version {
+	case "", index.CanonicalizationW2SetV1, index.CanonicalizationLegacyOrderV0:
+	default:
+		return status.Errorf(codes.InvalidArgument, "unsupported canonicalization_version %q", version)
+	}
+	prior, err := s.store.GetToolFunctionRequestRecord(requestID)
+	switch {
+	case err == nil:
+		if !prior.BasisKnown() {
+			return status.Errorf(codes.FailedPrecondition,
+				"request_id %q has an UNKNOWN_LEGACY receipt (no canonicalizer version / full request basis); "+
+					"replay equality cannot be proven", requestID)
+		}
+		if prior.CanonicalizationVersion != version {
+			return status.Errorf(codes.AlreadyExists,
+				"request_id %q was already used with canonicalization_version %q", requestID, prior.CanonicalizationVersion)
+		}
+		return nil
+	case errors.Is(err, index.ErrNotFound):
+		switch version {
+		case index.CanonicalizationW2SetV1:
+			return nil
+		case "":
+			return status.Errorf(codes.InvalidArgument,
+				"canonicalization_version is required for a new request_id (use %q; no default is assumed)",
+				index.CanonicalizationW2SetV1)
+		default:
+			return status.Errorf(codes.FailedPrecondition,
+				"canonicalization_version %q is replay-only; new registrations must use %q",
+				version, index.CanonicalizationW2SetV1)
+		}
+	default:
+		return status.Errorf(codes.Internal, "look up request receipt: %v", err)
+	}
+}
+
+// toolFunctionStoreError maps a RegisterToolFunctionAtomic failure to its gRPC status.
+func toolFunctionStoreError(requestID string, err error) error {
+	switch {
+	case errors.Is(err, index.ErrToolFunctionRequestConflict):
+		return status.Errorf(codes.AlreadyExists,
+			"request_id %q was already used for different content", requestID)
+	case errors.Is(err, index.ErrToolFunctionEnvelopeConflict):
+		// W2-OUTSIDE-DIGEST-REREG-01: a provable validation_policy/environment_hints mismatch for
+		// an existing tool_function_digest is an explicit conflict. An unprovable (UNKNOWN_LEGACY)
+		// envelope stays FailedPrecondition below.
+		return status.Errorf(codes.AlreadyExists, "register tool function: %v", err)
+	case errors.Is(err, index.ErrToolFunctionRequestUnknownLegacy),
+		errors.Is(err, index.ErrToolFunctionIdentityAmbiguous),
+		errors.Is(err, index.ErrToolFunctionWriterFenced):
+		return status.Errorf(codes.FailedPrecondition, "register tool function: %v", err)
+	default:
+		return status.Errorf(codes.Internal, "register tool function: %v", err)
+	}
 }
 
 // ── validation (fail-closed) ──────────────────────────────────────────────────
@@ -261,7 +335,69 @@ func rejectUnknownPresentationFields(pres *nfv1.ToolFunctionPresentation) error 
 	return nil
 }
 
-func validateToolFunctionSpec(spec *nfv1.ToolFunctionSpec) error {
+// rejectUnknownRequestFields applies the unknown-field gates to every request part that enters
+// an identity or the receipt's request basis: the request envelope itself, spec, presentation,
+// and the digest-out envelope. A top-level field added by a newer client would otherwise be
+// left out of the request basis, so retries differing only in it would compare equal.
+func rejectUnknownRequestFields(req *nfv1.RegisterToolFunctionRequest) error {
+	if len(req.ProtoReflect().GetUnknown()) > 0 {
+		return status.Error(codes.InvalidArgument,
+			"request contains unknown top-level protobuf field(s); request basis would be incomplete")
+	}
+	if err := rejectUnknownSpecFields(req.GetSpec()); err != nil {
+		return err
+	}
+	if err := rejectUnknownPresentationFields(req.GetPresentation()); err != nil {
+		return err
+	}
+	return rejectUnknownEnvelopeFields(req)
+}
+
+// rejectUnknownEnvelopeFields fails closed if validation_policy or environment_hints carries
+// unknown protobuf fields or an undefined ObservationLevel. Both are digest-out, but they belong
+// to the full request basis a receipt is compared on (DC-R1-NV-C1): a field the canonicalizer
+// cannot see would make two different requests compare equal.
+func rejectUnknownEnvelopeFields(req *nfv1.RegisterToolFunctionRequest) error {
+	if vp := req.GetValidationPolicy(); vp != nil {
+		if name, found := firstUnknownField(vp.ProtoReflect()); found {
+			return status.Errorf(codes.InvalidArgument,
+				"validation_policy contains unknown protobuf field(s) in %s; request basis would be incomplete", name)
+		}
+		level := vp.GetValidationRequirements().GetMinimumObservationLevel()
+		if _, ok := nfv1.ObservationLevel_name[int32(level)]; !ok {
+			return status.Errorf(codes.InvalidArgument, "unknown minimum_observation_level %d", int32(level))
+		}
+	}
+	if eh := req.GetEnvironmentHints(); eh != nil {
+		if name, found := firstUnknownField(eh.ProtoReflect()); found {
+			return status.Errorf(codes.InvalidArgument,
+				"environment_hints contains unknown protobuf field(s) in %s; request basis would be incomplete", name)
+		}
+	}
+	return nil
+}
+
+// validateToolFunctionSpec validates the spec under the operation's canonicalizer version.
+// w2-set-v1 additionally enforces the W2 REPEATED-FIELD ORDERING FINAL entry rules (no empty
+// set-like entry, canonical CAP_* capabilities, unique intermediate pattern) and rejects every
+// exact duplicate in the nine set-like fields; legacy-order-v0 (replay-only) keeps the original
+// checks so a provable legacy replay is compared exactly as it was accepted.
+func validateToolFunctionSpec(spec *nfv1.ToolFunctionSpec, version string) error {
+	if err := validateToolFunctionSpecCommon(spec); err != nil {
+		return err
+	}
+	if version == index.CanonicalizationLegacyOrderV0 {
+		return nil
+	}
+	if err := validateSetLikeEntries(spec); err != nil {
+		return err
+	}
+	// Exact duplicates are detected on the canonical element bytes the v1 canonicalizer sorts by.
+	_, err := canonicalToolFunctionSpecV1(spec)
+	return err
+}
+
+func validateToolFunctionSpecCommon(spec *nfv1.ToolFunctionSpec) error {
 	if err := validatePortCardinality(spec.GetInputs()); err != nil {
 		return err
 	}
@@ -284,6 +420,52 @@ func validateToolFunctionSpec(spec *nfv1.ToolFunctionSpec) error {
 		return err
 	}
 	return validateIntermediateFilePolicyKinds(spec.GetIntermediateFilePolicies())
+}
+
+// validateSetLikeEntries rejects invalid repeated entries in the set-like fields (w2-set-v1):
+// semantic-empty omission applies only to singular messages, so an empty environment name,
+// companion file, intermediate pattern or writable path is rejected rather than erased, a
+// required capability must already be in canonical CAP_* form (validated, never rewritten),
+// and two intermediate policies may not share a pattern.
+func validateSetLikeEntries(spec *nfv1.ToolFunctionSpec) error {
+	for _, e := range spec.GetCommand().GetEnvironment() {
+		if strings.TrimSpace(e.GetName()) == "" {
+			return status.Error(codes.InvalidArgument, "command.environment entry name must not be empty")
+		}
+	}
+	for _, ports := range [][]*nfv1.FunctionPortSpec{spec.GetInputs(), spec.GetOutputs()} {
+		for _, p := range ports {
+			for _, f := range p.GetCompanionFiles() {
+				if strings.TrimSpace(f) == "" {
+					return status.Errorf(codes.InvalidArgument, "port %q companion_files entry must not be empty", p.GetName())
+				}
+			}
+		}
+	}
+	patterns := make(map[string]struct{}, len(spec.GetIntermediateFilePolicies()))
+	for _, p := range spec.GetIntermediateFilePolicies() {
+		pattern := p.GetPathOrPattern()
+		if strings.TrimSpace(pattern) == "" {
+			return status.Error(codes.InvalidArgument, "intermediate_file_policies path_or_pattern must not be empty")
+		}
+		if _, dup := patterns[pattern]; dup {
+			return status.Errorf(codes.InvalidArgument, "duplicate intermediate_file_policies pattern %q", pattern)
+		}
+		patterns[pattern] = struct{}{}
+	}
+	ee := spec.GetExecutionEnvironment()
+	for _, w := range ee.GetWritablePaths() {
+		if strings.TrimSpace(w) == "" {
+			return status.Error(codes.InvalidArgument, "execution_environment.writable_paths entry must not be empty")
+		}
+	}
+	for _, c := range ee.GetRequiredCapabilities() {
+		if !capabilityRE.MatchString(c) {
+			return status.Errorf(codes.InvalidArgument,
+				"execution_environment.required_capabilities entry %q is not a canonical CAP_* capability", c)
+		}
+	}
+	return nil
 }
 
 // validateArgumentReferences enforces the O-1 authoring binding bridge on
@@ -476,14 +658,74 @@ func outputPortNameSet(spec *nfv1.ToolFunctionSpec) map[string]struct{} {
 
 // ── identity: NodeVault-owned canonical JSON + SHA256 ─────────────────────────
 
-func computeToolFunctionDigest(baseToolSpecDigest string, spec *nfv1.ToolFunctionSpec) string {
-	return canonicalSHA256(map[string]any{
-		"base_tool_spec_digest": baseToolSpecDigest,
-		"spec":                  canonicalToolFunctionSpec(spec),
-	})
+// toolFunctionDerivation is everything RegisterToolFunction derives from one request under
+// the operation's canonicalizer: the identities, the presentation revision, and the receipt's
+// full request basis/fingerprint.
+type toolFunctionDerivation struct {
+	toolFunctionDigest string
+	casHash            string
+	presentationRevID  string
+	presentationRev    *index.ToolFunctionPresentationRevision
+	op                 index.ToolFunctionOperation
 }
 
-func computeToolFunctionCasHash(toolFunctionDigest, functionImageDigest string) string {
+// deriveToolFunction computes the identities and the full request basis under version.
+// tool_function_digest / cas_hash formulas and preimage membership are unchanged; the version
+// is derivation provenance recorded in the receipt, never a new preimage member. The basis is
+// the canonical full request — version, normalized base/image digests, canonical spec and
+// presentation, validation_policy and environment_hints (request_id is the lookup key, not
+// basis) — and the fingerprint is its SHA256.
+func deriveToolFunction(
+	version, baseToolSpecDigest, imageDigest string, req *nfv1.RegisterToolFunctionRequest,
+) (*toolFunctionDerivation, error) {
+	canonSpec, err := canonicalToolFunctionSpecFor(version, req.GetSpec())
+	if err != nil {
+		return nil, err
+	}
+	d := &toolFunctionDerivation{}
+	if d.toolFunctionDigest, err = canonicalSHA256(map[string]any{
+		"base_tool_spec_digest": baseToolSpecDigest,
+		"spec":                  canonSpec,
+	}); err != nil {
+		return nil, err
+	}
+	if d.casHash, err = computeToolFunctionCasHash(d.toolFunctionDigest, imageDigest); err != nil {
+		return nil, err
+	}
+	// Presentation is digest-out; persist it as a content-addressed revision.
+	d.presentationRevID, d.presentationRev, err = buildPresentationRevision(req.GetPresentation(), d.casHash)
+	if err != nil {
+		return nil, err
+	}
+
+	basis := map[string]any{
+		"canonicalization_version": version,
+		"base_tool_spec_digest":    baseToolSpecDigest,
+		"image_digest":             imageDigest,
+		"spec":                     canonSpec,
+	}
+	if pres := canonicalPresentation(req.GetPresentation()); len(pres) > 0 {
+		basis["presentation"] = pres
+	}
+	vp := req.GetValidationPolicy()
+	putMsg(basis, "validation_policy", vp != nil, canonicalValidationPolicy(vp))
+	eh := req.GetEnvironmentHints()
+	putMsg(basis, "environment_hints", eh != nil, canonicalEnvironmentHints(eh))
+	basisJSON, err := json.Marshal(basis)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "canonical encoding of request basis failed: %v", err)
+	}
+	sum := sha256.Sum256(basisJSON)
+	d.op = index.ToolFunctionOperation{
+		RequestID:               req.GetRequestId(),
+		CanonicalizationVersion: version,
+		RequestFingerprint:      hex.EncodeToString(sum[:]),
+		RequestBasisJSON:        string(basisJSON),
+	}
+	return d, nil
+}
+
+func computeToolFunctionCasHash(toolFunctionDigest, functionImageDigest string) (string, error) {
 	return canonicalSHA256(map[string]any{
 		"tool_function_digest":  toolFunctionDigest,
 		"function_image_digest": functionImageDigest,
@@ -492,31 +734,104 @@ func computeToolFunctionCasHash(toolFunctionDigest, functionImageDigest string) 
 
 // canonicalSHA256 marshals v to JSON (encoding/json sorts object keys, giving one
 // canonical byte form — N2) and returns the lowercase hex SHA256, matching the bare-
-// hex casHash convention used by catalog.SaveWithCasHash.
-func canonicalSHA256(v any) string {
-	// The preimages are plain map[string]any / []any / scalar trees that cannot fail
-	// to marshal; a marshal error here would be a programming error, so fall back to a
-	// non-colliding sentinel over the Go rendering rather than silently hashing "".
+// hex casHash convention used by catalog.SaveWithCasHash. A canonical encoding error is
+// returned fail-closed: no sentinel is ever hashed into an identity (DC-R1-NV-C1).
+func canonicalSHA256(v any) (string, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
-		b = []byte("nodevault.toolfunction.canonicalization_error\x00" + errValue(err))
+		return "", status.Errorf(codes.Internal, "canonical encoding failed: %v", err)
 	}
 	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
+	return hex.EncodeToString(sum[:]), nil
 }
 
-func errValue(err error) string {
-	if err == nil {
-		return ""
+// canonicalToolFunctionSpecFor renders the spec under the operation's canonicalizer.
+func canonicalToolFunctionSpecFor(version string, spec *nfv1.ToolFunctionSpec) (map[string]any, error) {
+	if version == index.CanonicalizationLegacyOrderV0 {
+		return canonicalToolFunctionSpec(spec), nil
 	}
-	return err.Error()
+	return canonicalToolFunctionSpecV1(spec)
 }
 
-// canonicalToolFunctionSpec renders the digest-input ToolFunctionSpec as a canonical
-// map tree: unspecified/empty fields are omitted (N1), repeated fields preserve their
-// authored order (order is identity-bearing), and enums are emitted as their integer
-// value only when non-zero (CARDINALITY_UNSPECIFIED etc. are omitted, never rewritten
-// to SINGLE).
+// canonicalToolFunctionSpecV1 is the w2-set-v1 canonicalizer (W2 REPEATED-FIELD ORDERING
+// FINAL): it is the legacy tree with every set-like field — environment, inputs, outputs,
+// parameters, success_exit_codes, companion_files, intermediate_file_policies,
+// writable_paths, required_capabilities — put in deterministic total order, and any exact
+// duplicate rejected InvalidArgument. command.arguments alone keeps its authored order.
+func canonicalToolFunctionSpecV1(spec *nfv1.ToolFunctionSpec) (map[string]any, error) {
+	m := canonicalToolFunctionSpec(spec)
+	if cm, ok := m["command"].(map[string]any); ok {
+		if err := sortCanonicalSetIn(cm, "environment", "command.environment"); err != nil {
+			return nil, err
+		}
+		if err := sortCanonicalSetIn(cm, "success_exit_codes", "command.success_exit_codes"); err != nil {
+			return nil, err
+		}
+	}
+	for _, field := range []string{"inputs", "outputs"} {
+		ports, _ := m[field].([]any)
+		for _, p := range ports {
+			if pm, ok := p.(map[string]any); ok {
+				if err := sortCanonicalSetIn(pm, "companion_files", field+".companion_files"); err != nil {
+					return nil, err
+				}
+			}
+		}
+		if err := sortCanonicalSetIn(m, field, field); err != nil {
+			return nil, err
+		}
+	}
+	for _, field := range []string{"parameters", "intermediate_file_policies"} {
+		if err := sortCanonicalSetIn(m, field, field); err != nil {
+			return nil, err
+		}
+	}
+	if em, ok := m["execution_environment"].(map[string]any); ok {
+		if err := sortCanonicalSetIn(em, "writable_paths", "execution_environment.writable_paths"); err != nil {
+			return nil, err
+		}
+		if err := sortCanonicalSetIn(em, "required_capabilities", "execution_environment.required_capabilities"); err != nil {
+			return nil, err
+		}
+	}
+	return m, nil
+}
+
+// sortCanonicalSetIn replaces m[key] (a canonical list, if present) with its elements sorted
+// by their canonical JSON bytes, rejecting an exact duplicate element InvalidArgument.
+func sortCanonicalSetIn(m map[string]any, key, field string) error {
+	list, ok := m[key].([]any)
+	if !ok {
+		return nil
+	}
+	type keyed struct {
+		enc []byte
+		v   any
+	}
+	elems := make([]keyed, 0, len(list))
+	for _, v := range list {
+		enc, err := json.Marshal(v)
+		if err != nil {
+			return status.Errorf(codes.Internal, "canonical encoding of %s failed: %v", field, err)
+		}
+		elems = append(elems, keyed{enc: enc, v: v})
+	}
+	sort.Slice(elems, func(i, j int) bool { return bytes.Compare(elems[i].enc, elems[j].enc) < 0 })
+	sorted := make([]any, len(elems))
+	for i := range elems {
+		if i > 0 && bytes.Equal(elems[i-1].enc, elems[i].enc) {
+			return status.Errorf(codes.InvalidArgument, "duplicate %s entry %s", field, elems[i].enc)
+		}
+		sorted[i] = elems[i].v
+	}
+	m[key] = sorted
+	return nil
+}
+
+// canonicalToolFunctionSpec is the legacy-order-v0 canonicalizer (replay-only) and the base
+// tree w2-set-v1 sorts: unspecified/empty fields are omitted (N1), repeated fields keep their
+// authored order, and enums are emitted as their integer value only when non-zero
+// (CARDINALITY_UNSPECIFIED etc. are omitted, never rewritten to SINGLE).
 func canonicalToolFunctionSpec(spec *nfv1.ToolFunctionSpec) map[string]any {
 	m := map[string]any{}
 	if spec == nil {
@@ -634,14 +949,14 @@ func canonicalExecEnv(ee *nfv1.ExecutionEnvironmentSpec) map[string]any {
 // and nil record), so it never affects identity and never creates an empty revision.
 func buildPresentationRevision(
 	pres *nfv1.ToolFunctionPresentation, casHash string,
-) (revisionID string, rev *index.ToolFunctionPresentationRevision) {
+) (revisionID string, rev *index.ToolFunctionPresentationRevision, err error) {
 	canon := canonicalPresentation(pres)
 	if len(canon) == 0 {
-		return "", nil
+		return "", nil, nil
 	}
 	b, err := json.Marshal(canon)
 	if err != nil {
-		b = []byte("nodevault.toolfunction.presentation_error\x00" + errValue(err))
+		return "", nil, status.Errorf(codes.Internal, "canonical encoding of presentation failed: %v", err)
 	}
 	sum := sha256.Sum256(b)
 	revisionID = hex.EncodeToString(sum[:])
@@ -649,7 +964,68 @@ func buildPresentationRevision(
 		RevisionID:       revisionID,
 		CasHash:          casHash,
 		PresentationJSON: string(b),
+	}, nil
+}
+
+// canonicalValidationPolicy renders the digest-out validation policy for the request basis
+// with the same N1 rules; its repeated values keep their authored order (no set-like rule is
+// closed for them) and the required_coverage map is key-ordered by the encoder.
+func canonicalValidationPolicy(vp *nfv1.ToolFunctionValidationPolicy) map[string]any {
+	m := map[string]any{}
+	if vp == nil {
+		return m
 	}
+	fixtures := make([]any, 0, len(vp.GetFixtureReferences()))
+	for _, f := range vp.GetFixtureReferences() {
+		fm := map[string]any{}
+		putStr(fm, "local_path", f.GetLocalPath())
+		putStr(fm, "content_digest", f.GetContentDigest())
+		fixtures = append(fixtures, fm)
+	}
+	putList(m, "fixture_references", fixtures)
+	results := make([]any, 0, len(vp.GetExpectedResults()))
+	for _, r := range vp.GetExpectedResults() {
+		rm := map[string]any{}
+		putStr(rm, "output_port_name", r.GetOutputPortName())
+		putStr(rm, "expected_value_or_rule", r.GetExpectedValueOrRule())
+		results = append(results, rm)
+	}
+	putList(m, "expected_results", results)
+	if vr := vp.GetValidationRequirements(); vr != nil {
+		rm := map[string]any{}
+		putInt(rm, "minimum_observation_level", int64(vr.GetMinimumObservationLevel()))
+		if cov := vr.GetRequiredCoverage(); len(cov) > 0 {
+			cm := make(map[string]any, len(cov))
+			for k, v := range cov {
+				cm[k] = v
+			}
+			rm["required_coverage"] = cm
+		}
+		putMsg(m, "validation_requirements", true, rm)
+	}
+	return m
+}
+
+// canonicalEnvironmentHints renders the digest-out environment hints for the request basis.
+func canonicalEnvironmentHints(eh *nfv1.ToolFunctionEnvironmentHints) map[string]any {
+	m := map[string]any{}
+	if eh == nil {
+		return m
+	}
+	putStrList(m, "supported_platforms", eh.GetSupportedPlatforms())
+	if rc := eh.GetEnforcedResources(); rc != nil {
+		rm := map[string]any{}
+		putStr(rm, "cpu_request", rc.GetCpuRequest())
+		putStr(rm, "cpu_limit", rc.GetCpuLimit())
+		putStr(rm, "memory_request", rc.GetMemoryRequest())
+		putStr(rm, "memory_limit", rc.GetMemoryLimit())
+		putStr(rm, "storage_request", rc.GetStorageRequest())
+		putStr(rm, "storage_limit", rc.GetStorageLimit())
+		putInt(rm, "max_execution_time_seconds", int64(rc.GetMaxExecutionTimeSeconds()))
+		putInt(rm, "parallelism", int64(rc.GetParallelism()))
+		putMsg(m, "enforced_resources", true, rm)
+	}
+	return m
 }
 
 func canonicalPresentation(p *nfv1.ToolFunctionPresentation) map[string]any {

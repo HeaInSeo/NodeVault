@@ -556,6 +556,11 @@ type RegisteredToolFunction struct {
 	// RequestID is the idempotency key that first created this record (provenance).
 	RequestID string `json:"request_id,omitempty"`
 
+	// CanonicalizationVersion is the canonicalizer this artifact was first derived with
+	// (DC-R1-NV-C1 derivation provenance; not a digest preimage member). Empty means the record
+	// predates versioned writes: UNKNOWN_LEGACY, never backfilled or rehashed.
+	CanonicalizationVersion string `json:"canonicalization_version,omitempty"`
+
 	// LifecyclePhase is the operator-intent axis; a new successful registration
 	// starts Active. Re-registration never resurrects a Retracted/Deleted record.
 	LifecyclePhase LifecyclePhase `json:"lifecycle_phase"`
@@ -580,15 +585,49 @@ type ToolFunctionPresentationRevision struct {
 	CreatedAt        time.Time `json:"created_at"`
 }
 
-// ToolFunctionRequestRecord makes RegisterToolFunction idempotent by request_id:
-// the same request_id replays to the same CasHash result; the same request_id with
-// a different resulting CasHash is a conflict (fail-closed, no mutation).
+// ToolFunctionRequestRecord is the RegisterToolFunction operation receipt keyed by
+// request_id (DC-R1-NV-C1). A replay of the same request_id is compared on the stored
+// CanonicalizationVersion + full RequestFingerprint; any difference is a conflict
+// (fail-closed, no mutation). A receipt without a version/basis (written before versioned
+// writes) is UNKNOWN_LEGACY: its replay equality cannot be proven and is never backfilled.
 type ToolFunctionRequestRecord struct {
-	RequestID              string    `json:"request_id"` // primary key
-	CasHash                string    `json:"cas_hash"`
-	ToolFunctionDigest     string    `json:"tool_function_digest,omitempty"`
-	PresentationRevisionID string    `json:"presentation_revision_id,omitempty"`
-	CreatedAt              time.Time `json:"created_at"`
+	RequestID              string `json:"request_id"` // primary key
+	CasHash                string `json:"cas_hash"`
+	ToolFunctionDigest     string `json:"tool_function_digest,omitempty"`
+	PresentationRevisionID string `json:"presentation_revision_id,omitempty"`
+	// CanonicalizationVersion is the canonicalizer this operation selected when it was
+	// durably accepted. Empty = UNKNOWN_LEGACY.
+	CanonicalizationVersion string `json:"canonicalization_version,omitempty"`
+	// RequestFingerprint is the lowercase hex SHA256 of RequestBasisJSON.
+	RequestFingerprint string `json:"request_fingerprint,omitempty"`
+	// RequestBasisJSON is the canonical full request body (version, base/image digest, spec,
+	// presentation, validation_policy, environment_hints) the fingerprint was computed over,
+	// kept so equality never rests on a hash match alone.
+	RequestBasisJSON string    `json:"request_basis_json,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
+// BasisKnown reports whether the receipt carries a canonicalizer version and full request
+// basis. A receipt without them is UNKNOWN_LEGACY.
+func (r *ToolFunctionRequestRecord) BasisKnown() bool {
+	return r.CanonicalizationVersion != "" && r.RequestFingerprint != "" && r.RequestBasisJSON != ""
+}
+
+// ToolFunctionOperation is the RegisterToolFunction operation identity handed to
+// RegisterToolFunctionAtomic: the request_id key plus the canonicalizer version and full
+// request basis/fingerprint that the receipt records and replays are compared on.
+type ToolFunctionOperation struct {
+	RequestID               string
+	CanonicalizationVersion string
+	RequestFingerprint      string
+	RequestBasisJSON        string
+}
+
+// complete reports whether the operation carries everything its receipt must record, so a
+// versioned write can never mint an UNKNOWN_LEGACY receipt.
+func (op *ToolFunctionOperation) complete() bool {
+	return op.RequestID != "" && op.CanonicalizationVersion != "" &&
+		op.RequestFingerprint != "" && op.RequestBasisJSON != ""
 }
 
 // indexFile is the on-disk representation of the index.
@@ -599,6 +638,8 @@ type ToolFunctionRequestRecord struct {
 // and ToolFunctionRequestRecords (issue #19 W2 RegisterToolFunction).
 // schemaVersion 6 adds ResolvedToolSpec.RawSpecSchemaVersion + DerivationVersion
 // (W3-PRE raw_spec schema authority & frozen derivation provenance).
+// schemaVersion 7 adds the versioned ToolFunction receipt/provenance fields
+// (DC-R1-NV-C1 w2-set-v1 no-rehash cutover).
 type indexFile struct {
 	SchemaVersion int     `json:"schema_version"`
 	Entries       []Entry `json:"entries"`

@@ -52,13 +52,14 @@ const (
 	portAligned = "aligned"
 )
 
-// validTFReq returns a structurally valid RegisterToolFunctionRequest. Its declared
+// validTFReq returns a structurally valid w2-set-v1 RegisterToolFunctionRequest. Its declared
 // parameter is consumed by a whole-element {param.threads} argument (O-1).
 func validTFReq() *nfv1.RegisterToolFunctionRequest {
 	return &nfv1.RegisterToolFunctionRequest{
-		RequestId:          "req-1",
-		BaseToolSpecDigest: baseDigest,
-		ImageDigest:        imgDigest('a'),
+		RequestId:               "req-1",
+		BaseToolSpecDigest:      baseDigest,
+		ImageDigest:             imgDigest('a'),
+		CanonicalizationVersion: index.CanonicalizationW2SetV1,
 		Spec: &nfv1.ToolFunctionSpec{
 			Command: &nfv1.CommandContract{Executable: "bwa", Arguments: []string{"mem", "-t", "{param.threads}"}},
 			Inputs: []*nfv1.FunctionPortSpec{
@@ -235,8 +236,10 @@ func TestRegisterToolFunction_DigestInputNormalization(t *testing.T) {
 	}
 }
 
-// TestRegisterToolFunction_RepeatedFieldOrdering proves repeated-field order is
-// identity-bearing: reordering inputs changes tool_function_digest.
+// TestRegisterToolFunction_RepeatedFieldOrdering proves the w2-set-v1 contract (N2): inputs
+// are set-like, so reordering them yields the SAME tool_function_digest. The original
+// order-is-identity behavior survives only as the replay-only legacy-order-v0 branch
+// (TestLegacyOrderV0_PreservesAuthoredOrder).
 func TestRegisterToolFunction_RepeatedFieldOrdering(t *testing.T) {
 	svc1, _ := newTFService(t)
 	r1 := validTFReq()
@@ -254,8 +257,8 @@ func TestRegisterToolFunction_RepeatedFieldOrdering(t *testing.T) {
 	}
 	resp2 := mustRegisterTF(t, svc2, r2)
 
-	if resp1.GetToolFunctionDigest() == resp2.GetToolFunctionDigest() {
-		t.Fatal("reordering inputs must change tool_function_digest (order is identity-bearing)")
+	if resp1.GetToolFunctionDigest() != resp2.GetToolFunctionDigest() {
+		t.Fatal("w2-set-v1: reordering set-like inputs must not change tool_function_digest")
 	}
 }
 

@@ -5,6 +5,17 @@ import (
 	"testing"
 )
 
+// tfDurOp is a complete w2-set-v1 operation for white-box store tests. All operations share
+// one request basis, so the same content under any request_id is a provable reuse.
+func tfDurOp(reqID string) ToolFunctionOperation {
+	return ToolFunctionOperation{
+		RequestID:               reqID,
+		CanonicalizationVersion: CanonicalizationW2SetV1,
+		RequestFingerprint:      "fp",
+		RequestBasisJSON:        `{"basis":"fp"}`,
+	}
+}
+
 func tfDurRec(cas, tfd, img string) RegisteredToolFunction {
 	return RegisteredToolFunction{
 		CasHash:             cas,
@@ -30,7 +41,7 @@ func TestRegisterToolFunctionAtomic_PostRenameDurabilityDoesNotDivergeMemory(t *
 	}
 
 	// A: a normal, fully-durable registration.
-	if _, _, err = s.RegisterToolFunctionAtomic("req-a", tfDurRec("cas-a", "tfd-a", "img-a"), nil); err != nil {
+	if _, _, err = s.RegisterToolFunctionAtomic(tfDurOp("req-a"), tfDurRec("cas-a", "tfd-a", "img-a"), nil); err != nil {
 		t.Fatalf("register A: %v", err)
 	}
 
@@ -38,7 +49,7 @@ func TestRegisterToolFunctionAtomic_PostRenameDurabilityDoesNotDivergeMemory(t *
 	// the simulated parent-dir fsync fails, so save() returns errIndexPersistedNotDurable.
 	failAfterRenameForTest = func() error { return errors.New("simulated post-rename dir fsync failure") }
 	t.Cleanup(func() { failAfterRenameForTest = nil })
-	_, _, err = s.RegisterToolFunctionAtomic("req-b", tfDurRec("cas-b", "tfd-b", "img-b"), nil)
+	_, _, err = s.RegisterToolFunctionAtomic(tfDurOp("req-b"), tfDurRec("cas-b", "tfd-b", "img-b"), nil)
 	if err == nil {
 		t.Fatal("expected a durability error for the post-rename failure")
 	}
@@ -53,7 +64,7 @@ func TestRegisterToolFunctionAtomic_PostRenameDurabilityDoesNotDivergeMemory(t *
 	// C: a later successful save. With the bug, memory would be {A,C} (B rolled back) and
 	// this save would delete B from disk. With the fix, memory is {A,B,C}.
 	failAfterRenameForTest = nil
-	if _, _, err = s.RegisterToolFunctionAtomic("req-c", tfDurRec("cas-c", "tfd-c", "img-c"), nil); err != nil {
+	if _, _, err = s.RegisterToolFunctionAtomic(tfDurOp("req-c"), tfDurRec("cas-c", "tfd-c", "img-c"), nil); err != nil {
 		t.Fatalf("register C: %v", err)
 	}
 
@@ -86,7 +97,7 @@ func TestRegisterToolFunctionAtomic_ReplayRepairsUncertainDurability(t *testing.
 	// First call: rename succeeds, dir fsync fails → uncertain durability.
 	failAfterRenameForTest = func() error { return errors.New("simulated post-rename dir fsync failure") }
 	t.Cleanup(func() { failAfterRenameForTest = nil })
-	if _, _, err = s.RegisterToolFunctionAtomic("req-1", rec, nil); !errors.Is(err, errIndexPersistedNotDurable) {
+	if _, _, err = s.RegisterToolFunctionAtomic(tfDurOp("req-1"), rec, nil); !errors.Is(err, errIndexPersistedNotDurable) {
 		t.Fatalf("first call: want errIndexPersistedNotDurable, got %v", err)
 	}
 	if !s.toolFunctionDurabilityUncertain {
@@ -95,7 +106,7 @@ func TestRegisterToolFunctionAtomic_ReplayRepairsUncertainDurability(t *testing.
 
 	// Replay while the fault persists: the top-of-function re-save fails again, so the replay
 	// must NOT acknowledge success, and the flag stays set (no durability gap acknowledged).
-	if _, _, err = s.RegisterToolFunctionAtomic("req-1", rec, nil); err == nil {
+	if _, _, err = s.RegisterToolFunctionAtomic(tfDurOp("req-1"), rec, nil); err == nil {
 		t.Fatal("replay acknowledged success while durability was still uncertain")
 	}
 	if !s.toolFunctionDurabilityUncertain {
@@ -105,7 +116,7 @@ func TestRegisterToolFunctionAtomic_ReplayRepairsUncertainDurability(t *testing.
 	// Clear the fault and replay: the re-save now fsyncs the dir, durability is confirmed,
 	// the flag clears, and the idempotent replay returns success.
 	failAfterRenameForTest = nil
-	stored, created, rerr := s.RegisterToolFunctionAtomic("req-1", rec, nil)
+	stored, created, rerr := s.RegisterToolFunctionAtomic(tfDurOp("req-1"), rec, nil)
 	if rerr != nil {
 		t.Fatalf("replay after repair: %v", rerr)
 	}
@@ -173,7 +184,7 @@ func TestRegisterToolFunctionAtomic_ReplaySafeAcrossRestart(t *testing.T) {
 	// First registration: rename succeeds, dir fsync fails → uncertain, error (not acked).
 	failAfterRenameForTest = func() error { return errors.New("post-rename dir fsync failure") }
 	t.Cleanup(func() { failAfterRenameForTest = nil })
-	if _, _, e := s.RegisterToolFunctionAtomic("req-1", rec, nil); !errors.Is(e, errIndexPersistedNotDurable) {
+	if _, _, e := s.RegisterToolFunctionAtomic(tfDurOp("req-1"), rec, nil); !errors.Is(e, errIndexPersistedNotDurable) {
 		t.Fatalf("first call: want errIndexPersistedNotDurable, got %v", e)
 	}
 
@@ -186,7 +197,7 @@ func TestRegisterToolFunctionAtomic_ReplaySafeAcrossRestart(t *testing.T) {
 	if _, e := s2.GetToolFunctionByCasHash("cas-1"); e != nil {
 		t.Fatalf("record not present after restart: %v", e)
 	}
-	stored, created, rerr := s2.RegisterToolFunctionAtomic("req-1", rec, nil)
+	stored, created, rerr := s2.RegisterToolFunctionAtomic(tfDurOp("req-1"), rec, nil)
 	if rerr != nil {
 		t.Fatalf("replay after restart: %v", rerr)
 	}

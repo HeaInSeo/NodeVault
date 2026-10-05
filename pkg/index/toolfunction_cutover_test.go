@@ -119,6 +119,8 @@ func TestToolFunctionCutover_ReplayComparesVersionAndBasis(t *testing.T) {
 		mut  func(*index.ToolFunctionOperation)
 	}{
 		{"basis", func(op *index.ToolFunctionOperation) { op.RequestFingerprint = "fp-other" }},
+		// Same caller-supplied fingerprint, different basis body: the stored body decides.
+		{"basis body only", func(op *index.ToolFunctionOperation) { op.RequestBasisJSON = `{"basis":"other"}` }},
 		{"version", func(op *index.ToolFunctionOperation) {
 			op.CanonicalizationVersion = index.CanonicalizationLegacyOrderV0
 		}},
@@ -159,6 +161,68 @@ func TestToolFunctionCutover_ReuseRequiresSameBasis(t *testing.T) {
 	}
 	if _, err := s.GetToolFunctionRequestRecord("reqB"); !errors.Is(err, index.ErrNotFound) {
 		t.Fatalf("held reuse must not record a receipt: %v", err)
+	}
+}
+
+// N6: reuse is proven on the persisted basis body too, not only on a matching fingerprint.
+func TestToolFunctionCutover_ReuseComparesStoredBasisBody(t *testing.T) {
+	s := newStore(t)
+	if _, _, err := s.RegisterToolFunctionAtomic(tfOp("reqA"), tfRecord(casA, tfd1, imgA), nil); err != nil {
+		t.Fatalf("reqA: %v", err)
+	}
+	other := tfOp("reqB")
+	other.RequestBasisJSON = `{"basis":"other"}`
+	if _, _, err := s.RegisterToolFunctionAtomic(other, tfRecord(casA, tfd1, imgA), nil); !errors.Is(
+		err, index.ErrToolFunctionIdentityAmbiguous) {
+		t.Fatalf("same fingerprint, other basis body: want ErrToolFunctionIdentityAmbiguous, got %v", err)
+	}
+	if _, err := s.GetToolFunctionRequestRecord("reqB"); !errors.Is(err, index.ErrNotFound) {
+		t.Fatalf("held reuse must not record a receipt: %v", err)
+	}
+}
+
+// A receipt whose persisted basis no longer matches the request (corruption, faulty migration)
+// is not proven by its fingerprint alone: the replay and a reuse of its record both refuse,
+// and the index file is left byte-for-byte unchanged.
+func TestToolFunctionCutover_CorruptedStoredBasisRefused(t *testing.T) {
+	dir := t.TempDir()
+	s, err := index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("NewAt: %v", err)
+	}
+	if _, _, ferr := s.RegisterToolFunctionAtomic(tfOp(reqID1), tfRecord(casA, tfd1, imgA), nil); ferr != nil {
+		t.Fatalf("first: %v", ferr)
+	}
+	path := filepath.Join(dir, "vault-index.json")
+	data, err := os.ReadFile(path) //nolint:gosec // G304: t.TempDir()
+	if err != nil {
+		t.Fatalf("read index: %v", err)
+	}
+	corrupted := strings.Replace(string(data), `{\"basis\":\"fp\"}`, `{\"basis\":\"corrupt\"}`, 1)
+	if corrupted == string(data) {
+		t.Fatal("stored basis not found in the index file")
+	}
+	if werr := os.WriteFile(path, []byte(corrupted), 0o600); werr != nil { //nolint:gosec // G703: t.TempDir()
+		t.Fatalf("write corrupted index: %v", werr)
+	}
+	s, err = index.NewAt(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if _, _, rerr := s.RegisterToolFunctionAtomic(tfOp(reqID1), tfRecord(casA, tfd1, imgA), nil); !errors.Is(
+		rerr, index.ErrToolFunctionRequestConflict) {
+		t.Fatalf("replay over a corrupted stored basis: want ErrToolFunctionRequestConflict, got %v", rerr)
+	}
+	if _, _, rerr := s.RegisterToolFunctionAtomic(tfOp("reqB"), tfRecord(casA, tfd1, imgA), nil); !errors.Is(
+		rerr, index.ErrToolFunctionIdentityAmbiguous) {
+		t.Fatalf("reuse over a corrupted stored basis: want ErrToolFunctionIdentityAmbiguous, got %v", rerr)
+	}
+	after, err := os.ReadFile(path) //nolint:gosec // G304: t.TempDir()
+	if err != nil {
+		t.Fatalf("read index: %v", err)
+	}
+	if string(after) != corrupted {
+		t.Fatal("refused replay/reuse mutated the index file")
 	}
 }
 

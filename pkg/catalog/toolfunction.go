@@ -336,8 +336,14 @@ func rejectUnknownPresentationFields(pres *nfv1.ToolFunctionPresentation) error 
 }
 
 // rejectUnknownRequestFields applies the unknown-field gates to every request part that enters
-// an identity or the receipt's request basis: spec, presentation, and the digest-out envelope.
+// an identity or the receipt's request basis: the request envelope itself, spec, presentation,
+// and the digest-out envelope. A top-level field added by a newer client would otherwise be
+// left out of the request basis, so retries differing only in it would compare equal.
 func rejectUnknownRequestFields(req *nfv1.RegisterToolFunctionRequest) error {
+	if len(req.ProtoReflect().GetUnknown()) > 0 {
+		return status.Error(codes.InvalidArgument,
+			"request contains unknown top-level protobuf field(s); request basis would be incomplete")
+	}
 	if err := rejectUnknownSpecFields(req.GetSpec()); err != nil {
 		return err
 	}

@@ -463,6 +463,38 @@ func TestW2SetV1_DigestLevelEnvelopeConflict(t *testing.T) {
 	}
 }
 
+// M13: an unknown top-level request field (a newer client) never reaches the request basis.
+// A first request carrying one is refused with no receipt, and a retry of a registered
+// request_id that differs only in such bytes is refused instead of replaying as identical.
+func TestW2SetV1_UnknownTopLevelRequestFieldRejected(t *testing.T) {
+	unknownA := protowire.AppendVarint(protowire.AppendTag(nil, 50000, protowire.VarintType), 7)
+	unknownB := protowire.AppendVarint(protowire.AppendTag(nil, 50000, protowire.VarintType), 8)
+
+	svc, store := newTFService(t)
+	fresh := validTFReq()
+	fresh.RequestId = "req-unknown-top"
+	fresh.ProtoReflect().SetUnknown(protoreflect.RawFields(unknownA))
+	if _, err := svc.RegisterToolFunction(context.Background(), fresh); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("unknown top-level field: want InvalidArgument, got %v", err)
+	}
+	if _, err := store.GetToolFunctionRequestRecord("req-unknown-top"); !errors.Is(err, index.ErrNotFound) {
+		t.Fatalf("refused request recorded a receipt: %v", err)
+	}
+
+	first := mustRegisterTF(t, svc, validTFReq())
+	for name, raw := range map[string][]byte{"a": unknownA, "b": unknownB} {
+		retry := validTFReq()
+		retry.ProtoReflect().SetUnknown(protoreflect.RawFields(raw))
+		if _, err := svc.RegisterToolFunction(context.Background(), retry); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("retry with unknown bytes %s: want InvalidArgument, got %v", name, err)
+		}
+	}
+	again := mustRegisterTF(t, svc, validTFReq())
+	if again.GetCasHash() != first.GetCasHash() {
+		t.Fatalf("clean replay after refused retries: cas %q, want %q", again.GetCasHash(), first.GetCasHash())
+	}
+}
+
 // M13: unknown fields and undefined enums in the digest-out envelope are rejected fail-closed.
 func TestW2SetV1_UnknownEnvelopeRejected(t *testing.T) {
 	unknown := protowire.AppendTag(nil, 50000, protowire.VarintType)

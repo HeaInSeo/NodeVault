@@ -1697,7 +1697,7 @@ func (s *Store) repairToolFunctionDurabilityLocked() error {
 
 // resolveToolFunctionRequestLocked applies the request_id idempotency axis. done is
 // true when the caller should return immediately: either an idempotent replay (stored
-// receipt with the same version and full request fingerprint → existing record, nil
+// receipt with the same version, full request basis and fingerprint → existing record, nil
 // error), a conflict (different version, basis or CasHash), or an UNKNOWN_LEGACY receipt
 // whose replay equality cannot be proven — the last two fail-closed with no mutation. An
 // unseen request_id yields done=false so the content axis proceeds.
@@ -1712,8 +1712,11 @@ func (s *Store) resolveToolFunctionRequestLocked(
 		return RegisteredToolFunction{}, true, fmt.Errorf("%w: request_id=%q",
 			ErrToolFunctionRequestUnknownLegacy, op.RequestID)
 	}
+	// The persisted basis itself is compared, not only its fingerprint: equality must not rest
+	// on a caller-supplied hash when the stored body differs (corruption, faulty migration).
 	if prior.CanonicalizationVersion != op.CanonicalizationVersion ||
-		prior.RequestFingerprint != op.RequestFingerprint || prior.CasHash != casHash {
+		prior.RequestFingerprint != op.RequestFingerprint || prior.RequestBasisJSON != op.RequestBasisJSON ||
+		prior.CasHash != casHash {
 		return RegisteredToolFunction{}, true, fmt.Errorf("%w: request_id=%q", ErrToolFunctionRequestConflict, op.RequestID)
 	}
 	existing, ferr := s.findToolFunctionLocked(prior.CasHash)
@@ -1757,8 +1760,9 @@ func (s *Store) reuseToolFunctionLocked(
 
 // proveToolFunctionReuseLocked allows a new request_id to reuse an existing runnable record
 // only when the record has a known derivation version and its originating receipt carries the
-// same canonicalizer version and full request fingerprint (canonical preimage, base/image
-// relation, presentation, validation_policy, environment_hints). Anything less is an identity
+// same canonicalizer version, full request fingerprint and identical persisted request basis
+// (canonical preimage, base/image relation, presentation, validation_policy,
+// environment_hints). Anything less is an identity
 // ambiguity: the existing record is neither reused nor relabeled.
 func (s *Store) proveToolFunctionReuseLocked(op *ToolFunctionOperation, existing *RegisteredToolFunction) error {
 	origin, ok := s.findToolFunctionRequestLocked(existing.RequestID)
@@ -1767,7 +1771,7 @@ func (s *Store) proveToolFunctionReuseLocked(op *ToolFunctionOperation, existing
 		return fmt.Errorf("%w: cas_hash=%q has no provable originating request basis (UNKNOWN_LEGACY)",
 			ErrToolFunctionIdentityAmbiguous, existing.CasHash)
 	case origin.CanonicalizationVersion != op.CanonicalizationVersion ||
-		origin.RequestFingerprint != op.RequestFingerprint:
+		origin.RequestFingerprint != op.RequestFingerprint || origin.RequestBasisJSON != op.RequestBasisJSON:
 		return fmt.Errorf("%w: cas_hash=%q was registered with a different canonicalizer version or request envelope",
 			ErrToolFunctionIdentityAmbiguous, existing.CasHash)
 	}

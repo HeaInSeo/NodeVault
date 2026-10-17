@@ -35,6 +35,7 @@ require (
 	github.com/HeaInSeo/utils v0.0.7 // indirect
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
+	github.com/ProtonMail/go-crypto v1.4.1 // indirect
 	github.com/VividCortex/ewma v1.2.0 // indirect
 	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d // indirect
 	github.com/aead/serpent v0.0.0-20160714141033-fba169763ea6 // indirect
@@ -42,6 +43,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/chzyer/readline v1.5.1 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
+	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/containerd/errdefs v1.0.0 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/containerd/log v0.1.0 // indirect
@@ -50,7 +52,7 @@ require (
 	github.com/containerd/typeurl/v2 v2.3.0 // indirect
 	github.com/containers/libtrust v0.0.0-20230121012942-c1716e8a8d01 // indirect
 	github.com/containers/luksy v0.0.0-20251208191447-ca096313c38f // indirect
-	github.com/containers/ocicrypt v1.3.0 // indirect
+	github.com/containers/ocicrypt v1.3.2 // indirect
 	github.com/containers/psgo v1.10.0 // indirect
 	github.com/coreos/go-systemd/v22 v22.7.0 // indirect
 	github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467 // indirect
@@ -87,7 +89,6 @@ require (
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
-	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/gnostic-models v0.6.9 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/go-containerregistry v0.21.6 // indirect
@@ -107,7 +108,7 @@ require (
 	github.com/manifoldco/promptui v0.9.0 // indirect
 	github.com/mattn/go-runewidth v0.0.23 // indirect
 	github.com/mattn/go-shellwords v1.0.13 // indirect
-	github.com/miekg/pkcs11 v1.1.1 // indirect
+	github.com/miekg/pkcs11 v1.1.2 // indirect
 	github.com/mistifyio/go-zfs/v4 v4.0.0 // indirect
 	github.com/moby/buildkit v0.31.1 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
@@ -145,7 +146,7 @@ require (
 	github.com/sigstore/sigstore v1.10.8 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/skeema/knownhosts v1.3.2 // indirect
-	github.com/smallstep/pkcs7 v0.1.1 // indirect
+	github.com/smallstep/pkcs7 v0.2.1 // indirect
 	github.com/spf13/cobra v1.10.2 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/stefanberger/go-pkcs11uri v0.0.0-20230803200340-78284954bff6 // indirect

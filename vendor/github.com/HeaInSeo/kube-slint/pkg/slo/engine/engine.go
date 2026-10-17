@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"fmt"
+	"math"
+	"sort"
 	"time"
 
 	"github.com/HeaInSeo/kube-slint/pkg/slo"
@@ -48,50 +50,83 @@ func (e *Engine) Execute(ctx context.Context, req ExecuteRequest) (*summary.Summ
 		rel = &summary.Reliability{}
 	}
 
-	// 스냅샷 수집
-	realStart := time.Now()
-	// startSkew는 측정 지시 시점(StartedAt)과 실제 스크래핑을 시도한 시점 간의 시차를 의미함.
-	// 참고: 이는 하네스의 실행 지연을 의미하며, 오퍼레이터의 시작 지연이 아님.
-	startSkew := realStart.Sub(cfg.StartedAt).Milliseconds()
-	rel.StartSkewMs = &startSkew
+	needsPoint, needsWindow := splitSpecNeeds(req.Specs)
 
-	start, err := e.fetcher.Fetch(ctx, cfg.StartedAt)
-	scrapeLatencyStart := time.Since(realStart).Milliseconds()
-	rel.ScrapeLatencyMs = &scrapeLatencyStart
+	var start, end fetch.Sample
+	var scrapeLatencyStart int64
+	if needsPoint {
+		if e.fetcher == nil {
+			rel.CollectionStatus = "Failed"
+			rel.BlockedReason = "point MetricsFetcher is required"
+			s := e.emptySummary(cfg, rel, []string{"point MetricsFetcher is required"})
+			e.ensureConfidenceScore(rel)
+			_ = e.writer.Write(req.OutPath, *s)
+			return s, nil
+		}
 
-	if err != nil {
-		rel.CollectionStatus = "Failed"
-		rel.BlockedReason = fmt.Sprintf("fetch(start) failed: %v", err)
-		// 철학: "측정 실패는 테스트 실패가 아님" → 경고가 포함된 Summary 반환
-		s := e.emptySummary(cfg, rel, []string{fmt.Sprintf("fetch(start) failed: %v", err)})
-		e.ensureConfidenceScore(rel)
-		_ = e.writer.Write(req.OutPath, *s)
-		return s, nil
+		// 스냅샷 수집
+		realStart := time.Now()
+		// startSkew는 측정 지시 시점(StartedAt)과 실제 스크래핑을 시도한 시점 간의 시차를 의미함.
+		// 참고: 이는 하네스의 실행 지연을 의미하며, 오퍼레이터의 시작 지연이 아님.
+		startSkew := realStart.Sub(cfg.StartedAt).Milliseconds()
+		rel.StartSkewMs = &startSkew
+
+		var err error
+		start, err = e.fetcher.Fetch(ctx, cfg.StartedAt)
+		scrapeLatencyStart = time.Since(realStart).Milliseconds()
+		rel.ScrapeLatencyMs = &scrapeLatencyStart
+
+		if err != nil {
+			rel.CollectionStatus = "Failed"
+			rel.BlockedReason = fmt.Sprintf("fetch(start) failed: %v", err)
+			// 철학: "측정 실패는 테스트 실패가 아님" → 경고가 포함된 Summary 반환
+			s := e.emptySummary(cfg, rel, []string{fmt.Sprintf("fetch(start) failed: %v", err)})
+			e.ensureConfidenceScore(rel)
+			_ = e.writer.Write(req.OutPath, *s)
+			return s, nil
+		}
+
+		realEnd := time.Now()
+		endSkew := realEnd.Sub(cfg.FinishedAt).Milliseconds()
+		rel.EndSkewMs = &endSkew
+
+		end, err = e.fetcher.Fetch(ctx, cfg.FinishedAt)
+		scrapeLatencyEnd := time.Since(realEnd).Milliseconds()
+		// ScrapeLatency는 시작과 종료 데이터 수집 지연 시간 중 최댓값임.
+		maxLatency := scrapeLatencyStart
+		if scrapeLatencyEnd > maxLatency {
+			maxLatency = scrapeLatencyEnd
+		}
+		rel.ScrapeLatencyMs = &maxLatency
+
+		if err != nil {
+			rel.CollectionStatus = "Failed"
+			rel.BlockedReason = fmt.Sprintf("fetch(end) failed: %v", err)
+			s := e.emptySummary(cfg, rel, []string{fmt.Sprintf("fetch(end) failed: %v", err)})
+			e.ensureConfidenceScore(rel)
+			_ = e.writer.Write(req.OutPath, *s)
+			return s, nil
+		}
 	}
 
-	realEnd := time.Now()
-	endSkew := realEnd.Sub(cfg.FinishedAt).Milliseconds()
-	rel.EndSkewMs = &endSkew
-
-	end, err := e.fetcher.Fetch(ctx, cfg.FinishedAt)
-	scrapeLatencyEnd := time.Since(realEnd).Milliseconds()
-	// ScrapeLatency는 시작과 종료 데이터 수집 지연 시간 중 최댓값임.
-	maxLatency := scrapeLatencyStart
-	if scrapeLatencyEnd > maxLatency {
-		maxLatency = scrapeLatencyEnd
-	}
-	rel.ScrapeLatencyMs = &maxLatency
-
-	if err != nil {
-		rel.CollectionStatus = "Failed"
-		rel.BlockedReason = fmt.Sprintf("fetch(end) failed: %v", err)
-		s := e.emptySummary(cfg, rel, []string{fmt.Sprintf("fetch(end) failed: %v", err)})
-		e.ensureConfidenceScore(rel)
-		_ = e.writer.Write(req.OutPath, *s)
-		return s, nil
+	var windowSamples []fetch.Sample
+	var windowErr error
+	if needsWindow && req.WindowFetcher != nil {
+		realWindow := time.Now()
+		windowSamples, windowErr = req.WindowFetcher.FetchRange(ctx, cfg.StartedAt, cfg.FinishedAt)
+		windowLatency := time.Since(realWindow).Milliseconds()
+		if rel.ScrapeLatencyMs == nil || windowLatency > *rel.ScrapeLatencyMs {
+			rel.ScrapeLatencyMs = &windowLatency
+		}
+		if windowErr != nil {
+			rel.CollectionStatus = "Failed"
+			rel.BlockedReason = fmt.Sprintf("fetch(window) failed: %v", windowErr)
+		}
 	}
 
-	rel.CollectionStatus = statusComplete
+	if rel.CollectionStatus == "" {
+		rel.CollectionStatus = statusComplete
+	}
 	rel.EvaluationStatus = statusComplete // 초기에는 완전함으로 설정, 누락 시 부분(Partial)으로 강등됨
 
 	sum := summary.Summary{
@@ -115,7 +150,19 @@ func (e *Engine) Execute(ctx context.Context, req ExecuteRequest) (*summary.Summ
 	missingSet := map[string]bool{}
 
 	for _, s := range req.Specs {
-		r := evalSLI(s, start.Values, end.Values)
+		var r summary.SLIResult
+		if isWindowMode(s.Compute.Mode) {
+			switch {
+			case req.WindowFetcher == nil:
+				r = skippedSLI(s, "window fetcher required")
+			case windowErr != nil:
+				r = skippedSLI(s, fmt.Sprintf("fetch(window) failed: %v", windowErr))
+			default:
+				r = evalWindowSLI(s, windowSamples)
+			}
+		} else {
+			r = evalSLI(s, start.Values, end.Values)
+		}
 		for _, m := range r.InputsMissing {
 			missingSet[m] = true
 		}
@@ -137,7 +184,21 @@ func (e *Engine) Execute(ctx context.Context, req ExecuteRequest) (*summary.Summ
 	if err := e.writer.Write(req.OutPath, sum); err != nil {
 		return nil, err
 	}
-	return &sum, err
+	return &sum, nil
+}
+
+func splitSpecNeeds(specs []spec.SLISpec) (needsPoint, needsWindow bool) {
+	if len(specs) == 0 {
+		return true, false
+	}
+	for _, s := range specs {
+		if isWindowMode(s.Compute.Mode) {
+			needsWindow = true
+		} else {
+			needsPoint = true
+		}
+	}
+	return needsPoint, needsWindow
 }
 
 // ensureConfidenceScore는 측정의 신뢰도 점수를 계산함.
@@ -292,6 +353,171 @@ func evalSLI(s spec.SLISpec, start, end map[string]float64) summary.SLIResult {
 	return res
 }
 
+func evalWindowSLI(s spec.SLISpec, samples []fetch.Sample) summary.SLIResult {
+	res := baseResult(s)
+
+	used := make([]string, 0, len(s.Inputs))
+	for _, in := range s.Inputs {
+		used = append(used, in.Key)
+	}
+	res.InputsUsed = used
+
+	values, missing := windowValues(s.Inputs, samples)
+	res.InputsMissing = missing
+	if len(missing) > 0 {
+		res.Status = summary.StatusSkip
+		res.Reason = "missing input metrics"
+		return res
+	}
+	if len(values) == 0 {
+		res.Status = summary.StatusSkip
+		res.Reason = "empty window"
+		return res
+	}
+
+	var value float64
+	switch s.Compute.Mode {
+	case spec.ComputeWindowMin:
+		value = values[0]
+		for _, v := range values[1:] {
+			if v < value {
+				value = v
+			}
+		}
+	case spec.ComputeWindowMax:
+		value = values[0]
+		for _, v := range values[1:] {
+			if v > value {
+				value = v
+			}
+		}
+	case spec.ComputeWindowAvg:
+		var sum float64
+		for _, v := range values {
+			sum += v
+		}
+		value = sum / float64(len(values))
+	case spec.ComputeWindowP95:
+		value = percentile(values, 0.95)
+	case spec.ComputeWindowP99:
+		value = percentile(values, 0.99)
+	case spec.ComputeWindowRatio:
+		ratio, ok, reason := windowRatio(s.Inputs, samples)
+		if !ok {
+			res.Status = summary.StatusSkip
+			res.Reason = reason
+			return res
+		}
+		value = ratio
+	default:
+		res.Status = summary.StatusSkip
+		res.Reason = "unknown window compute mode"
+		return res
+	}
+	res.Value = &value
+
+	if s.Judge != nil {
+		res.Status, res.Reason = judge(value, s.Judge.Rules)
+	}
+	return res
+}
+
+func baseResult(s spec.SLISpec) summary.SLIResult {
+	return summary.SLIResult{
+		ID:          s.ID,
+		Title:       s.Title,
+		Unit:        s.Unit,
+		Kind:        s.Kind,
+		Description: s.Description,
+		Status:      summary.StatusPass,
+	}
+}
+
+func skippedSLI(s spec.SLISpec, reason string) summary.SLIResult {
+	res := baseResult(s)
+	res.Status = summary.StatusSkip
+	res.Reason = reason
+	for _, in := range s.Inputs {
+		res.InputsUsed = append(res.InputsUsed, in.Key)
+	}
+	return res
+}
+
+func windowValues(inputs []spec.MetricRef, samples []fetch.Sample) ([]float64, []string) {
+	var values []float64
+	missingSet := map[string]bool{}
+	seen := map[string]bool{}
+	for _, sample := range samples {
+		for _, in := range inputs {
+			v, ok := sample.Values[in.Key]
+			if !ok {
+				missingSet[in.Key] = true
+				continue
+			}
+			seen[in.Key] = true
+			values = append(values, v)
+		}
+	}
+	var missing []string
+	for _, in := range inputs {
+		if !seen[in.Key] {
+			missing = append(missing, in.Key)
+			continue
+		}
+		if missingSet[in.Key] && len(samples) == 0 {
+			missing = append(missing, in.Key)
+		}
+	}
+	return values, missing
+}
+
+func percentile(values []float64, quantile float64) float64 {
+	sorted := append([]float64(nil), values...)
+	sort.Float64s(sorted)
+	rank := int(math.Ceil(quantile * float64(len(sorted))))
+	if rank < 1 {
+		rank = 1
+	}
+	if rank > len(sorted) {
+		rank = len(sorted)
+	}
+	return sorted[rank-1]
+}
+
+func windowRatio(inputs []spec.MetricRef, samples []fetch.Sample) (float64, bool, string) {
+	if len(inputs) < 2 {
+		return 0, false, "window_ratio requires numerator and denominator inputs"
+	}
+	var numerator, denominator float64
+	seenNum, seenDen := false, false
+	for _, sample := range samples {
+		if v, ok := sample.Values[inputs[0].Key]; ok {
+			numerator += v
+			seenNum = true
+		}
+		if v, ok := sample.Values[inputs[1].Key]; ok {
+			denominator += v
+			seenDen = true
+		}
+	}
+	if !seenNum || !seenDen {
+		return 0, false, "missing input metrics"
+	}
+	if denominator == 0 {
+		return 0, false, "window_ratio denominator is zero"
+	}
+	return numerator / denominator, true, ""
+}
+
+func isWindowMode(mode spec.ComputeMode) bool {
+	switch mode {
+	case spec.ComputeWindowMin, spec.ComputeWindowMax, spec.ComputeWindowAvg, spec.ComputeWindowP95, spec.ComputeWindowP99, spec.ComputeWindowRatio:
+		return true
+	default:
+		return false
+	}
+}
+
 func judge(v float64, rules []spec.Rule) (status summary.Status, reason string) {
 	// v3: fail이 warn보다 우선함
 	var warn string
@@ -338,6 +564,8 @@ type ExecuteRequestStandard struct {
 	Specs       []spec.SLISpec
 	OutPath     string
 	Reliability *summary.Reliability
+	// WindowFetcher is optional and only used by window compute modes.
+	WindowFetcher fetch.WindowFetcher
 }
 
 // ExecuteStandard 는 표준 기본값을 적용하고 엔진에 위임함.
@@ -351,9 +579,10 @@ func ExecuteStandard(ctx context.Context, eng *Engine, req ExecuteRequestStandar
 		Trigger:  string(mode.Trigger),
 	}
 	return eng.Execute(ctx, ExecuteRequest{
-		Config:      req.Config,
-		Specs:       req.Specs,
-		OutPath:     req.OutPath,
-		Reliability: req.Reliability,
+		Config:        req.Config,
+		Specs:         req.Specs,
+		OutPath:       req.OutPath,
+		Reliability:   req.Reliability,
+		WindowFetcher: req.WindowFetcher,
 	})
 }

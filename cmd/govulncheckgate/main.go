@@ -42,7 +42,14 @@ type exceptionsFile struct {
 // govulncheckMessage mirrors the subset of govulncheck's JSON message
 // envelope (golang.org/x/vuln/exp/govulncheck) this gate needs.
 type govulncheckMessage struct {
-	Finding *finding `json:"finding"`
+	Config  *scanConfig `json:"config"`
+	Finding *finding    `json:"finding"`
+}
+
+type scanConfig struct {
+	ProtocolVersion string `json:"protocol_version"`
+	ScanLevel       string `json:"scan_level"`
+	ScanMode        string `json:"scan_mode"`
 }
 
 type finding struct {
@@ -51,9 +58,12 @@ type finding struct {
 }
 
 type frame struct {
-	Module   string `json:"module"`
-	Package  string `json:"package"`
-	Function string `json:"function"`
+	Module   string          `json:"module"`
+	Version  string          `json:"version"`
+	Package  string          `json:"package"`
+	Function string          `json:"function"`
+	Receiver string          `json:"receiver"`
+	Position json.RawMessage `json:"position"`
 }
 
 // occurrence is the module/package pair a reachable finding was traced to,
@@ -127,9 +137,11 @@ func openInput(path string, stdin io.Reader) (io.Reader, func(), error) {
 
 // parseReachableFindings decodes a stream of govulncheck JSON messages and
 // returns the total message count (so callers can detect empty/truncated
-// input) plus every reachable finding's occurrence, grouped by OSV ID.
+// input) plus blocking package/symbol occurrences, grouped by OSV ID.
+// Source symbol scans also contain informational module-phase summaries.
 func parseReachableFindings(r io.Reader) (count int, reachable map[string][]occurrence, err error) {
 	dec := json.NewDecoder(r)
+	var configSeen, sourceSymbolScan bool
 	reachable = make(map[string][]occurrence)
 	for {
 		var msg govulncheckMessage
@@ -140,7 +152,18 @@ func parseReachableFindings(r io.Reader) (count int, reachable map[string][]occu
 			return count, nil, decErr
 		}
 		count++
+		if msg.Config != nil {
+			if configSeen {
+				return count, nil, fmt.Errorf("multiple scan configurations")
+			}
+			configSeen = true
+			sourceSymbolScan = msg.Config.ProtocolVersion == "v1.0.0" &&
+				msg.Config.ScanMode == "source" && msg.Config.ScanLevel == "symbol"
+		}
 		if msg.Finding == nil || len(msg.Finding.Trace) == 0 {
+			continue
+		}
+		if sourceSymbolScan && moduleOnlySummary(msg.Finding) {
 			continue
 		}
 		deepest := msg.Finding.Trace[0]
@@ -151,6 +174,20 @@ func parseReachableFindings(r io.Reader) (count int, reachable map[string][]occu
 		})
 	}
 	return count, reachable, nil
+}
+
+// moduleOnlySummary recognizes the informational module phase of a source
+// symbol scan, not a package import or a vulnerable call. Package and symbol
+// findings remain blocking. Without the exact supported scan configuration,
+// the parser retains the previous fail-closed treatment of coarse findings.
+// Protocol: golang.org/x/vuln/internal/govulncheck (pinned v1.1.4).
+func moduleOnlySummary(f *finding) bool {
+	if f.OSV == "" || len(f.Trace) != 1 {
+		return false
+	}
+	frame := f.Trace[0]
+	return frame.Module != "" && frame.Version != "" && frame.Package == "" &&
+		frame.Function == "" && frame.Receiver == "" && len(frame.Position) == 0
 }
 
 func evaluate(exFile exceptionsFile, reachable map[string][]occurrence, stdout io.Writer) error {

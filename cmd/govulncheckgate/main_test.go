@@ -158,3 +158,49 @@ func TestExpiresLayoutParses(t *testing.T) {
 		t.Fatalf("expiresLayout does not parse a plain YYYY-MM-DD date: %v", err)
 	}
 }
+
+const sourceSymbolConfig = "{\"config\":{\"protocol_version\":\"v1.0.0\",\"scan_level\":\"symbol\",\"scan_mode\":\"source\"}}\n"
+
+func TestRun_ModuleAdvisoryClassification(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"source_symbol_module_only_is_informational", sourceSymbolConfig + "{\"finding\":{\"osv\":\"GO-9999-9999\",\"trace\":[{\"module\":\"example.com/module\",\"version\":\"v1.0.0\"}]}}\n", false},
+		{"imported_package_still_fails", "{\"config\":{\"protocol_version\":\"v1.0.0\",\"scan_level\":\"symbol\",\"scan_mode\":\"source\"}}\n{\"finding\":{\"osv\":\"GO-9999-9999\",\"trace\":[{\"module\":\"example.com/module\",\"version\":\"v1.0.0\"}]}}\n{\"finding\":{\"osv\":\"GO-9999-9999\",\"trace\":[{\"module\":\"example.com/module\",\"version\":\"v1.0.0\",\"package\":\"example.com/module/bad\"}]}}\n", true},
+		{"called_symbol_still_fails", "{\"config\":{\"protocol_version\":\"v1.0.0\",\"scan_level\":\"symbol\",\"scan_mode\":\"source\"}}\n{\"finding\":{\"osv\":\"GO-9999-9999\",\"trace\":[{\"module\":\"example.com/module\",\"version\":\"v1.0.0\"}]}}\n{\"finding\":{\"osv\":\"GO-9999-9999\",\"trace\":[{\"module\":\"example.com/module\",\"version\":\"v1.0.0\",\"package\":\"example.com/module/bad\",\"function\":\"Danger\"}]}}\n", true},
+		{"missing_config_fails_closed", "{\"finding\":{\"osv\":\"GO-9999-9999\",\"trace\":[{\"module\":\"example.com/module\",\"version\":\"v1.0.0\"}]}}\n", true},
+		{"binary_scan_fails_closed", "{\"config\":{\"protocol_version\":\"v1.0.0\",\"scan_level\":\"symbol\",\"scan_mode\":\"binary\"}}\n{\"finding\":{\"osv\":\"GO-9999-9999\",\"trace\":[{\"module\":\"example.com/module\",\"version\":\"v1.0.0\"}]}}\n", true},
+		{"module_scan_fails_closed", "{\"config\":{\"protocol_version\":\"v1.0.0\",\"scan_level\":\"module\",\"scan_mode\":\"source\"}}\n{\"finding\":{\"osv\":\"GO-9999-9999\",\"trace\":[{\"module\":\"example.com/module\",\"version\":\"v1.0.0\"}]}}\n", true},
+		{"package_scan_fails_closed", "{\"config\":{\"protocol_version\":\"v1.0.0\",\"scan_level\":\"package\",\"scan_mode\":\"source\"}}\n{\"finding\":{\"osv\":\"GO-9999-9999\",\"trace\":[{\"module\":\"example.com/module\",\"version\":\"v1.0.0\"}]}}\n", true},
+		{"missing_mode_fails_closed", "{\"config\":{\"protocol_version\":\"v1.0.0\",\"scan_level\":\"symbol\"}}\n{\"finding\":{\"osv\":\"GO-9999-9999\",\"trace\":[{\"module\":\"example.com/module\",\"version\":\"v1.0.0\"}]}}\n", true},
+		{"unknown_protocol_fails_closed", "{\"config\":{\"protocol_version\":\"v9.0.0\",\"scan_level\":\"symbol\",\"scan_mode\":\"source\"}}\n{\"finding\":{\"osv\":\"GO-9999-9999\",\"trace\":[{\"module\":\"example.com/module\",\"version\":\"v1.0.0\"}]}}\n", true},
+		{"late_config_fails_closed", "{\"finding\":{\"osv\":\"GO-9999-9999\",\"trace\":[{\"module\":\"example.com/module\",\"version\":\"v1.0.0\"}]}}\n{\"config\":{\"protocol_version\":\"v1.0.0\",\"scan_level\":\"symbol\",\"scan_mode\":\"source\"}}\n", true},
+		{"repeated_config_fails_closed", "{\"config\":{\"protocol_version\":\"v1.0.0\",\"scan_level\":\"symbol\",\"scan_mode\":\"source\"}}\n{\"finding\":{\"osv\":\"GO-9999-9999\",\"trace\":[{\"module\":\"example.com/module\",\"version\":\"v1.0.0\"}]}}\n{\"config\":{\"protocol_version\":\"v1.0.0\",\"scan_level\":\"symbol\",\"scan_mode\":\"source\"}}\n", true},
+		{"module_without_version_fails_closed", "{\"config\":{\"protocol_version\":\"v1.0.0\",\"scan_level\":\"symbol\",\"scan_mode\":\"source\"}}\n{\"finding\":{\"osv\":\"GO-9999-9999\",\"trace\":[{\"module\":\"example.com/module\"}]}}\n", true},
+		{"module_with_position_fails_closed", "{\"config\":{\"protocol_version\":\"v1.0.0\",\"scan_level\":\"symbol\",\"scan_mode\":\"source\"}}\n{\"finding\":{\"osv\":\"GO-9999-9999\",\"trace\":[{\"module\":\"example.com/module\",\"version\":\"v1.0.0\",\"position\":{\"line\":1}}]}}\n", true},
+		{"mixed_trace_fails_closed", "{\"config\":{\"protocol_version\":\"v1.0.0\",\"scan_level\":\"symbol\",\"scan_mode\":\"source\"}}\n{\"finding\":{\"osv\":\"GO-9999-9999\",\"trace\":[{\"module\":\"example.com/module\",\"version\":\"v1.0.0\"},{\"module\":\"example.com/entry\",\"version\":\"v1.0.0\"}]}}\n", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			err := run([]string{"-exceptions", writeFile(t, "exceptions: []\n")}, strings.NewReader(tc.input), &out)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("run() error = %v, want error=%t; output:\n%s", err, tc.wantErr, out.String())
+			}
+		})
+	}
+}
+
+func TestRun_ModuleAdvisoryDoesNotHideExpiredSymbol(t *testing.T) {
+	t.Parallel()
+	const input = "{\"config\":{\"protocol_version\":\"v1.0.0\",\"scan_level\":\"symbol\",\"scan_mode\":\"source\"}}\n{\"finding\":{\"osv\":\"GO-2026-5932\",\"trace\":[{\"module\":\"golang.org/x/crypto\",\"version\":\"v0.57.0\"}]}}\n{\"finding\":{\"osv\":\"GO-2026-5932\",\"trace\":[{\"module\":\"golang.org/x/crypto\",\"version\":\"v0.57.0\",\"package\":\"golang.org/x/crypto/openpgp\",\"function\":\"Encrypt\"}]}}\n"
+	expired := strings.ReplaceAll(sampleExceptions, "2099-01-01", "2020-01-01")
+	var out bytes.Buffer
+	err := run([]string{"-exceptions", writeFile(t, expired)}, strings.NewReader(input), &out)
+	if err == nil || !strings.Contains(out.String(), "expired") {
+		t.Fatalf("expired symbol exception must fail; error=%v output:\n%s", err, out.String())
+	}
+}

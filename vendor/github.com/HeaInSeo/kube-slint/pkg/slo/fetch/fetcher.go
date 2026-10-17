@@ -36,13 +36,12 @@ type SnapshotFetcher interface {
 	PreFetch(ctx context.Context) error
 }
 
-// WindowFetcher is a future interface for sources that require a time range
-// rather than two discrete point-in-time snapshots.
+// WindowFetcher retrieves samples over a time range rather than two discrete
+// point-in-time snapshots.
 //
-// NOT YET IMPLEMENTED — requires engine extension beyond the current 2-point model.
-// Intended use cases: PromQL range queries, soak analysis, burn-rate, p95/p99 over window.
-// See docs/verification-sources.md for the design boundary.
-//
-// type WindowFetcher interface {
-// 	FetchRange(ctx context.Context, start, end time.Time) ([]Sample, error)
-// }
+// Intended use cases: PromQL range queries, soak analysis, burn-rate, and
+// p95/p99 over a test window. WindowFetcher is optional; the existing
+// MetricsFetcher path remains the default two-point engine path.
+type WindowFetcher interface {
+	FetchRange(ctx context.Context, start, end time.Time) ([]Sample, error)
+}
